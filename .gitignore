@@ -1,0 +1,30 @@
+# IntelliJ IDEA
+.idea
+*.iml
+.kotlin
+out
+
+# Gradle
+.gradle
+**/build/
+!src/**/build/
+
+# Kotlin/JVM
+*.class
+*.jar
+!gradle/wrapper/gradle-wrapper.jar
+
+# Local configuration
+/local.properties
+
+# Operating systems
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Temp
+/temp
+
+# Misc
+nul
+/logs

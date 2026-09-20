@@ -1,0 +1,32 @@
+* text eol=lf
+
+# Archives
+*.jar   binary
+*.zip   binary
+*.tar   binary
+*.gz    binary
+*.bz2   binary
+*.7z    binary
+
+# Images
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.bmp   binary
+*.webp  binary
+*.svg   binary
+
+# Documents
+*.pdf   binary
+
+# Compiled
+*.class binary
+
+# Fonts
+*.ttf   binary
+*.otf   binary
+*.woff  binary
+*.woff2 binary
+*.eot   binary
