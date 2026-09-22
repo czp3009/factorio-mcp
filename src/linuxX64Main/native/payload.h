@@ -1,7 +1,7 @@
 #pragma once
+#include "resident.h"
 #include <stddef.h>
 #include <stdint.h>
-#include "resident.h"
 #define FM_TEXT_CAP (256 * 1024)
 enum { FM_LUA_TSTRING = 4, FM_LUA_POP_ONE = -2 };
 struct Payload {

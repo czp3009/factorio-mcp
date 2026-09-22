@@ -1,7 +1,9 @@
-import org.jetbrains.kotlin.gradle.tasks.KotlinNativeLink
+import com.hiczp.factorio.mcp.buildlogic.ConfigureNativeBridge
+import org.jetbrains.kotlin.gradle.utils.NativeCompilerDownloader
+import org.jetbrains.kotlin.konan.target.HostManager
+import org.jetbrains.kotlin.konan.target.KonanTarget
 
 plugins {
-    distribution
     alias(libs.plugins.kotlinMultiplatform)
 }
 
@@ -9,21 +11,32 @@ group = "com.hiczp"
 version = "0.0.1"
 
 val nativeSources = layout.projectDirectory.dir("src/linuxX64Main/native")
-val nativeOutput = layout.buildDirectory.dir("native")
-val configureNativeBridge = tasks.register<Exec>("configureNativeBridge") {
-    inputs.files(fileTree(nativeSources) { include("CMakeLists.txt", "cmake/**") })
-    outputs.file(nativeOutput.map { it.file("CMakeCache.txt") })
-    commandLine(
-        "cmake", "-S", nativeSources.asFile, "-B", nativeOutput.get().asFile,
-        "-DCMAKE_BUILD_TYPE=RelWithDebInfo"
-    )
+// CMake caches contain host paths and cannot be shared between Windows and WSL.
+val nativeOutput = layout.buildDirectory.dir("native/${HostManager.host.name}/linuxX64")
+val nativeBridgeArchive = nativeOutput.map { it.file("libfactorio_bridge.a") }
+val kotlinNativeDataDirectory = providers.gradleProperty("konan.data.dir")
+    .orElse(providers.environmentVariable("KONAN_DATA_DIR"))
+    .orElse(providers.systemProperty("user.home").map { "$it/.konan" })
+val kotlinNativeHome = providers.gradleProperty("kotlin.native.home")
+    .getOrElse(NativeCompilerDownloader(project).compilerDirectory.absolutePath)
+val configureNativeBridge = tasks.register<ConfigureNativeBridge>("configureNativeBridge") {
+    // Binding generation provisions Kotlin/Native's matching compiler and Linux sysroot.
+    dependsOn("cinteropBridgeLinuxX64")
+    nativeHome.set(kotlinNativeHome)
+    konanDataDirectory.set(kotlinNativeDataDirectory)
+    generator.set(if (HostManager.hostIsMingw) "Ninja" else "Unix Makefiles")
+    cmakeSources.set(nativeSources)
+    cmakeFiles.from(fileTree(nativeSources) { include("CMakeLists.txt", "cmake/**") })
+    konanProperties.set(file("$kotlinNativeHome/konan/konan.properties"))
+    outputDirectory.set(nativeOutput)
 }
 val buildNativeBridge = tasks.register<Exec>("buildNativeBridge") {
     dependsOn(configureNativeBridge)
+    inputs.files(configureNativeBridge).withPropertyName("cmakeConfiguration")
     inputs.dir(nativeSources)
     inputs.dir("src/linuxX64Test/native")
     outputs.files(
-        nativeOutput.map { it.file("libfactorio_bridge.a") },
+        nativeBridgeArchive,
         nativeOutput.map { it.file("libfactorio_resident.so") },
         nativeOutput.map { it.file("resident_hooks_test") },
         nativeOutput.map { it.file("resident_delivery_test") },
@@ -43,35 +56,27 @@ kotlin {
         compilations.getByName("main") {
             cinterops.create("bridge") {
                 includeDirs(nativeSources.asFile)
-                extraOpts("-libraryPath", nativeOutput.get().asFile.absolutePath)
             }
         }
         binaries.executable {
             entryPoint = "com.hiczp.factorio.mcp.main"
         }
-    }
-}
-
-tasks.matching { it.name == "cinteropBridgeLinuxX64" }.configureEach {
-    dependsOn(buildNativeBridge)
-}
-
-val testNativeBridge = tasks.register<Exec>("testNativeBridge") {
-    dependsOn(buildNativeBridge)
-    commandLine("ctest", "--test-dir", nativeOutput.get().asFile, "--output-on-failure")
-}
-tasks.named("check") { dependsOn(testNativeBridge) }
-
-val executableName = project.name
-val releaseExecutable = tasks.named<KotlinNativeLink>("linkReleaseExecutableLinuxX64")
-distributions {
-    main {
-        contents {
-            from(files(releaseExecutable.map { it.outputFile.get() }).builtBy(releaseExecutable)) {
-                into("bin")
-                rename(".*", executableName)
-                filePermissions { unix("755") }
+        // IDE import generates bindings from headers; only binary linking needs CMake's archive.
+        binaries.configureEach {
+            linkerOpts(nativeBridgeArchive.get().asFile.absolutePath)
+            linkTaskProvider.configure {
+                dependsOn(buildNativeBridge)
+                inputs.file(nativeBridgeArchive)
+                    .withPropertyName("nativeBridgeArchive")
+                    .withPathSensitivity(PathSensitivity.NONE)
             }
         }
     }
 }
+
+val testNativeBridge = tasks.register<Exec>("testNativeBridge") {
+    dependsOn(buildNativeBridge)
+    onlyIf("Native fixtures must run on Linux x86-64") { HostManager.host == KonanTarget.LINUX_X64 }
+    commandLine("ctest", "--test-dir", nativeOutput.get().asFile, "--output-on-failure")
+}
+tasks.named("check") { dependsOn(testNativeBridge) }

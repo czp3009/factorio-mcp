@@ -1,4 +1,3 @@
 headers = bridge.h
 package = factorio.bridge
-staticLibraries = libfactorio_bridge.a
 linkerOpts.linux = -lstdc++ -ldl

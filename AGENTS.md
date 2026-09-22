@@ -21,6 +21,10 @@
 - Prefer imports over fully qualified Kotlin names. Use an import alias to resolve naming conflicts where practical;
   retain a fully qualified name only when it improves clarity or is required.
 - Use CMake, Gradle, and existing build infrastructure rather than custom compilation scripts.
+- Prefer default KMP configuration, tasks, and artifact layouts. Keep custom Gradle logic limited to the necessary
+  CMake/toolchain integration and native verification; do not add separate distribution or executable-renaming tasks.
+- Put custom Gradle task classes and reusable build logic in `buildSrc`. Keep `build.gradle.kts` focused on DSL,
+  configuration, and small wiring expressions.
 - Give each generated native artifact one build-system owner. Declare its dependencies and required outputs so
   incremental builds cannot silently reuse stale or missing artifacts. Keep compiler and linker recipes in CMake rather
   than duplicating them in Gradle.
@@ -209,6 +213,5 @@
 - Start Ktor with `wait = false` and await a coroutine completion signal in common code. Native signal handlers must
   only set signal-safe state; perform server shutdown and resource cleanup from coroutines, never directly from a POSIX
   signal handler. Preserve a pending shutdown when reinstalling signal handlers.
-- Use `factorio-mcp` consistently as the product, executable, MCP server and diagnostic name. The standard Gradle
-  distribution installs `bin/factorio-mcp`; keep Kotlin/Native compiler artifact naming conventions for intermediate
-  builds. Do not introduce alternative product names.
+- Use `factorio-mcp` consistently as the product, executable base name, MCP server and diagnostic name. Keep the default
+  Kotlin/Native artifact layout and `.kexe` executable suffix. Do not introduce alternative product names.

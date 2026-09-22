@@ -12,16 +12,42 @@ not yet covered.
 
 ## Build and configure
 
-Requirements: a JDK, CMake 3.24 or newer, GCC/G++, and GNU binutils. Gradle manages Kotlin/Native. The initial build
-downloads dependencies, Capstone instruction-decoder sources, official SDL2 headers, and the {fmt} formatting library.
+Build hosts: Linux x86-64 and Windows x86-64. Both produce a Linux x86-64 executable.
+Requirements: a JDK, CMake 3.24 or newer, and Make on Linux or Ninja on Windows, available on `PATH`.
+Gradle manages Kotlin/Native; CMake reuses its Clang, Linux sysroot, linker, and binary utilities. No separate GCC,
+MSVC, Zig, or Linux cross-compiler installation is required. The initial build downloads dependencies,
+Capstone instruction-decoder sources, official SDL2 headers, and the {fmt} formatting library.
 The injector and detours are implemented in this repository; no third-party injection framework is used.
 
-```bash
-./gradlew check installDist
-```
+Use the standard Kotlin Multiplatform tasks directly from the IDE's Gradle tool window:
 
-The installed executable is `build/install/factorio-mcp/bin/factorio-mcp`. The standard Gradle distribution plugin
-also provides `distZip` and `distTar`. Kotlin/Native's intermediate development artifacts retain its `.kexe` suffix.
+| Task | Purpose |
+|------|---------|
+| `runDebugExecutableLinuxX64` | Build and run the Debug executable on Linux. |
+| `runReleaseExecutableLinuxX64` | Build and run the Release executable on Linux. |
+| `linkDebugExecutableLinuxX64` | Build the Debug executable. |
+| `linkReleaseExecutableLinuxX64` | Build the Release executable. |
+| `linuxX64Binaries` | Build the target's binaries, including Debug and Release executables. |
+| `assemble` | Assemble the project's outputs. |
+| `build` | Assemble the project's outputs and run checks. |
+
+From a terminal, use `./gradlew TASK` on Linux or `.\gradlew.bat TASK` in Windows PowerShell. For example,
+`./gradlew runDebugExecutableLinuxX64` runs the application on Linux, while
+`.\gradlew.bat linkReleaseExecutableLinuxX64` cross-compiles the Release executable on Windows.
+The native CMake build is already a dependency of the Kotlin/Native link tasks.
+
+The executables are `build/bin/linuxX64/debugExecutable/factorio-mcp.kexe` and
+`build/bin/linuxX64/releaseExecutable/factorio-mcp.kexe`. Both are complete Linux executables that can be run directly.
+Windows can build these binaries; running them requires Linux, including a Linux environment such as WSL.
+Native fixture tests run through `check` or `build` on Linux and are skipped on Windows.
+CMake build directories are separated by host under `build/native/`; Windows and WSL cannot share a CMake cache.
+For WSL builds, keep the checkout and build directories on its Linux filesystem.
+IDE import and Kotlin compilation only generate bindings from headers. CMake runs when linking a native executable
+or explicitly invoking `buildNativeBridge` or `testNativeBridge`.
+
+If a proxy is required, Gradle dependency downloads use Java's proxy properties in the user Gradle configuration.
+CMake downloads use the `https_proxy` environment variable instead, for example `http://localhost:10808`.
+Restart the Gradle daemon after changing its environment.
 
 Configure your agent with the resulting executable's absolute path:
 
@@ -29,7 +55,7 @@ Configure your agent with the resulting executable's absolute path:
 {
   "mcpServers": {
     "factorio-mcp": {
-      "command": "/absolute/path/factorio-mcp/build/install/factorio-mcp/bin/factorio-mcp",
+      "command": "/absolute/path/factorio-mcp/build/bin/linuxX64/releaseExecutable/factorio-mcp.kexe",
       "args": [
         "--no-http"
       ]
@@ -335,8 +361,10 @@ Native diagnostics use typed results and [{fmt}](https://fmt.dev/latest/get-star
 Kotlin or the official game helper.
 
 The default KMP source-set and cinterop layout is retained. CMake owns the mixed C/C++/assembly targets, freestanding
-loader payload, shared resident, embedding, and native fixtures. Gradle connects configuration, build, CTest, and
-cinterop without duplicating compiler recipes.
+loader payload, shared resident, embedding, and native fixtures. Gradle connects native builds to Kotlin/Native binary
+linking and runs CTest without duplicating compiler recipes. IDE import and cinterop generation use the checked-in C
+headers and do not require CMake. Linking executables or running native fixtures requires the Linux build tools listed
+above; changes to the bridge archive invalidate Kotlin/Native linking.
 
 ## Verification
 
