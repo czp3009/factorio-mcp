@@ -1,0 +1,12 @@
+# Embed the compiled payload and derive entry offsets from its own ELF symbols.
+file(READ payload.bin bytes HEX)
+string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," bytes "${bytes}")
+file(WRITE payload_blob.h "static const unsigned char payload_blob[] = {${bytes}};\n")
+execute_process(COMMAND "${NM}" -n "${ELF}" OUTPUT_VARIABLE symbols COMMAND_ERROR_IS_FATAL ANY)
+foreach(name payload_entry payload_reader payload_trap payload_trap_end remote_syscall remote_syscall_end)
+    string(REGEX MATCH "([0-9a-fA-F]+) [A-Za-z] ${name}(\n|$)" found "${symbols}")
+    if(NOT found)
+        message(FATAL_ERROR "Missing payload symbol: ${name}")
+    endif()
+    file(APPEND payload_blob.h "static constexpr size_t ${name}_offset = 0x${CMAKE_MATCH_1};\n")
+endforeach()

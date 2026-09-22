@@ -1,5 +1,17 @@
 [versions]
 kotlin = "2.4.10"
+serialization = "1.9.0"
+mcp = "0.15.0"
+ktor = "3.5.1"
+io = "0.9.1"
+coroutines = "1.11.0"
 
 [plugins]
 kotlinMultiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
+
+[libraries]
+ktor-server-cio = { module = "io.ktor:ktor-server-cio", version.ref = "ktor" }
+mcp-server = { module = "io.modelcontextprotocol:kotlin-sdk-server", version.ref = "mcp" }
+serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization" }
+io-core = { module = "org.jetbrains.kotlinx:kotlinx-io-core", version.ref = "io" }
+coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }

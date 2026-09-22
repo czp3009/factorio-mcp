@@ -28,3 +28,7 @@ desktop.ini
 # Misc
 nul
 /logs
+
+# Python integration runner
+__pycache__/
+*.pyc
