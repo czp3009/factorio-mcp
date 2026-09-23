@@ -1,6 +1,6 @@
 # Semantic input and UI observation research
 
-Updated: 2026-09-23. Status: research and live experiments; not a description of new production MCP tools.
+Updated: 2026-09-24. Status: research and live experiments; not a description of new production MCP tools.
 
 This document is kept in the project root at the user's explicit request. Executable experiments, snapshots, logs and
 archives of previous drafts remain under Git-ignored `temp/`. This revision replaces the earlier snapshot-reference
@@ -22,11 +22,14 @@ Custom interfaces should appear because the game created controls, not because M
 Control-family adapters are compatible with this direction: decoding a slider or checkbox is different from implementing
 one special workflow for every machine.
 
-The investigation establishes real Linux tree traversal, a concrete JSON projection, state-transition and screenshot
-comparisons, and a tested stateless document/path selection contract. Matching and projection tests do not establish
-generic native click dispatch. This work does not replace the existing production tool catalog. Noise reduction,
-pruning,
-paging policy and workflow automation are deliberately deferred.
+The investigation establishes Linux tree traversal, a concrete JSON projection, state-transition and screenshot
+comparisons, and a tested stateless document/path selection contract. A subsequent Windows experiment verifies
+foreground-root acquisition across menus, connection/loading, gameplay and world exit, plus limited native button
+dispatch using fresh current-tree selection. A scheduling follow-up verifies one foreground GUI logic-return boundary
+for both reads and these actions, including minimized menus, saving and single-player pause. These are separate
+observation, matching and input claims; they do not
+establish a generic executor for every control family. This work does not replace the existing production tool catalog.
+Noise reduction, pruning, paging policy and workflow automation are deliberately deferred.
 
 ## Current contract: one DOM and one selector model
 
@@ -76,6 +79,12 @@ when it actually executes, including after a queue delay. Resolve, check current
 then
 dispatch within one verified game-side GUI phase without yielding between selection and invocation. Do not resolve an
 address at request admission and submit it later. Menu UI must work without a world or a world `on_tick` callback.
+
+The intended UI scope begins after process attachment and covers menus, joining/loading, gameplay and world exit;
+initial application startup loading is excluded. UI readiness is process/presentation readiness, independent of world
+Lua readiness. The Windows follow-ups demonstrate this separation for the sampled states, including a main menu with
+no world-update steps and UI interaction while the single-player simulation is paused. Production integration must
+provide it explicitly; the current gameplay tools' world-bound `attach` requirements have not already changed.
 
 No cross-call UI registry, window cache, snapshot lease or lifecycle-token history is needed. Temporary traversal data
 is
@@ -410,6 +419,438 @@ references:
 documentation remains authoritative for implementation against this executable. No Factorio window interaction was
 needed.
 
+## World tools: shared contract, context-dependent execution
+
+The recommended public API does **not** duplicate normal-view and remote-view tools. Both use the same spatial
+selection, object projection and named-action vocabulary. The adapter must obtain valid current input and presentation
+context at execution time; this does not require branching on controller type for each control. The Windows live tests
+below demonstrate one shared dispatcher for the sampled controls. Delegating gameplay rules to the game is compatible
+with exposing context through observations. The action tool completes the finite input operation without interpreting
+its gameplay effect; the agent observes the world or UI separately.
+
+### What the Windows executable establishes
+
+Inspection used the installed 2.0.77 executable and its matching developer PDB. These paths are more relevant to the
+tool boundary than the visual resemblance between the scene and a canvas:
+
+| Native path                                                         | Observed behavior                                                                                                                                       | Consequence for tools                                                                                                                          |
+|---------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------|
+| `MainLoop::render`                                                  | Calls `GameRenderer::render` before `GuiRenderer::render`.                                                                                              | The main scene is not an entity subtree of the native GUI DOM.                                                                                 |
+| `LuaControl::luaReadPosition`, `LuaPlayer::luaReadPhysicalPosition` | Follow different members of `Player::controllerManager`; PDB fields identify `controller` and `physicalController`.                                     | Return active and physical positions separately; do not label both as an ambiguous player position.                                            |
+| `CharacterController::canReachEntity`                               | Delegates to character reach logic, which checks surface and target bounding-box distance.                                                              | A center-to-center radius is not the general interaction predicate.                                                                            |
+| `RemoteController::canReachEntity`                                  | Returns true in this build.                                                                                                                             | This particular reach gate differs; it does not establish universal permission to perform every action.                                        |
+| `RemoteController::canBuildDistanceCheck`                           | May delegate through `getControllerForBuildChecks`; otherwise succeeds. The helper can return the physical controller depending on the open GUI target. | Even remote build distance cannot be modeled as an unconditional infinite radius. The exact GUI-target condition remains incompletely decoded. |
+| `PlayerInputSource::processBuild`                                   | Obtains `Player::getSimpleBuildInput`, invokes `ClientManualBuilder::build`, and submits the resulting action.                                          | Keep the game's cursor, controller and build interpretation before synchronized submission.                                                    |
+| `PlayerInputSource::processOpenGui`                                 | Has client eligibility logic and a `tryToOpenInChart` path.                                                                                             | A semantic open action has context-dependent routing before a GUI is opened.                                                                   |
+| `GameActionHandler::actionPerformed`                                | Dispatches input actions through player/controller/common handlers; the controller branch obtains the current controller.                               | Remote behavior is part of game action execution, not merely an MCP-side camera convention.                                                    |
+| `LuaSurface::luaFindEntitiesFiltered`                               | Constructs `EntitySearchFilters` and `DetailedEntitySearch` over a Surface.                                                                             | Spatial enumeration is a world-data query, not the current player's mouse selection or rendered map.                                           |
+| `EntitySelector::deduceSelectedEntity`                              | Uses selection checks, world geometry and latency context.                                                                                              | Do not choose the first entity returned by a spatial query as the input target.                                                                |
+| `Chart::getSelection`                                               | Considers chart tags, an open logistic-network GUI, scale and entity candidates; an entity branch checks `ForceData::isChunkCharted`.                   | Chart hit testing is another native selection path, not just the same entity search at a different zoom.                                       |
+
+The controller manager explicitly retains active, physical, remote, stashed and paused controller state. This is also
+why
+the wire schema should preserve the game's `controller_type`, rather than reduce all possible states to a boolean
+`remote`. The installed API lists character, remote, god, ghost, spectator, editor and cutscene controllers.
+`render_mode` is a separate axis: game, chart or chart_zoomed_in. Remote chart and remote zoomed-in presentation must
+not
+be mistaken for different physical players.
+
+Retained evidence is indexed in [the Windows world investigation](temp/world-controller-research/findings.md).
+Recorded instruction addresses and PDB offsets are evidence for this build, never constants for a production adapter.
+
+### A small tool surface with several observation granularities
+
+Keep the two read operations proposed above and add a shared semantic action operation. The following names are
+illustrative, not newly registered MCP tools:
+
+| Tool             | Selection and parameters                                                                                     | Returned meaning                                                                                                                                                                                             |
+|------------------|--------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `world_overview` | Current viewport by default; optional bounded region, cell size and content categories.                      | Context plus a spatial summary: terrain regions, resource/entity groups and supported chart overlays. Aggregate cells state their area, resolution and coverage; counts are not entity identities.           |
+| `world_query`    | Explicit point, tile cell, area, game identity or current selection; filters and requested field projection. | Exact typed objects and bounded related data, with geometry and identities sufficient for later targeting. A separate `hit_test` selection mode asks what the game would target in the current presentation. |
+| `world_action`   | Named game intent, typed target, optional semantic variant and a finite execution extent.                    | Empty successful result after finite input execution and release; tool execution errors remain explicit. No gameplay-effect verdict.                                                                         |
+
+Granularity has **two independent dimensions**. Spatial resolution controls whether a region is summarized as cells or
+enumerated as objects. Property projection controls whether an object contributes only identity/position or additional
+supported fields. Increasing spatial detail must not automatically dump every inventory and machine setting. Requesting
+more fields must not silently change the selected objects. Prototype identifiers, type and quality remain available for
+unfamiliar mod entities; localized captions can supplement them, but must not become identity keys.
+
+Use typed collections such as `tiles`, `entities`, and, when implemented, `chart_tags`. Preserve object relationships
+such
+as train/carriages or entity/inventory separately from spatial containment. A resource summary is explicitly an MCP
+aggregation over observed resource entities; it is not a native factory object. Do not invent a native scene DOM with
+factory, production-line or ore-patch nodes. Those groupings require interpretation and must remain optional summaries.
+
+For an illustrative exact query, an agent can request an area with `kinds: ["entity"]`, filter by `type`, and request
+`name`, `type`, `position`, `quality` and `selection_box`. Results use the same object schema in character and remote
+views. A later details request can address a returned game identity; if no stable identity exists, it must use a fresh
+spatial selector and handle ambiguity. A `hit_test` response instead returns the engine's resolved target kind and
+target,
+which can differ from the objects geometrically present at that position. Do not fabricate chart-tag identity as an
+entity unit number.
+
+Every read includes a bounded context envelope:
+
+- Current world lifetime, observation tick, local player identity and force.
+- `controller_type`; active `surface` and `position`; separate `physical_surface` and `physical_position`.
+- Presentation `render_mode`, zoom and verified viewport bounds. Camera/render position is distinct from authoritative
+  controller position; do not derive screen bounds from `player.position` alone.
+- Effective query region, included categories, resolution, visibility/freshness source, completeness and truncation.
+- Relevant cursor/held-tool and current selection state, either compactly or on request.
+
+Do not require the agent to supply `mode: normal` or `mode: remote` on every call. Observe the actual context. An action
+may supply expected controller/surface/world conditions as guards, so an intervening user action cannot silently
+retarget
+it. A requested surface is a target or guard, not implicit permission to enter remote view or switch worlds. View
+changes
+are explicit semantic actions or UI interactions.
+
+### Player-equivalent observation needs more than Surface queries
+
+UI occlusion is not an observation barrier for world-data queries. With a valid loaded world, a query addressed by
+surface and map coordinates uses world objects rather than widget hit testing; opening the technology screen does not
+by itself make those objects unavailable. The intended tools should work without closing an overlay, changing focus,
+or requiring the world to be painted. In this section, visibility restrictions concern game information such as fog and
+exploration, not whether an unrelated GUI window covers a screen pixel.
+
+"Current screen area" still needs a precise contract: the underlying main world view's map-space footprint, ignoring
+UI occlusion. Resolving that footprint is a separate step from querying its contents. Windows `GameView::getMapPosition`
+uses current view state, scale, offsets and `getDisplaySize`; the inspected `getDisplaySize` itself has conditional
+presentation-object and fallback paths. It is not proof of invariant dimensions during a full-screen UI transition.
+The earlier technology-window research also reports controller-presentation unloading, which must not be confused with
+unloading the simulated world. Exact viewport queries require verified current camera/layout acquisition. Explicit
+coordinate/area queries do not depend on that viewport derivation.
+
+The user accepts that some full-screen pages may make the current world viewport unavailable. Supporting viewport
+queries in every such page is not a requirement: the agent can observe the current UI and decide what to do next.
+Return an explicit `viewport_unavailable` result when a requested current viewport cannot be resolved; do not silently
+reuse old bounds, invent a camera, close the UI or change the view. This result does not mean that the loaded world is
+unavailable. Explicit surface/coordinate/area queries remain independently usable when their world and observation
+prerequisites hold. This is an accepted capability boundary, not a claim that the technology page always disables
+viewport acquisition.
+
+World availability and safe scheduling remain prerequisites even for memory-backed reads. Loading, unloading or
+replacing a world can invalidate the Surface and other objects; a main menu has no current playable world to query.
+Pause alone does not remove a loaded world, but the query must run at a valid observation phase rather than wait for a
+simulation tick that may never advance. No live technology-open viewport comparison was performed in this pass.
+
+Keep **existence**, **visibility**, **selection eligibility**, and **action permission** separate. A remote target may
+be
+accessible despite being far from the physical character; an existing entity may be unavailable in the current view.
+The installed API distinguishes explored chunks (`is_chunk_charted`) from currently visible chunks (`is_chunk_visible`).
+These two predicates alone do not reconstruct all chart content, cached information, special map
+icons or fields presented by an opened entity GUI.
+
+For the intended player-equivalent contract, the adapter must not turn an unrestricted Surface query into an omniscient
+observation. Chart overview needs chart-aware information and explicit freshness; currently visible scene detail can
+use verified world readers with visibility filtering. Explored-but-fogged information must not be silently refreshed
+from live simulation data. A detailed projection also needs field-level eligibility: seeing a machine does not by itself
+prove that the player can inspect every inventory or private script state. Opening its actual GUI remains the generic
+route for mod-specific configuration and information.
+
+Thus the public schema can be shared while the observation source differs by presentation. If chart extraction or a
+particular projection is unavailable, report an explicit gap instead of returning hidden live state. The exact
+player-equivalent visibility/field policy, chart-cache reader and complete overlay coverage still need implementation
+research and live comparisons. The current static investigation does not establish pixel-equivalent structured output
+for every mod's arbitrary script-rendered graphics.
+
+### Actions should express controls, targets and finite gestures
+
+The vocabulary is grounded in the installed controls, not invented gameplay verbs. The installed English labels are
+`build=Build` and `mine=Mine`; use these native IDs on the wire and the game's localized labels for presentation. Mine
+must not be renamed to an unconditional destroy operation. The same rule preserves `open-character-gui` instead of
+promising inventory-only behavior. The locale/config/PDB follow-up is recorded in
+[native control semantics](temp/world-input-tests/control-semantics.md), with the extracted
+[configuration and locale catalog](temp/world-input-tests/control-catalog.json).
+
+The installed configuration contributes 205 base control names, not 205 verified capabilities. A subsequent live
+investigation verified `ControlInput::getControlInputList()` as the common enumeration source for native and custom
+controls, with 213 entries in its specific fixture. Use that current registry rather than a fixed list of locale strings
+or visible keybinding rows. Registration, current binding metadata and adapter-supported input shapes remain separate;
+see the unified discovery evidence below.
+
+Useful semantic groups include movement/combat; construction/opening; held-item use; area selection; inventory slots;
+recipe/crafting-queue controls; panels/confirmation; map/view controls; quickbar/clipboard tools; and custom inputs.
+The PDB's own categories also distinguish editor, debug and nonmodifiable controls. These are discovery groups, not a
+requirement to register a separate MCP tool for every control. Concrete examples and contextual meanings are in the
+linked evidence. In particular:
+
+- `build`, `build-ghost`, `super-forced-build` and `build-with-obstacle-avoidance` are distinct native controls.
+  Preserve
+  these variants rather than inventing Shift/Ctrl arguments; the last control is documented as rail-specific.
+- `select-for-blueprint` is documented for blueprint, upgrade and deconstruction selection. Preserve the held selection
+  tool and its native control instead of imposing a blueprint-only workflow.
+- `craft`, `craft-5` and `craft-all` are recipe-GUI controls. `pick-item`, `cursor-split`, `stack-transfer` and related
+  controls target inventory interactions. Their presence does not imply an arbitrary out-of-GUI mutation API.
+- `open-character-gui`, `confirm-gui` and `confirm-message` retain separate meanings even where bindings overlap.
+- The bundled base game defines `give-blueprint` and `give-deconstruction-planner` as custom-input prototypes. Discovery
+  must cover that extension mechanism without assuming that custom always means third-party.
+
+Control identity, target and finite input shape are independent dimensions. The agent should select a native control,
+provide its world target or direct current-widget selector where applicable, and request one trigger, a bounded hold,
+or a finite drag. The PDB records `ControlUsageType` values Normal, Continuous and NormalAndContinuous. It separately
+records keyboard, mouse-button/wheel and controller-button/axis/stick binding types. Do not infer from these enums that
+every control supports every gesture: drag, repetition, analog input and semantic combinations need their own adapter
+validation. A wheel or axis is not automatically a down/hold/up input. The adapter owns any required combination and
+release; the agent does not send modifier keycodes or promise to release a held input in a later request.
+
+Preserve direct widget operations for the UI. Named controls complement widget activation/value editing and supported
+slot interactions; they do not replace current-tree widget targeting with screen coordinates.
+
+There is a precision limit to the tested named-binding route. The installed left-button default is shared by `build`,
+`open-gui`, `select-for-blueprint`, `craft` and `pick-item`; E is shared by `open-character-gui` and `confirm-gui`, and
+Q by
+`pipette` and `clear-cursor`. `sendEvents` receives generated events, not an exclusive control identity, and the
+inspected
+dispatcher applies normal contextual consumption and handler ordering again. Consequently, invoking a named binding
+does not guarantee that only its namesake handler runs. Preserve that arbitration, including linked custom inputs,
+rather than bypassing it to manufacture an exclusive gameplay effect. An unbound control or unsupported binding shape
+is an adapter limit, not proof of a game-rule rejection. No new live binding-collision test was performed in this pass.
+
+Use the game's named control meaning, such as build, mine, rotate, open, directional movement or selecting an area with
+the held tool. Targets are world coordinates on a surface, validated object selectors, or an area/drag endpoint as
+appropriate. Agent-facing parameters never require keycodes, mouse buttons or a later release command. Area selection
+must preserve the held selection tool and its normal/alternative/reverse selection semantics; it must not become a
+hardcoded deconstruction-only tool.
+
+The intended route is:
+
+```text
+world_action(intent, target, finite extent, context guards)
+  -> resolve current local player, controller, cursor and presentation
+  -> resolve target through the appropriate game selection/input path
+  -> let the normal client input logic construct the action
+  -> normal synchronized submission
+  -> finish the finite input operation, release held input and clean up temporary context
+  -> acknowledge input completion without a gameplay result
+```
+
+An object identity does not authorize directly invoking that object's mutation method. Re-resolve it, check that the
+normal input route can address it, and fail explicitly when it cannot. Supplying map coordinates also does not remove
+all input dependencies: the inspected selection-tool and custom-input paths consult widget-under-mouse or cached
+cursor context. A reliable adapter must provide a verified operation-scoped game input context without moving the OS
+pointer or stealing focus. That adapter is not established merely by finding a method symbol.
+
+The same input can have different legitimate outcomes:
+
+| Intent                        | Character context                                                       | Remote context                                                                  | Meaning for subsequent observation                                                                         |
+|-------------------------------|-------------------------------------------------------------------------|---------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------|
+| Build with the current cursor | Can place a real entity or a ghost, depending on cursor and conditions. | Uses remote building semantics, commonly ghosts.                                | The agent can inspect the resulting entity/ghost; input completion does not promise physical construction. |
+| Mine/remove                   | Can mine a target when applicable.                                      | Can mark an entity for deconstruction; some targets follow other removal paths. | An accepted deconstruction order is different from later robot removal.                                    |
+| Open an entity                | Character reach logic includes distance and exceptions.                 | Remote access follows its controller and target rules.                          | The agent observes the resulting UI separately; the action tool does not classify the gameplay outcome.    |
+
+The intended similarity of controls, remote entity configuration and remote deconstruction are also described in
+[FFF #380](https://www.factorio.com/blog/post/fff-380). Those examples do not establish unconditional behavior for every
+target or mod. Do not hardcode their outcomes as the public action implementation.
+
+Do not expose one universal `interaction_radius` or an unqualified `can_interact` flag. The native checks vary by action
+and target; some remote checks delegate to physical context. Optional eligibility results should identify the specific
+action and whether the result is checked, rejected or unknown. A check is not a reservation and may become stale before
+execution.
+
+Likewise, distinguish moving the controlled subject from panning a view. If an action means the native directional
+control, document it as controller-relative; do not promise physical-character movement in every controller. A future
+explicit camera-pan action has a different postcondition. Exact directional routing across remote zoom levels remains
+to be verified rather than inferred from appearance.
+
+Custom inputs and selection tools matter for mod compatibility. `PlayerInputSource::processCustomInput` checks normal
+control triggering, uses cursor context and constructs an InputAction. The installed CustomInputPrototype API includes
+`name`, `enabled`, `linked_game_control`, `consuming`, and `include_selected_prototype`. Discover named controls and
+held
+tool semantics rather than maintaining a mod-name allowlist. A native-control adapter must also verify linked custom
+inputs and consumption ordering; directly invoking a built-in handler can bypass a mod's linked input. Native prototype
+existence is not proof that a generic MCP executor supports its dispatch or completion. For arbitrary mod actions,
+completion can confirm dispatch and input release without claiming to understand the mod's eventual business outcome.
+
+The server and clients execute synchronized game actions with their game/controller state. MCP must preserve this path;
+calling `CommonInputHandler` or `GameActionHandler` directly on one client is not synchronized submission. Menu/UI
+access
+at a safe presentation phase also does not automatically authorize arbitrary world mutation there. World actions need
+their verified submission phase, game-owned release/cleanup, world-lifetime invalidation, and multiplayer acceptance.
+
+### Unified discovery of registered controls
+
+The installed executable provides a common root for the control vocabulary:
+
+```text
+resolve ControlInput::getControlInputList from the current executable's developer information
+  -> invoke it at the valid foreground presentation phase after settings/prototype setup
+  -> obtain fresh vector bounds and enumerate current ControlInput objects
+  -> copy native IDs, localized labels/descriptions, categories, usage and binding/link metadata
+  -> return a structured discovery snapshot
+```
+
+This is supported by registration and consumer code, not only a method name. Both built-in and custom ControlInput
+constructors append their receiver to the same function-local static vector. ControlSettings constructs native controls
+and loops over the custom-input prototypes; postSetup resolves linked controls. The game's own keybinding-settings UI
+reads this list before filtering it. `findControlInput` searches the same list by the configuration key used as the
+native control ID. The getter itself has no Map/player/Lua dependency.
+
+Two sequential Windows launches verified main-menu and loaded-save discovery using the normal user configuration and
+caches, with a temporary mod directory. There was one graphical client at a time, with foreground activation suppressed
+before resume. No production project was built and no user save or installed mod list was replaced. The temporary mod
+registered bound, unbound, hidden, disabled and linked-to-built-in controls.
+
+Both states yielded **213 unique controls: 194 native and 19 prototype-backed custom inputs**, of which 14 were bundled
+and five came from the fixture. Every observed constructor registration appeared in the registry, including all five
+special cases. Native localized names/descriptions were read successfully. In the loaded world, all **213 IDs** were
+passed back through the game's own `findControlInput` and resolved to their exact enumerated objects. The offline
+verifier passed **44 assertions**. Final samples took 3 ms in the menu and 4 ms in the world; these are observations,
+not a performance guarantee. Both clients were stopped after testing.
+
+Important metadata distinctions are established by these samples and the dispatcher:
+
+| Entry                              | Registered | Own usable binding | Relevant additional information                                              |
+|------------------------------------|------------|--------------------|------------------------------------------------------------------------------|
+| Bound custom input                 | Yes        | Yes                | Native ID, localized label and description are available.                    |
+| Unbound custom input               | Yes        | No                 | No linked binding source in this fixture.                                    |
+| Hidden custom input                | Yes        | Yes                | Visible settings rows are not a complete registry.                           |
+| Disabled custom input              | Yes        | Yes                | Its custom prototype has enabled=false. A binding does not imply enablement. |
+| Custom input linked to confirm-gui | Yes        | No                 | linkedGameControl resolves to confirm-gui, whose binding is usable.          |
+
+`hasValidValue()` checks the entry's own current-input-method bindings; it does not follow linkedGameControl and does
+not check custom-input enablement. The native `triggeredBy` and `isActive` paths do follow linkedGameControl. Therefore,
+retain each custom control's ID and meaning, while separately resolving and reporting its binding source. An empty own
+binding is not necessarily an unavailable input. This corrects any earlier implication that checking one binding getter
+alone suffices. Following the linked source for eventual input still preserves normal shared dispatch; it does not
+create an exclusive call to the mod function.
+
+The discovery contract should expose the registered vocabulary and relevant observed metadata, not a blanket
+can_execute promise. Actual gameplay eligibility remains with the game. Return IDs even when labels/descriptions are
+absent, and distinguish unbound, disabled and adapter-unsupported cases. Native category/usage flags help discovery but
+do not prove that every finite gesture has been implemented. Category/search/projection/pagination can keep the agent's
+context small without losing the ability to enumerate the complete registry.
+
+For lifetime safety, call the getter anew and copy objects only within the valid phase; reacquire controls by ID when
+executing rather than retain native pointers, indices, vector storage or old bindings. Defer discovery while settings
+and linked-control setup are incomplete, and invalidate observations when the loaded prototype/control set changes.
+The vector object has process lifetime, but that is not a promise that its entries survive reconstruction or shutdown.
+The live menu/world cases were separate launches, not an exhaustive in-process reload/joining-server lifecycle test.
+
+This entry point covers **registered controls**, including those added by mods. Arbitrary GUI callbacks, shortcut-only
+buttons and text/value editing are not all named ControlInputs; retain structured UI discovery alongside this catalog.
+The internal C++ entry point is verified against this build, not an official version-stable binary API. The result is
+sufficient to implement a discovery tool, with production ABI/lifecycle/transport validation still required.
+
+See [the registry investigation](temp/control-registry-research/findings.md),
+[the loaded-world snapshot](temp/control-registry-research/world-snapshot.json) and
+[the verification report](temp/control-registry-research/verified-results.json). This read-side experiment used a
+temporary
+native probe; it did not register a new production MCP tool or claim to execute every discovered control.
+
+### Live Windows verification of the shared input path
+
+On 2026-09-24, a temporary MCP adapter exercised the installed Steam Factorio 2.0.77 Windows client against an isolated
+localhost server. The client was non-admin, with bundled DLC enabled. The production project was not built or extended.
+Calls used the SDK's standard Streamable HTTP transport. Server-console access was confined to fixture preparation,
+authoritative assertions and explicit full-CRC requests; it did not execute the tested player operations.
+
+The tested dispatcher contains no controller-type or render-mode branch:
+
+```text
+named control + optional world target + bounded duration
+  -> ControlInput::findControlInput
+  -> current game binding
+  -> ControlInputValue::eventsToTriggerThis / upEventsToTriggerThis
+  -> InputEventSender::sendEvents
+  -> normal client input processing and synchronized game action
+```
+
+Game-owned coordinate conversion and temporary internal pointer/window-enter context were necessary for background
+world input. Finding the binding and sending events alone had initially produced no world effect. The final experiment
+released held input and restored its temporary context through the game callback. It did not move the OS pointer or
+deliberately activate the window. This is evidence for a bounded input route, not a production teardown/reconnect test.
+
+With the physical character at (0, 0), near targets were at (3.5, 0.5) and far targets at (20.5, 0.5):
+
+| Same control and target category               | Character                                                                  | Remote, zoomed-in                                             |
+|------------------------------------------------|----------------------------------------------------------------------------|---------------------------------------------------------------|
+| `build`, appropriate item/ghost cursor         | Near real chest built and one item consumed; far real build has no effect. | Genuine ghost cursor places a chest ghost at either distance. |
+| `build`, empty cursor                          | No effect.                                                                 | No effect.                                                    |
+| `build`, collision or denied build permission  | No new chest or item consumption; obstacle remains.                        | Genuine ghost cursor creates no ghost; obstacle remains.      |
+| `build`, held blueprint                        | Chest ghost at either distance.                                            | Chest ghost at either distance.                               |
+| `build-ghost`, blueprint over a tree           | Tree marked for deconstruction and chest ghost placed.                     | Same observed result.                                         |
+| `super-forced-build`, blueprint over a furnace | Furnace marked for deconstruction and chest ghost placed.                  | Same observed result.                                         |
+| `mine`, near chest, bounded hold               | Chest removed, with a mined-entity event.                                  | Chest remains and is marked for deconstruction.               |
+| `mine`, far chest, bounded hold                | Chest remains unmarked.                                                    | Chest remains and is marked for deconstruction.               |
+| `open-character-gui`                           | Inventory and crafting UI.                                                 | Ghost picker UI.                                              |
+
+Normal `build-ghost` with a real cursor also placed a far ghost without consuming the item. Attempts to prepare a real
+cursor stack in remote mode did not retain that stack until the input; those samples are excluded as evidence of a
+remote real-item build. Remote conclusions above use verified ghost or blueprint cursors. Both inventory and ghost
+picker reported the same Lua `opened_gui_type` value, while native structured UI distinguished their actual content.
+
+In the remote zoomed-out chart, blueprint placement and super-force blueprint placement worked; sampled single-ghost
+placement and single-entity mining had no observed effect. Repeating with a normalized, verified ghost cursor reproduced
+the placement difference. The user identifies single-building placement in that presentation as disallowed by game
+rules. The exact internal gate was not decoded by this experiment. A no-op is compatible with correct input delivery
+and is not, by itself, an adapter coverage failure. Preserve these observations without silently switching presentation
+or trying to force an effect. The accepted action contract does not require decoding this game rule.
+
+Unknown control names, excessive coordinates and negative durations were rejected at the adapter boundary. The
+well-formed but unavailable distance, cursor, collision and permission cases passed through the normal input pipeline
+without forbidden effects or observed desynchronization. A void input-submission return does not identify the rejecting
+game gate, and the test does not establish that the server independently revalidates every possible forged action.
+Malformed InputActions, invalid native pointers/ABIs, stale receivers and direct client-only mutations remain outside
+this safety claim; they were not deliberately executed.
+
+The retained evidence has **37 explicit full-CRC checkpoints**. Passive observations on both peers captured full-map
+serialization and completed non-heuristic CRC checks with matching checked tick/CRC pairs. Subsequent same-tick state
+snapshots also agreed, with no desync diagnostic in either log. The offline verifier passes **187 assertions**,
+including
+effects, non-admin status, release, peer agreement and CRC evidence. These counts include unavailable actions and
+excluded fixture attempts; they are not counts of distinct supported capabilities.
+
+See [the live experiment and its limitations](temp/world-input-tests/findings.md) and
+[the offline verifier](temp/world-input-tests/verify.py). Raw observations, exact executed fixture, corrected future
+fixture, PDB identity, disassembly and negative evidence are retained there. Both game processes and the temporary
+bridge were stopped after testing.
+
+### Design decision and remaining verification
+
+Unify tools by **operation semantics**, not by controller class. Keep current input-context acquisition and native
+target routing inside the adapter; let the game choose controller-specific behavior. Expose context and actual state
+through independent observations. The sampled controls have live evidence for a common executor without controller
+branches. This
+avoids per-mod machine workflows, but does not eliminate engine object types, observation limits or input lifetimes.
+
+The accepted public promise is "invoke build/mine/open-character-gui in the current context", with completion of the
+finite input operation. It does not include verification of construction, entity removal or a particular opened UI.
+The agent observes the resulting world/UI and chooses its next operation. MCP must not add built-in gameplay success
+predicates, require an expected world event, or wait for a world change: a valid input can legitimately be ignored, and
+mods can change its meaning. Optional expected-context guards protect against intervening user changes without teaching
+MCP gameplay rules.
+
+#### Verified return types and the action result contract
+
+The installed Windows PDB was read again for this decision. InputEventSender's method field list maps `sendEvents` to
+type record `0x14D387`, `sendEvent` to `0x14D389`, and `tapControl` to `0x14D382`. All three LF_MFUNCTION records
+explicitly
+declare `return type = 0x0003 (void)`. These record indices identify retained evidence for this build, not production
+lookup constants. See [the extracted records](temp/world-input-tests/input-return-types.txt) and the InputEventSender
+field list in [the original type extraction](temp/ui-static-research/selected-types.txt).
+
+Consequently, this input boundary supplies no native gameplay-result value to forward. Use an empty successful MCP
+tool result, or only a completion acknowledgement required by the transport/UI; do not invent `effective`, `built`,
+`rejected_by_game`, or a gameplay success boolean. A protocol response still completes the MCP request even though
+there is no application result value. This contract is specific to these void input methods; other native readers or
+control methods with meaningful return values must be assessed on their own semantics.
+
+Completion means that the admitted finite input sequence ran at its valid game phase, including its final release and
+cleanup. Queue admission alone is not completion, and a held control is not complete merely because its press call
+returned. Completion does not acknowledge server acceptance or guarantee that all later simulation effects are already
+visible. Invalid parameters, unavailable input context, world replacement before execution, and failure to execute or
+clean up remain tool errors. A no-op caused by game rules is not a tool error. Tests still inspect authoritative effects
+and full CRC to validate the adapter; those test assertions are not per-call product completion predicates.
+
+Before advertising a production shared interface, extend coverage to overlapping selections, different active/physical
+surfaces, fog, changes during an action, mod-linked custom inputs and a mod selection tool. Validate chart input routing
+without requiring disallowed actions to have effects, and validate game-owned cleanup across teardown and MCP loss.
+Verify movement/panning separately. Pure hit testing
+must be distinguished from selection updates that raise events. Continue server-side assertions and full CRC for new
+mutation paths. The earlier Windows static-analysis pass did not start a game; the dated follow-up above did, and its
+scope must not be generalized to every controller, mod or parameter combination.
+
 ## Evidence and scope
 
 ### This Linux experiment
@@ -439,12 +880,19 @@ Before game calls, an isolated native fixture passed 2,000 iterations covering c
 subtree accounting, string/reference and rectangle returns, multiple-inheritance RTTI conversion and prototype-label
 string returns. These ABI fixtures are distinct from actual-game validation.
 
-### Earlier Windows investigation
+### Windows investigations
 
-The previous document records Windows PDB-based experiments with native GUI traversal, custom controls, generated mod
-settings, item/quality selection, menu navigation and synchronized inputs. Those results are useful prior research, not
-new Linux acceptance results. The referenced Windows raw artifact directories are not present in this Linux checkout.
-Their reported 24/48-assertion runs and timings were therefore not rerun or independently checked here.
+Earlier Windows PDB-based experiments cover native traversal, custom controls, generated mod settings, item/quality
+selection, menu navigation and synchronized inputs. Their 24/48-assertion reports remain prior evidence, not additional
+Linux acceptance results. The Linux investigation did not have those artifacts available for independent replay.
+
+The subsequent Windows foreground-root experiment reread the installed 2.0.77 build 84539 executable and matching PDB,
+regenerated its symbol manifest, and reran the independent MSVC callback fixture for 1,000 iterations. One ordinary
+graphical client and a local headless scenario server exercised menus, joining/loading, gameplay, multiple windows and
+world exit. The client was non-admin; the normal mod list was unchanged. Its 66 evidence checks include nine native
+button submissions with confirmed later observations, current-state rejection and matching peer records after forced
+full-CRC requests. No MCP project build or execution was performed. The results and limitations are retained in
+[the Windows root-state record](temp/ui-root-state-windows/findings.md).
 
 The common widget architecture is consistent across the inspected builds. Different ABIs and optimized symbol
 availability
@@ -455,16 +903,17 @@ independently demonstrated below.
 
 Shared findings are described once in this document: native widget traversal, the distinction between native and logical
 GUI, semantic JSON, prototype-backed labels and lifetime requirements. The table below records only differences in the
-binary interface or the experimental access path. Windows entries come from the earlier record; Linux entries come from
-the current executable and live probe. Neither column establishes a contract for every release on that platform.
+binary interface or the experimental access path. Windows entries include the foreground-root follow-up; Linux entries
+come from the Linux executable and live probes. Neither column establishes a contract for every release on that
+platform.
 
-| Area                                          | Windows investigation                                                                                               | Linux investigation                                                                                                                                                                        | Interpretation                                                                                                                                                                                    |
-|-----------------------------------------------|---------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Developer debug information                   | Matching executable and developer PDB; the record includes class/type information.                                  | ELF symbol table and DWARF embedded in the executable. The supplied debug information did not expose usable complete `agui::Widget`/`agui::Gui` types to the tested GDB lookup.            | Debug readers and available metadata differ. Incomplete types are a property of the inspected build's debug information, not an inherent Linux or DWARF limitation.                               |
-| Native C++ boundary                           | Microsoft MSVC/STL callback fixture and Windows calling conventions.                                                | Linux x86-64 System V calls, Itanium C++ ABI and a compiler-created libstdc++ callback.                                                                                                    | Resolve and verify arguments, returns, virtual dispatch and runtime-library compatibility per target. Do not copy callback, string or RTTI representations between platforms.                     |
-| Multiple-inheritance receiver conversion      | Game runtime `__RTDynamicCast` with PDB-resolved type descriptors.                                                  | C++ runtime `__dynamic_cast` with ELF-resolved type information.                                                                                                                           | The required conversion is shared; the ABI and runtime entry point differ.                                                                                                                        |
-| Root acquisition and selection                | Actual `TopContainer` calls supplied roots; `Widget::getGui` distinguished menu GUI from background simulation GUI. | The probe captures the root argument passed from `Gui::logic` to `Gui::recursiveDoLogic`. Complete active-root selection remains unverified.                                               | These are different tested access paths, not evidence that the game uses a different UI architecture.                                                                                             |
-| Parent reconstruction and helper availability | `Widget::getParentPathString` supplied path depth for postorder reconstruction.                                     | Repeated `callRecursively` traversal supplies subtree spans. The inspected ELF symbol table contains no separately named callable `Widget::getGui` or `Widget::getParentPathString` entry. | The Windows helper route cannot be copied directly from the available Linux symbols. Missing standalone symbols do not prove missing source methods; they may be inlined or omitted in the build. |
+| Area                                          | Windows investigation                                                                                                                                                                                                                              | Linux investigation                                                                                                                                                                               | Interpretation                                                                                                                                                                                    |
+|-----------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Developer debug information                   | Matching executable and developer PDB; the record includes class/type information.                                                                                                                                                                 | ELF symbol table and DWARF embedded in the executable. The supplied debug information did not expose usable complete `agui::Widget`/`agui::Gui` types to the tested GDB lookup.                   | Debug readers and available metadata differ. Incomplete types are a property of the inspected build's debug information, not an inherent Linux or DWARF limitation.                               |
+| Native C++ boundary                           | Microsoft MSVC/STL callback fixture and Windows calling conventions.                                                                                                                                                                               | Linux x86-64 System V calls, Itanium C++ ABI and a compiler-created libstdc++ callback.                                                                                                           | Resolve and verify arguments, returns, virtual dispatch and runtime-library compatibility per target. Do not copy callback, string or RTTI representations between platforms.                     |
+| Multiple-inheritance receiver conversion      | Game runtime `__RTDynamicCast` with PDB-resolved type descriptors.                                                                                                                                                                                 | C++ runtime `__dynamic_cast` with ELF-resolved type information.                                                                                                                                  | The required conversion is shared; the ABI and runtime entry point differ.                                                                                                                        |
+| Root acquisition and selection                | Both reads and limited button actions now use the foreground `Gui::logic` return inside `MainLoop::prepare -> GlobalContext::updateGui`; the current root receiver is captured during that invocation and ownership checked with `Widget::getGui`. | The probe captures the root argument passed from `Gui::logic` to `Gui::recursiveDoLogic`. Equivalent foreground selection across all tested Windows transitions remains to be validated on Linux. | Ownership checks alone do not exclude a background simulation: it temporarily selects its own GUI. Scope acquisition to the foreground call, then capture its current root.                       |
+| Parent reconstruction and helper availability | `Widget::getParentPathString` supplied path depth for postorder reconstruction.                                                                                                                                                                    | Repeated `callRecursively` traversal supplies subtree spans. The inspected ELF symbol table contains no separately named callable `Widget::getGui` or `Widget::getParentPathString` entry.        | The Windows helper route cannot be copied directly from the available Linux symbols. Missing standalone symbols do not prove missing source methods; they may be inlined or omitted in the build. |
 
 Two apparent contradictions are experimental differences, not established platform behavior differences:
 
@@ -483,7 +932,10 @@ unverified path, and add a platform-specific rule only when supported by the evi
 
 ## How the native tree is obtained
 
-The following sequence is the verified Linux probe path; the differing Windows root and parent helpers are listed above.
+### Linux traversal path
+
+The following sequence is the verified Linux probe path. Foreground selection and the Windows phase-scoped path are
+separate from the common descendant traversal.
 
 1. Resolve and validate `agui::Gui::logic(bool)` and `agui::Gui::recursiveDoLogic(agui::Widget*)` against the target
    image.
@@ -505,10 +957,132 @@ This captures controls that already existed before attachment. No constructor hi
 movement is required. Repeated subtree traversal is an intentionally simple research method with worst-case quadratic
 work; it is not a proposed optimized production collector.
 
-The sampled root's traversal is complete within the explicit node bound. This is not proof that every independently
-managed GUI root, background simulation, detached control or lazily created popup has been enumerated. Production still
-needs explicit active-presentation/root selection and same-phase target validation. Stateless selectors do not require a
-persistent public widget-lifetime registry.
+The sampled root's traversal is complete within the explicit node bound. This does not enumerate every independently
+managed GUI, detached control or not-yet-created popup. Background simulations should not be merged into the foreground
+document. Windows now has the phase-scoped acquisition path below; Linux still needs equivalent foreground selection
+validation. Both need production integration and control-specific eligibility checks. Stateless selectors do not
+require a persistent public widget-lifetime registry.
+
+### Windows foreground-root acquisition
+
+The executable's `Gui` constructor creates a `TopContainer` and associates it with that GUI.
+`Gui::add` attaches controls to the top container; `Gui::logic` and `GuiRenderer::prepare` pass the current root to
+`TopContainer::processTriggersToResize`. `Gui::render` passes it to `Widget::recursivePaintChildren`. These actual call
+arguments provide a root without reading a private field offset or reconstructing a GUI object.
+
+The essential qualification is **foreground phase**, not root address stability. The first broad Windows collector
+captured a menu background simulation's `InteractionArea` instead of the main menu. That simulation has its own GUI and
+temporarily changes `Gui::instance`. Even a correct `Widget::getGui` ownership check inside an arbitrary render call can
+therefore select the wrong presentation. The first corrected reader captured the root inside the foreground
+`Gui::render` call nested in `MainLoop::prepare`. The scheduling follow-up supersedes that split read/action arrangement
+with a single verified boundary:
+
+```text
+Current MainLoop::prepare invocation
+  -> capture this invocation's foreground Gui::instance
+  -> enter its GlobalContext::updateGui invocation on the same thread
+  -> identify its actual foreground Gui::logic call
+  -> capture the TopContainer receiver passed to processTriggersToResize in this call
+  -> check ownership with Widget::getGui
+  -> at this Gui::logic return, traverse the current root with callRecursively
+  -> read metadata, or uniquely match and validate the current action target
+  -> finish traversal before dispatch; do not yield between selection and invocation
+  -> discard pointers and confirm changes through a later observation
+```
+
+Neither painting nor the engine's recursive control-logic visits filter which descendants are enumerated. The compiled
+callback traverses
+private and ordinary children, including unpainted controls. The tested Windows parent helper is
+`Widget::getParentPathString`; it is not an object-layout reconstruction.
+
+The root and candidate pointers used for traversal/selection are local to that execution. They are reacquired for each
+request; no component registry, fixed root address, cached window list or per-screen name table is required. Debug
+symbols are resolved from the installed executable. An asynchronous read of `Gui::instance`, outside the verified
+phase, is not a substitute for this path. A missing eligible phase produces a bounded not-ready/timeout result rather
+than reuse of a prior root.
+
+The foreground root happened to retain its address through this run's transitions. This neither proves a permanent root
+lifetime nor limits the algorithm: the adapter obtains the actual current receiver every time. Background roots did
+vary. Reattaching the observer after entering a world also rediscovered already-existing windows without constructor
+history. No `Map` receiver, Lua VM, world tick, console command or administrator right was needed for these UI paths.
+
+This verifies acquisition and limited same-phase dispatch for the sampled Windows states. The scheduling analysis
+below explains why this boundary is preferable to arbitrary render or IPC callbacks. It does not establish
+interchangeable Linux/Windows ABIs or a complete executor for every control family.
+
+### Why this is a safe UI phase, including the main menu
+
+The main menu has a continuously serviced application/UI loop; it does not need a gameplay `on_tick` event. The
+installed
+Windows executable's graphical `MainLoop::run` branch repeatedly calls `MainLoop::mainLoopStep`. Its ordering is:
+
+```text
+Wait for the previous update worker to finish
+  -> prePrepare: process application state transitions and input
+  -> prepare, when the frontend update flag is set
+       -> update UI/layout and frontend progress boxes
+       -> GlobalContext::updateGui -> foreground Gui::logic
+            -> normal event dispatch, control logic and deferred destruction
+            -> VERIFIED UI OBSERVATION / LIMITED ACTION BOUNDARY
+       -> prepare GUI draw data
+  -> submit the next update worker
+  -> render and present
+```
+
+The wait is an actual condition-variable/mutex boundary using `MainLoop::updateThreadConditionMutex` and
+`MainLoop::updateThreadFinished`. `WorkerThread::run` is called after `prepare` returns. The observation/action callback
+therefore executes on the frontend thread after the preceding game update and outside the GUI's own traversals. The
+earlier render-root experiment was also scoped inside `prepare`; this must not be confused with arbitrary
+`MainLoop::render`, which follows the next worker submission.
+
+Not every outer loop iteration calls `prepare`. However, `gameUpdateLoop` reaches its common `didGameUpdate` flag
+update even when there is no scenario, and while loading skips selected world work. The flag's name does not mean
+that a gameplay tick advanced. The `GlobalContext::updateGui` early-out examined here is for `headlessMode`, not for
+being in the main menu. The normal waiting states of parallel loading/saving return to the application loop. Thus the
+frontend mechanism is shared across these states; a per-menu or per-world-tick scheduler is unnecessary.
+
+The follow-up monitored 32,497 foreground logic returns in two observer sessions in one graphical client, with no
+reported overlap with `gameUpdateLoop`. The UI and game-update threads were distinct. All 55 retained tree snapshots
+and 20 limited native text-button submissions used the same scoped logic-return boundary. The root was reacquired
+for each operation. This is measured coverage plus executable control-flow evidence, not a proof that every other
+engine worker or arbitrary native API is safe.
+
+| Additional live check                            | Result                                                                                                                                                         |
+|--------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Main menu                                        | UI phases advanced while the `gameUpdateStep` count remained zero.                                                                                             |
+| Minimized window                                 | The tree remained readable; a native About-button action was confirmed by the resulting page.                                                                  |
+| Connecting, transfer and multiplayer map loading | The same boundary exposed progress UI, an intermediate nearly empty window, and the eventual HUD.                                                              |
+| Saving and single-player map loading             | Progress boxes were read through the same boundary; native Save and Load submissions produced the research save and loaded world.                              |
+| Single-player pause                              | World-tick logging stayed unchanged for eight seconds while 490 UI phases executed; native Settings, Back and Continue worked, and world-tick logging resumed. |
+| World exit and confirmation windows              | The same document mechanism exposed the confirmation and subsequent main menu; ambiguous identical Exit labels were rejected.                                  |
+
+The ordinary client used the installed DLCs and a scenario with script-created UI. The multiplayer client was not an
+administrator. Both custom screen windows remained children of the same foreground root as native content. Full CRC
+requests and corresponding peer records continued through tick 11100 without a reported desynchronization. The
+independent MSVC callback fixture passed 1,000 iterations before game attachment; that fixture result is separate
+from real-game validation.
+
+For production, IPC should only admit bounded work. The frontend callback acquires the current root, evaluates the
+stateless selector and performs the verified operation; it must not wait for MCP or invoke a click from inside a tree
+visitor. Reading UI while a loader runs is not permission to access the partly loaded simulation. Actions that affect
+the world still require their normal synchronized submission path and later completion evidence.
+
+The supported architectural conclusion is **one process-level frontend mechanism for ordinary Factorio-owned UI
+states**, independent of world readiness. It is not a promise of a callback at every instant: synchronous transition
+work, OS message handling or a stalled update worker can delay the next boundary. Requests must report pending,
+not-ready or timeout without using a stale root, forcing a GUI tick or moving access to another thread. A progress
+page can legitimately expose no actionable controls; the sampled connecting box had no cancel button. Steam overlays
+and operating-system dialogs are outside the established `agui` tree.
+
+Complete tree traversal also does not mean every semantic property is already decoded. This run found that the
+minimal exact-type text reader reported an empty save-name field for `TextFieldWithChatIconSelector`. An actual RTTI
+cast to its `TextBox` base, followed by the verified getter, recovered the existing text. Type-family readers and
+input adapters remain necessary; no per-mod workflow is implied.
+
+The scheduling disassembly, snapshots, experiment limits and 43 evidence checks are retained in
+[the safe-phase findings](temp/ui-safe-phase-windows/findings.md) and
+[the verification report](temp/ui-safe-phase-windows/verified-results.json). The existing state-coverage section below
+retains the earlier complementary root/lifecycle evidence.
 
 ## What can actually be read
 
@@ -992,15 +1566,10 @@ that every icon's tooltip is available through a pure read.
 
 ### Presentation and world lifetimes
 
-The earlier Windows tests reported menu/save-load traversal, paused-world presentation and background-simulation
-pitfalls.
-`AppManager::isAppInMenu` could also describe an in-game menu; destruction of a background Map did not necessarily
-destroy
-the active menu. Treat these as constraints to revalidate, not a complete platform-independent lifecycle classifier.
-
-A GUI-phase observer can operate outside world ticks. A production design should distinguish process/presentation
-readiness, the actual player world and Lua attachment. World replacement must invalidate world-owned work; ordinary menu
-presentation should not depend on a running `on_tick` callback.
+Foreground UI selection must not be inferred from `AppManager::isAppInMenu` or a Map destruction event alone: an
+in-game menu is also a menu, and background simulations have their own maps. The Windows foreground-phase experiment
+now directly verifies menu/world-transition observation independently of world ticks; the acquisition route is specified
+above. World replacement must still invalidate world-owned work even when the foreground GUI survives it.
 
 Address reuse previously caused stale type metadata to select an incorrect getter. Actual receiver conversion and
 current
@@ -1034,35 +1603,94 @@ These invalidate historical pointer/ordinal identity claims, not the chosen sema
 See [lifecycle evidence](temp/ui-lifetime-research/findings.md)
 and [descriptor comparison](temp/ui-descriptor-research/findings.md).
 
-## Menu compatibility
+## UI compatibility across menus, connection and gameplay
 
-Fresh Linux captures establish that the startup main menu and in-game multiplayer menu use the same native widget system
-and traversal functions as gameplay. The startup menu had 51 nodes under `agui::TopContainer`, including ordinary
-buttons
-for Single player, Multiplayer, Settings, Mods and Quit, plus the language dropdown. The in-game menu had 502 nodes and
-included `MultiplayerMenuGui`, ordinary buttons, retained HUD/background controls, and a disabled Pause button. The text
-and
-disabled state matched screenshots captured through XComposite without changing focus during capture.
+The Linux captures establish the shared widget system for the startup main menu and in-game multiplayer menu: 51 and
+502 nodes respectively, with text and disabled state matching XComposite screenshots. Both use the same document/path
+matcher. The Linux submenu setup attempts did not establish generic native action dispatch; that negative result remains
+in [the Linux menu record](temp/ui-path-research/findings.md).
 
-Both scenes work with the same structured path matcher. No special menu selector or menu-window ordinal is necessary.
-A menu requires process-level UI readiness and a GUI execution phase, not Lua/world attachment. Production must separate
-these prerequisites from the existing gameplay tools' world-bound `attach` checks. This is a proposed integration
-change;
-it has not silently changed the current product tool prerequisites.
+The later Windows experiment extends state coverage using the same graphical process and the foreground acquisition
+path described above. The following are actual observations, not a claim that every possible screen was tested:
 
-Root discovery and action eligibility still need separate validation: two repeated main-menu samples found the expected
-foreground root, but do not prove that every arbitrary GUI logic call belongs to the active presentation. The menu's
-animated world is not a tree of selectable UI entities. Settings/load/join subpages and generic menu action dispatch
-were
-not validated in this experiment. Desktop clicks attempted solely for submenu setup did not change the captured tree;
-that is not evidence for a working input adapter.
+| Windows state                                       | Observed structure                                                                                            | Evidence under `temp/ui-root-state-windows/`                                |
+|-----------------------------------------------------|---------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------|
+| Main menu, multiplayer menu, direct connection      | 51, 40 and 38 nodes under the current foreground top container                                                | `main-menu-foreground.json`, `multiplayer-menu.json`, `direct-connect.json` |
+| Connecting, waiting for server save, downloading    | Ordinary activity/progress windows; the current status text changes within the same tree mechanism            | `auto-246.json`, `joining.json`, `download.json`                            |
+| Loading multiplayer map and intermediate transition | Loading UI, followed by a partially populated window; the reader does not fabricate the previous or next page | `auto-248.json`, `auto-249.json`                                            |
+| Gameplay with two independent custom windows        | 484 nodes; HUD and both windows share the root                                                                | `gameplay-retry.json`                                                       |
+| In-game menu and settings                           | 508 and 510 nodes; native menu/settings and both retained custom windows share the root                       | `pause-multiple-windows.json`, `native-open-settings.json`                  |
+| Connection failure                                  | Native leave/save/reconnect dialog                                                                            | `connection-lost.json`                                                      |
+| World exit and load-save dialog                     | Main menu returns; former world windows disappear; save list and load/back controls remain discoverable       | `after-world-exit.json`, `native-load-confirmed.json`                       |
+| Reattachment after entering a world                 | Existing windows rediscovered without construction history                                                    | `reattached-world.json`                                                     |
 
-See [menu evidence and limitations](temp/ui-path-research/findings.md), the
-[main-menu DOM](temp/ui-path-research/main-menu.dom.json), and the
-[in-game menu DOM](temp/ui-path-research/pause-menu.dom.json).
+The sampled connecting/downloading/loading states also executed GUI logic. A process-level UI adapter can therefore
+observe them without a world Lua binding. Some progress pages expose no action button, and a transition may temporarily
+have little content. Supporting that state means reporting its actual tree and current capabilities, not promising an
+action that the game does not offer or dispatching during an unavailable phase.
+
+### Multiple windows share the document
+
+The Windows verifier checks actual parent relationships: both custom `gui.screen` windows are children of the
+foreground `TopContainer`, as are the subsequently opened `MultiplayerMenuGui` and `SettingsMenuGui`. Their controls are
+ordinary descendants. For example, the in-game menu observation contains:
+
+```text
+document                         proposed public wrapper
+└── agui::TopContainer            current native foreground root
+    ├── InteractionArea          HUD and ordinary game interface
+    ├── agui::Window              custom window 1
+    │   └── ... button 1
+    ├── agui::Window              custom window 2
+    │   └── ... button 2
+    └── MultiplayerMenuGui        native game menu
+```
+
+This supports treating windows as subtrees, without a second window-selection API. It does not require all window types
+to be direct children of the root. The menu's `SimulationWidget` is a foreground node, but its separately processed
+background GUI must not be merged into that document as additional actionable controls. Special tooltip layers and
+scene contents retain the coverage boundaries documented above.
+
+### Native button actions and failures
+
+Nine Windows native button submissions have matching later observations. They navigate through main/multiplayer/direct
+connection menus, connect to the local server, open/close settings and leave the world. Additional retained submissions
+open Single player and the load-save dialog. Each target is resolved from the current root at execution time. A disabled
+Pause button and a Graphics button absent from the new page are rejected. These tests use a unique current text-button
+predicate; they do not rerun the full Linux structured-path matcher inside a native action executor.
+
+The actions use `Widget::dispatchClick` and a game event copied from a real setup click. This is the same research
+event-template limitation described in the input section, not verified fresh-event construction. The final fixture also
+requires a successful game point hit test at the button's game-reported center. That is a restriction on these
+particular
+tests, not a change to the agreed policy for suitable offscreen/covered controls, and not proof of universal modal
+eligibility. As the Linux popup tests demonstrate, geometric hit testing alone does not establish modal routing.
+
+The Windows probe initially treated `widgetIsModalChild == false` as rejection. Disassembly and live menu testing showed
+why that is incorrect: the method also returns false when no modal target exists. After correcting the research check,
+a non-modal main-menu button opened its next page. A complete modal/eligibility adapter remains separate work.
+
+Two additional failures are retained rather than counted as game safety successes. The first scenario attempted to
+create an already-existing character and stopped its server; it was corrected before successful world tests. A later
+Windows response-file sharing violation interrupted the research observer after the native Connect action had succeeded.
+Reattachment confirmed the existing connected world; the mutation was not replayed. Only response-file replacement was
+retried in the corrected transport. This temporary file RPC is not a proposed production transport.
+
+The non-admin client and local server agreed on fixture roots and recorded subsequent forced full-CRC requests without
+a reported desynchronization. The isolated callback fixture and these real-game results are distinct validation claims.
+See [the Windows findings](temp/ui-root-state-windows/findings.md),
+[the 66-check report](temp/ui-root-state-windows/verified-results.json) and
+[confirmed button actions](temp/ui-root-state-windows/native-menu-results.json).
 
 ## Validation of the unified document/path proposal
 
+- Windows scheduling verification: 43 evidence checks over 55 snapshots, 32,497 monitored foreground GUI phases and
+  20 limited native button submissions. This adds a unified read/action boundary, no-world menu evidence, minimized
+  operation, saving/loading and single-player pause/resume. It does not establish every control-family action.
+- Windows foreground/state verification: 66 evidence checks, including shared roots, current-phase acquisition,
+  connection/loading and world transitions, observer reattachment, nine confirmed native button actions, rejection of
+  disabled/absent targets, and peer evidence. This is separate from full path-matcher coverage. The independent MSVC
+  callback fixture was rerun for 1,000 iterations before game attachment.
 - Current contract verification: 55 checks using real captures. These cover complete document reads, filtered reads with
   zero/multiple matches, unique action targets, intermediate ambiguity, current positions per context, deduplication,
   subtree containment, reordering/reconstruction, remote non-window controls, main/in-game menus, disabled-state
@@ -1089,7 +1717,10 @@ input, synchronization and safe-phase validation listed below. No new MCP tool i
 
 ## Remaining work before production integration
 
-1. Establish safe active-root selection across menus, pause screens, background simulations and world replacement.
+1. Integrate the verified Windows foreground logic-return boundary for both observation and supported actions, and
+   validate the corresponding Linux call chain, ABI and worker synchronization across menus, pause, connection/loading
+   and world transitions. Reacquire the current root for every operation; do not replace this with
+   one-time capture, a root-address assumption or arbitrary-GUI selection. Separate UI readiness from world readiness.
 2. Integrate unified full/filtered DOM reads and path-based actions with current-root discovery and same-phase dispatch.
    Validate
    production limits and error schemas. Native/logical identity association remains a separate observation problem.
@@ -1106,6 +1737,18 @@ input, synchronization and safe-phase validation listed below. No new MCP tool i
    policy from the earlier draft is a requirement of the current raw-tree investigation.
 
 ## Reproduction and evidence
+
+Check the Windows scheduling and root/state evidence without launching the game:
+
+```powershell
+python -B -X utf8 temp/ui-safe-phase-windows/verify.py
+python -B -X utf8 temp/ui-root-state-windows/verify.py
+```
+
+The directory retains the PDB/executable identity check, disassembly, phase-scoped reader, limited button executor,
+snapshots, peer logs and failed-experiment evidence. Its `findings.md` describes the exact access paths and limitations.
+The pre-merge version of this document is preserved as
+`temp/ui-root-state-windows/interaction-architecture-research-before-merge.md`.
 
 Check the current projections and unified contract with:
 
