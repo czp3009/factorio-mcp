@@ -1,1000 +1,1175 @@
-# Semantic interaction architecture research
-
-Date: 2026-09-23. Status: research and proposed architecture, not implemented product behavior.
-
-This document is in the project root at the user's explicit request. Experimental programs, raw disassembly, snapshots
-and logs remain under Git-ignored `temp/`. The README continues to describe implemented functionality.
-
-## Objective
-
-Give an agent structured observations and semantic interactions that survive changes to recipes, entities, mod
-interfaces and user key bindings. Avoid a separate tool for every gameplay feature, fixed screen coordinates, screenshot
-recognition as the primary observation mechanism, and unrestricted direct simulation mutations.
-
-The intended public boundary separates two kinds of interaction:
-
-- **GUI interactions:** identify an actual control and activate it, edit text, choose an option, toggle a checkbox, or
-  manipulate a control-local value. Left, right and middle buttons and modifiers are parameters of a control
-  interaction.
-- **World interactions:** identify a spatial target and use named game controls such as movement or the applicable
-  interaction control. A semantic control must not be hardcoded to a physical key.
-
-Both should return bounded, structured observations and meaningful completion states. The agent should not manage
-low-level event sequences, pointer addresses, keycodes or delayed input release.
-
-## Evidence and scope
-
-The initial research inspected the locally installed Windows Steam Factorio 2.0.77 executable, its matching developer
-PDB, bundled Lua scripts, and bundled runtime/prototype API documentation. Executable and PDB identity matched. Function
-locations were resolved from debug information rather than address tables or instruction fingerprints.
-
-Native experiments used one graphical client and a local headless server. The controlled player was not an
-administrator. A test scenario logged authoritative effects and periodically forced full client/server CRC checks.
-Separate native instrumentation fixtures were checked before game attachment. No production project build or execution
-was needed.
-
-These results establish behavior on the inspected Windows build. The follow-up validation below establishes a live
-common widget-tree traversal for native, DLC, custom and mixed interfaces. It does not establish the Linux ABI,
-version-independent binary compatibility, exhaustive semantic-property coverage, or production lifecycle safety.
-
-## Follow-up validation: structured UI output
-
-**Conclusion:** the common structural-output route is now demonstrated in the actual game, including already-existing
-widgets. Native UI, DLC UI, mod-created controls, and mod content inside native windows can be represented through a
-shared native widget tree, supplemented by the documented logical mod GUI roots. The collector does not need to
-anticipate the mod's workflow or identify which mod owns each entry.
-
-This conclusion concerns the game's widget interfaces. It does **not** mean that every pixel drawn inside a map, graph,
-camera or sprite has a corresponding semantic control, or that every native control's specialized value has already been
-decoded. There is no evidence supporting an unrestricted promise of complete semantic output for every possible mod and
-every rendered surface. Common traversal solves discovery; family-specific metadata adapters still supply meaningful
-values. These can stay internal to a small public observation/action API.
-
-### What changed from the earlier investigation
-
-The earlier candidate `agui::Widget::callRecursively(const std::function<void(Widget*)>&)` was invoked successfully
-against live roots captured from the game's own `TopContainer` calls. Its executable implementation visits both private
-and ordinary children in postorder without the visibility filtering that limited paint-only observation. Root selection
-uses the game's `Widget::getGui`, distinguishing the active menu GUI from the background simulation GUI.
-
-The callback is a real compiler-created `std::function`, built with the Microsoft MSVC/STL toolchain in an isolated
-CMake research fixture. Its independent ABI fixture passed 1,000 iterations with four visited nodes per iteration before
-game use. No game object fields, container layouts, or hand-built closure bytes were needed. Function locations and type
-descriptors came from the installed executable's matching PDB. This is a Windows experiment, not a verified Linux
-adapter.
-
-The observer reads actual native RTTI, game-owned getters, and `Widget::getParentPathString`. The parent relationships
-are reconstructed from the verified postorder traversal and game-provided path depth. Detaching and reattaching the
-observer to the unchanged, already-built main menu rediscovered its 51 nodes. Observation therefore no longer depends on
-witnessing each widget's construction.
-
-### Live coverage and evidence
-
-The client used the ordinary Steam installation, normal configuration and loading caches. A temporary fixture mod ran
-with base, Quality, Elevated Rails and Space Age enabled, against an isolated local headless server. The controlled
-client was a non-admin. Only the small research callback DLL was built; the MCP project was neither built nor run.
-
-| Area                             | Verified result                                                                                                                                                                             | Retained evidence under `temp/ui-tree-verification/`                                                |
-|----------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------|
-| Mod GUI API surface              | All six roots and all 25 `GuiElementType` values in the installed runtime API were instantiated and enumerated logically.                                                                   | `logical-all-types.json`, `control.lua`, `verify.py`                                                |
-| Native traversal beyond painting | The initial fixture produced 557 native nodes versus 112 painted nodes; hidden descendants and offscreen collection content were discoverable. The final world snapshot contains 559 nodes. | `fulltree-all-mod-types.json`, `snapshot-initial-fixture.json`, `fulltree-final-world.json`         |
-| Native plus mod extension        | A native chest window and the mod's relative frame/checkbox were present in one 786-node tree; the checkbox effect appeared on both peers.                                                  | `fulltree-final-mixed-settled.json`, peer logs                                                      |
-| Native plus mod prototypes       | The technology tree exposed over 200 technology slots with prototype metadata, including the fixture's mod technology.                                                                      | `fulltree-final-research-settled.json`                                                              |
-| DLC plus mod selector            | The native item selector contained native and mod items, the DLC quality controls, and a discoverable confirmation control. The full item/quality/confirm flow completed.                   | `fulltree-quality-selector.json`, `quality-confirmation-results.json`                               |
-| Icon-only quality controls       | All five quality names and the current rare selection were obtained; transient tooltips were removed after each bounded observation.                                                        | `quality-tooltip-results.json`, five tooltip snapshots                                              |
-| Game-generated mod settings      | The native `ModSettingsGui` tree exposed the fixture's setting labels, checkbox, dropdown, current text `first`, selected index, tabs and confirmation buttons.                             | `fulltree-mod-settings.json`                                                                        |
-| Existing UI and world exit       | Reattachment discovered an already-existing menu. After leaving the multiplayer world, the same observer read the main menu and then the load-save dialog.                                  | `fulltree-reattach-existing-menu.json`, `fulltree-after-world-exit.json`, `fulltree-load-game.json` |
-| Lifetime and replacement         | A destroyed control reference was rejected and its replacement was rediscovered. A separate address-reuse bug was found and corrected as described below.                                   | `live-action-results.json`, `fulltree-debug-missing-choose.json`                                    |
-
-The retained verifier passes **48 evidence assertions**. It checks tree identities, parent references and agreement
-between live RTTI and the game's path class for the final snapshots, as well as logical type coverage, selected values
-and matching authoritative peer records. These are research checks, not production tool acceptance tests or an
-exhaustive screen catalog.
-
-Representative full-tree collection samples were 1–3 ms for menus and 8–12 ms for the tested gameplay windows, including
-metadata reads in the research probe. These are individual samples, not a performance guarantee. Hundreds of internal
-nodes should be reduced to grouped hosts and meaningful controls before sending observations to the agent.
-
-### The original item-plus-quality case, end to end
-
-The verified sequence was:
-
-1. Discover the open item selector and its quality icon controls.
-2. Read each quality's game-created tooltip and the actual button toggle state; discover five choices with rare
-   selected.
-3. Activate the legendary-quality control and the mod item `ui-structure-item` using fresh control observations.
-4. Observe that selection alone leaves the picker open. Discover the icon-only confirmation control through its actual
-   tooltip, which identifies confirmation and the current `E` binding.
-5. Activate that control, then observe the picker closing and the chooser reporting the mod item with
-   `[quality=legendary]`.
-6. Independently confirm `{name: "ui-structure-item", quality: "legendary"}` and the mixed-window checkbox value in
-   synchronized server and client fixture observations.
-
-Matching peer snapshots continue from tick 67200 through tick 86400 in the retained evidence. Both peers recorded
-subsequent forced full-CRC requests, including tick 86700, and continued without a reported desynchronization. This
-supports the tested path; it does not prove all possible native readers or operations safe.
-
-This sequence needs no hardcoded rule that selecting an item completes a dialog. Additional controls and validation
-messages can appear in the next observation. The same public control-discovery contract can expose them without adding a
-feature-specific tool.
-
-### Metadata, transient UI and correctness findings
-
-- **Multiple inheritance changes native receivers.** The technology and shortcut prototype getter paths require an
-  actual `PrototypeProvider` receiver. Item controls use their corresponding `IDButtonProvider` base. The game runtime's
-  `__RTDynamicCast`, using PDB-resolved type descriptors, returned the properly adjusted receiver; passing the original
-  widget pointer was not equivalent. Prototype tags and localized labels then became readable through game-owned
-  presentation getters.
-- **Common values are accessible, but not all have been implemented.** The probe read text fields, multiline text,
-  dropdown selection, list items and selection, slider value, switch state, button toggles, item quality and prototype
-  identity. The documented logical GUI API supplies additional custom-control properties. Native-only checkbox/radio
-  values and arbitrary specialized widget data are not universally exposed by this probe.
-- **Tooltips are an operation, not a pure getter.** The base `createToolTip` returns null and is not a universal
-  metadata API. `checkCreateTooltip` invokes the game's normal tooltip path. The finite probe request waits for
-  attachment, records the resulting subtree, schedules removal through `removeToolTipWidget(0)`, and verifies cleanup on
-  a subsequent frame. All five quality observations ended with zero tooltip widgets remaining. Production needs
-  equivalent cleanup on failure and teardown.
-- **Some content is detached or created lazily.** Closed relative extensions and inactive tab contents can exist in the
-  logical mod tree without belonging to the active native root. Conversely, native popup contents may appear only after
-  expansion. Combine the logical and native observations; report current applicability and discover the next state after
-  an action. Do not equate logical existence with present interactivity.
-- **Destructor hooks alone did not establish safe identity.** A reused address previously represented a `TechnologySlot`
-  and later a `ChooseButton`. Cached class metadata consequently invoked the wrong reader. The corrected observer
-  rechecks RTTI and expires all references after its own input submissions. Final snapshots pass class/path consistency
-  checks. Same-type address reuse and changes caused outside the probe still require a production lifetime/epoch
-  contract; raw addresses are not durable identifiers.
-- **A submission is not a changed page.** Several immediate snapshots preceded the synchronized UI update. Observations
-  were repeated until the intended state appeared; mutations were not replayed. A Windows response-file sharing error
-  after confirmation was similarly reconciled by observation, without resubmitting the click.
-
-Passive `Gui::recursiveDoLogic` hooks were also investigated and rejected as the complete collector: they can skip child
-logic and initially observed the menu's background simulation instead of the active menu. Nested interceptor callbacks
-did not reliably describe recursion initiated from another interceptor; the successful traversal uses the actual
-compiled callback instead. These negative results remain in the research artifacts.
-
-### What can and cannot now be claimed
-
-The common discovery mechanism is verified for the installed game, including existing widgets, custom API types, mixed
-interfaces, generated mod settings and menus outside a world. This supports adopting structured UI observation as the
-architecture. The API's finite set of custom widget types and roots explains why new mods do not inherently require new
-public tools.
-
-The following remain separate engineering or validation work:
-
-- Complete semantic adapters for native widget families, including graph data, map/camera contents, some icon metadata
-  and specialized values. A structural node may legitimately carry `unknown` or an explicit capability limitation.
-- Every control gesture and shortcut mapping, including native inventory middle-click and all popup-specific behavior.
-  The research clicks still copy captured game event templates. Leaving the world invalidated those templates, so menu
-  input required reseeding; structural observation continued independently. A fresh-event production constructor remains
-  unverified.
-- Full lifecycle safety under asynchronous mod changes, every allocator reuse case, player replacement and native
-  exceptions. The finite tooltip experiment is not a finished resident teardown implementation.
-- Linux ABI and production integration, plus acceptance coverage beyond the particular Windows screens and mod fixtures
-  tested here.
-
-It would therefore be inaccurate to label all UI semantics and operations universally validated. The verified statement
-is narrower and useful: **native, DLC, mod and mixed widget interfaces share a workable structural observation
-foundation; arbitrary visual content and remaining specialized semantics require explicit adapters.**
-
-## Named game controls and raw input are different layers
-
-`InputEventSender::sendEvent/sendEvents` accepts native game input events, such as key presses and mouse events. It
-updates input state and routes through the game's input source and GUI processing. It does not accept a GUI widget as a
-click target.
-
-The installed implementation of `LuaSimulation::luaControlDown` demonstrates a useful underlying path:
-
-```text
-Named ControlInput
-  -> getControlInputValuesForActiveInputMethod()
-  -> eventsToTriggerThis(cursor position)
-  -> InputEventSender::sendEvents()
-```
-
-An adapter can therefore expose `confirm-gui` or movement semantics while resolving the current client binding
-internally. Actual behavior remains subject to focus, input consumption and other controls sharing a binding. Missing
-bindings and unsupported input methods require explicit handling.
-
-`LuaSimulation` itself exists only in simulations; it is not a normal-world mod API. Its implementation and bundled
-demonstrations are evidence for native helpers, not permission to fabricate a simulation object.
-
-Mods can register custom inputs, link them to game controls, and consume input. Jumping directly to an arbitrary
-gameplay mutation can skip these semantics. The earlier input experiment verified ordinary GUI clicks, a linked
-`confirm-gui` mod event, and normal multiplayer effects. It did not verify all bindings or continuous movement through
-this new path.
-
-## A direct widget-dispatch route exists
-
-The inspected game contains:
-
-```text
-agui::Widget::dispatchClick(const agui::MouseEvent&)
-agui::Widget::dispatchMouseDown(const agui::MouseEvent&)
-agui::Widget::dispatchMouseUp(const agui::MouseEvent&)
-agui::Widget::dispatchMouseEnter(const agui::MouseEvent&)
-agui::Widget::dispatchMouseLeave(const agui::MouseEvent&)
-```
-
-Ordinary GUI mouse processing also calls these dispatchers. `dispatchClick` checks enabled state, with a game-defined
-exception flag, and the accepted mouse-button mask. It uses `EventDispatchHelper`, invokes the widget's virtual click
-implementation, and invokes registered listeners. It does not perform screen-space hit testing or enforce
-visibility/modal membership itself.
-
-This is a stronger route than invoking a button callback directly: the widget behavior and registered listener layer
-remain involved, including the usual synchronized submissions in the tested cases. It is distinct from raising a Lua
-event manually or modifying server state.
-
-### Live results
-
-| Case                        | Observed result                                                                                                                           |
-|-----------------------------|-------------------------------------------------------------------------------------------------------------------------------------------|
-| Ordinary mod button         | Direct widget click reached the server's GUI event handler.                                                                               |
-| Offscreen button            | A button at y=1440 in a 900-pixel-high window activated without scrolling.                                                                |
-| Hidden button               | A `visible=false` button activated through direct dispatch.                                                                               |
-| Disabled button             | No corresponding click event occurred.                                                                                                    |
-| Overlapping ordinary window | The covered button activated while the covering window stayed open.                                                                       |
-| Native modal popup          | A background button outside the popup's modal subtree activated while the popup stayed open.                                              |
-| Automatic-toggle button     | Its toggled state changed and agreed on both peers.                                                                                       |
-| Item/quality chooser        | Direct activation opened the native chooser. Complete item-plus-quality selection was not tested.                                         |
-| Dropdown                    | Click alone did not expand it; widget-level down/up did. Direct option activation synchronized the selection.                             |
-| Checkbox                    | Click alone and down/up alone failed to toggle. Enter/down/up/leave succeeded, with both a checked-state event and a click on the server. |
-| Right button                | Direct dispatch preserved a right-button event on an accepting ordinary button.                                                           |
-| Middle button               | The tested ordinary button filtered it. Native inventory-slot middle-click behavior remains unverified.                                   |
-
-The relevant server and client events matched. Full CRC checks after the tested mutations did not reveal a
-desynchronization.
-
-### Why a single unconditional click recipe is insufficient
-
-Checkbox behavior depends on the native click state, including pointer-enter state. Dropdowns respond to button-down.
-Some widgets dispatch click during button-down; blindly sending down, up and another click can execute an action twice.
-
-The public API can remain semantic and uniform while the adapter preserves each control family's native event process. A
-hypothetical `set_checked(ref, true)` must use that process and verify the resulting state, rather than directly assign
-a simulation-side property.
-
-Direct widget activation intentionally differs from physical pointing: viewport inclusion and ordinary overlap need not
-be preconditions. It can also bypass modal routing. The harmless background-button test does not prove that every
-arbitrary background operation under every modal preserves all GUI assumptions.
-
-### Experimental event construction is not a production contract
-
-The prototype captured a real GUI event from a fixture button and used the game's `MouseEvent::copyWithNewSource` to
-retarget it. A Win32 message bootstrap was used only to obtain that initial event; actual target activations used native
-widget dispatch and did not move the mouse to the target.
-
-A production adapter still needs verified construction, current timestamp/modifier semantics, lifetime ownership and
-cleanup for fresh GUI events. Reusing a captured event or retaining its old source across world changes is not an
-acceptable production design.
-
-## Structured presentation
-
-The game has a native `agui` widget system. Mod-facing `CustomGuiElement` objects are related to native widgets, but the
-Lua GUI API alone is not a complete tree of vanilla interfaces.
-
-Initial paint-based inspection retrieved frame titles, labels, button text, enabled states, dropdown selections and open
-options. A test scroll pane exposed four painted rows out of 80, while a hidden sentinel was absent. The later common
-traversal resolves that paint-only discovery limitation. Generic widget text alone still misses some controls: the
-follow-up reads use appropriate native accessors, prototype metadata and bounded tooltip observation for the tested
-item, quality and toolbar controls.
-
-The agent-facing representation should therefore be a semantic projection of actual presentation objects:
-
-- Process/menu state, current windows, modal relationships and focus.
-- Meaningful groups and controls, current values and available interactions.
-- Item/recipe/quality identities where represented by actual controls, rather than anonymous icon buttons.
-- Bounded collections with explicit ranges and partial-result indicators.
-- Stable-for-lifetime references and revisions, without exposing pointers or native class names.
-
-Collapse layout-only containers and duplicate title labels. Keep disabled controls and relevant explanatory text.
-Separate a control's existence, visibility, enabled state, and eligibility for direct activation: they are not the same
-property.
-
-Direct activation outside the viewport does not require dumping all hidden interface state into every observation.
-Summaries and bounded expansion can expose relevant existing collections without overwhelming context. Uncreated
-controls or simulation data not represented by the interface must not be presented as existing UI controls.
-
-Arbitrary custom pictures, custom world rendering and coordinate-sensitive canvases may lack sufficient semantic
-metadata. A widget tree is not automatically a complete interpretation of every visual element.
-
-### Proposed agent-facing observation format
-
-The following JSON is a proposed protocol example, not an implemented tool response or a literal game snapshot. Its
-public model consists of pages/windows, controls, current state and supported actions. The raw native widget tree stays
-inside the adapter. Collapse layout-only wrappers, decoration and duplicate labels while preserving meaningful groups
-and relationships. Example labels are in English; actual observations retain the game's presentation language.
+# Semantic input and UI observation research
+
+Updated: 2026-09-23. Status: research and live experiments; not a description of new production MCP tools.
+
+This document is kept in the project root at the user's explicit request. Executable experiments, snapshots, logs and
+archives of previous drafts remain under Git-ignored `temp/`. This revision replaces the earlier snapshot-reference
+recommendations with stateless current-tree selection. The README describes implemented product behavior.
+All paths in commands are relative to the project root.
+
+## Architectural decision
+
+The basic interface should expose **semantic input and structured observations of the actual interface**. It should not
+require a new public tool or a hardcoded workflow for each recipe, machine, technology or mod feature.
+
+For input, an agent identifies a control or a named game input such as movement to the right. The adapter resolves the
+current game binding and normal game input path. A semantic input is not an arbitrary simulation mutation, an OS
+keycode,
+or an assumption that a particular physical key still has its default binding.
+
+For output, discover the actual native UI tree and read its presentation, state and associated prototype metadata.
+Custom interfaces should appear because the game created controls, not because MCP recognizes the mod or its workflow.
+Control-family adapters are compatible with this direction: decoding a slider or checkbox is different from implementing
+one special workflow for every machine.
+
+The investigation establishes real Linux tree traversal, a concrete JSON projection, state-transition and screenshot
+comparisons, and a tested stateless document/path selection contract. Matching and projection tests do not establish
+generic native click dispatch. This work does not replace the existing production tool catalog. Noise reduction,
+pruning,
+paging policy and workflow automation are deliberately deferred.
+
+## Current contract: one DOM and one selector model
+
+Expose the current UI as a DOM-like tree. Use the same structured, XPath-like selector for observation and action
+targeting;
+there is no separate window-selection stage, `window.title`, `window.index`, public component `ref`, or persistent
+handle.
+Windows, layouts, HUD controls and remote-view containers are ordinary nodes. A window caption is a text predicate when
+useful, not a mandatory namespace. No full XPath/XML engine or separate CSS/query dialect is required by this proposal.
+
+The proposed public operations are:
+
+| Operation                 | Selector | Result                                                                                          |
+|---------------------------|----------|-------------------------------------------------------------------------------------------------|
+| Read the full UI document | Omitted  | Current document and its complete sampled subtree, with explicit coverage.                      |
+| Read selected UI content  | Present  | All matching nodes with their subtrees, in document order; zero matches is an empty list.       |
+| Operate on a UI control   | Required | Exactly one final target, followed by live eligibility checks and the supported control action. |
+
+These are a design for a shared `ui_read` / `ui_action` interface, not registered production tools. A read does not
+perform an
+action. An action carries the same selector shape as a read, plus its control-family operation and typed parameters.
+A zero-match action returns `target_not_found`; multiple matches return `ambiguous_target`. Never select the first match
+implicitly, silently fall back to another subtree, or automatically replay an action after an uncertain outcome.
+
+### Document and execution lifetime
+
+Use a synthetic `document` node as the public traversal boundary. Its children are the native roots of the current
+active
+presentation, in the adapter's verified order. Current captures contain one `agui::TopContainer` each. The wrapper
+provides
+one consistent selector origin without claiming that every game phase has exactly one native GUI or that the wrapper is
+a
+game object. It must never combine unrelated background-world roots with the active presentation merely because they
+exist.
+
+The DOM describes UI controls, not all pixels: terrain, entities and fog rendered in the world/chart are not child
+widgets.
+Unknown control roles remain generic; text, state and verified prototype metadata remain readable. Disabled controls
+remain
+visible in observations with their disabled state, so an agent can understand why an action is unavailable. Detached or
+pending-destruction objects must not be advertised as actionable. Raw research captures preserve unknown fields
+explicitly.
+
+Every read samples the current presentation. Every action independently reacquires the active root and evaluates its
+path
+when it actually executes, including after a queue delay. Resolve, check current membership/lifetime and eligibility,
+then
+dispatch within one verified game-side GUI phase without yielding between selection and invocation. Do not resolve an
+address at request admission and submit it later. Menu UI must work without a world or a world `on_tick` callback.
+
+No cross-call UI registry, window cache, snapshot lease or lifecycle-token history is needed. Temporary traversal data
+is
+discarded after the operation. Process attachment and in-flight request state are separate concerns. A selector
+deliberately
+may match a newly reconstructed control with the same semantics. It does not promise historical instance identity.
+
+### Structured path semantics
+
+A selector has one nonempty `path` array. Each step contains `axis` and `match`, with an optional `position`:
+
+- `child` examines direct children of each current context. `descendant` examines all descendants, excluding the context
+  itself, in preorder. Evaluation starts at the synthetic document node.
+- `match` is a conjunction of exact predicates on exposed fields. The research matcher supports string predicates for
+  `role`, `text`, `label`, `native_type`, `prototype.kind`, `prototype.name`, and `quality.name`, plus boolean
+  predicates for
+  `state.enabled`, `state.focused`, and `state.pending_destruction`. Missing/unknown values do not equal false. Empty
+  `match`
+  means any node. Use semantic fields when available; native types are diagnostic, build-specific selectors, not a
+  portable
+  public type guarantee. Do not infer icon names or labels that have not been verified.
+- `position` is a positive, one-based integer applied **after filtering, separately for each input context**. It selects
+  the current matching position, not a window number or component identity. After each step, deduplicate the same object
+  and restore document order before evaluating the next step.
+- Intermediate matches may be nonunique. Continue the path across them; only an action's final result must be unique.
+  Thus two same-title windows can be distinguished by a later button predicate without first supplying a window ordinal.
+- Reject unsupported axes/fields, invalid types and out-of-bound selectors. Bound steps, traversed nodes, work and
+  output.
+  If the relevant search is incomplete, do not claim target uniqueness. Reads must report truncation/coverage
+  explicitly;
+  never silently present a bounded capture as the complete interface.
+
+For example, this selector finds the current unique button anywhere under the document:
 
 ```json
 {
-  "view": "view-42",
-  "revision": 18,
-  "activeWindow": "item-dialog",
-  "windows": [
+  "path": [
     {
-      "ref": "item-dialog",
-      "role": "dialog",
-      "label": "Select item",
-      "modal": true,
-      "children": [
-        {
-          "ref": "search",
-          "role": "textbox",
-          "label": "Search",
-          "value": "",
-          "actions": [
-            "set-text"
-          ]
-        },
-        {
-          "ref": "items",
-          "role": "selection",
-          "label": "Item",
-          "selected": null,
-          "options": [
-            {
-              "ref": "item-17",
-              "label": "Iron plate",
-              "identity": {
-                "type": "item",
-                "name": "iron-plate"
-              },
-              "actions": [
-                "select"
-              ]
-            },
-            {
-              "ref": "item-18",
-              "label": "Structure test item",
-              "identity": {
-                "type": "item",
-                "name": "ui-structure-item"
-              },
-              "actions": [
-                "select"
-              ]
-            }
-          ],
-          "coverage": {
-            "complete": false,
-            "next": "items-page-2"
-          }
-        },
-        {
-          "ref": "quality",
-          "role": "selection",
-          "label": "Quality",
-          "selected": "quality-rare",
-          "options": [
-            {
-              "ref": "quality-rare",
-              "label": "Rare",
-              "actions": [
-                "select"
-              ]
-            },
-            {
-              "ref": "quality-legendary",
-              "label": "Legendary",
-              "actions": [
-                "select"
-              ]
-            }
-          ],
-          "coverage": {
-            "complete": false
-          }
-        },
-        {
-          "ref": "confirm",
-          "role": "button",
-          "label": "Confirm",
-          "intent": "confirm",
-          "enabled": true,
-          "actions": [
-            "activate"
-          ]
-        }
-      ]
+      "axis": "descendant",
+      "match": {
+        "role": "button",
+        "text": "Order A"
+      }
     }
   ]
 }
 ```
 
-The fields have these intended meanings:
-
-- `view` and `revision` identify the observed presentation context. References are opaque, scoped handles, never native
-  addresses or assumed permanent identities. The actual validity and revision policy still needs implementation and
-  lifecycle validation.
-- `role` describes a control interaction category, such as a button, textbox, selection, checkbox, tab or item slot. A
-  selection group must follow verified game grouping rather than an inferred business workflow.
-- `label`, `value`, `selected` and `checked` describe observed presentation and state. `identity` supplements a
-  corresponding control with a verified prototype identity; it does not substitute a prototype catalog for actual UI
-  discovery.
-- `actions` advertises only interactions supported by the adapter for that control. Discovery does not establish
-  writability. `enabled` is an observed property, not the entire activation precondition: modal restrictions,
-  attachment, lifetime and other relevant conditions must also be checked.
-- `coverage` explicitly distinguishes complete collections from bounded subsets. A continuation token, when available,
-  identifies further observation within the applicable view. Its presence must not imply access to controls the game has
-  not created.
-- `intent` is optional semantic metadata backed by game evidence. It must not be guessed from appearance or treated as
-  permission to bypass the control's normal handler. Physical key bindings need not appear in action requests.
-
-For example, the agent selects one discovered quality using:
+The same selector is accepted by a read or by an action target. If a broader tree contains more than one such button,
+the
+read returns all of them and the action reports ambiguity. To constrain it to a described ancestor, use an ordinary
+path:
 
 ```json
 {
-  "view": "view-42",
-  "revision": 18,
-  "target": "quality-legendary",
-  "action": "select"
-}
-```
-
-The adapter validates the target and current preconditions, submits the corresponding finite interaction, confirms its
-effect, and returns an updated observation or an explicit failure/uncertain outcome. The next dependent action uses
-fresh references. Never silently apply an old reference to a replacement control or replay an uncertain mutation.
-Selecting an item does not implicitly confirm or close its window: the agent observes the resulting page and chooses the
-next operation.
-
-If a mod adds a checkbox, the same format can expose it without adding a mod-specific public tool:
-
-```json
-{
-  "ref": "extra-option",
-  "role": "checkbox",
-  "label": "Also apply to existing devices",
-  "checked": false,
-  "enabled": true,
-  "actions": [
-    "set-checked"
+  "path": [
+    {
+      "axis": "descendant",
+      "match": {
+        "role": "window",
+        "text": "Duplicate title"
+      }
+    },
+    {
+      "axis": "descendant",
+      "match": {
+        "role": "button",
+        "text": "Order A"
+      }
+    }
   ]
 }
 ```
 
-Default observations should summarize hosts and expand the active window. Other hosts, such as top-left tools, the
-quickbar and shortcut bar, expose bounded entries or counts where known and can be expanded on request. Large
-collections use paging or explicit ranges. This keeps hundreds of internal layout nodes out of the agent's context
-without hiding additional mod-created entry points.
+No special window matching happens here. This exact path was evaluated against two same-title fixture windows; the
+button
+predicate selected A. After raising A, the semantic path still found A. After closing A it found nothing, and after
+recreating A it selected the replacement, as requested. A `position: 1` predicate instead selected the currently first
+matching window; after reordering that position belonged to B. Positional selection is intentionally not stable
+identity.
 
-Semantic normalization must remain evidence-based. Use actual control types, captions, tooltips, grouping and prototype
-identities. If the adapter cannot establish a meaning, retain a generic control with available metadata and explicit
-limitations. Do not invent required fields, confirmation semantics, validation messages or business actions. The example
-proposes the shape of this contract; it does not claim that every role, metadata field or action has already been
-implemented and verified.
+### Eligibility is separate from matching
 
-## Proposed adapter boundary
+The same matcher supplies both reads and actions. Action dispatch additionally checks current attachment, destruction
+state of the target and relevant ancestors, enabled state, control-family capability and the game's necessary routing
+conditions. A read may show a disabled button; matching it does not authorize clicking it. Unknown safety-critical state
+must not count as successful validation. Occlusion or being outside the viewport alone is not rejection under the agreed
+policy, but actual controller suppression/unloading is different. Callback-driven destruction still requires the game's
+normal dispatch/lifetime protections. The current Python matcher is not a native action executor.
 
-The following are illustrative contracts, not registered tools:
+## Main world view is not a DOM-mounted canvas
 
-```text
-observe interface -> windows, controls, values, capabilities, bounded collections
-inspect control -> details and supported interactions
-activate control -> button/modifier semantics and observed result
-edit control -> native text/selection/toggle interaction and observed result
-perform world control -> named control + spatial target + finite duration
+The canvas analogy is useful for distinguishing rendered scene content from structured UI controls, but it does not
+describe the main view's native rendering ownership. In the inspected Linux build, normal character view, remote chart
+view, and zoomed-in remote view all render through `GameRenderer`, directly called by the main loop. They do not enter
+scene drawing through an `agui::Widget` paint callback.
+
+```mermaid
+flowchart TD
+  M[Main loop] --> S[GameView / GameRenderer]
+  M --> U[GuiRenderer]
+  S --> W[World or chart rendering]
+  U --> T[UI tree painting]
 ```
 
-Keep semantic intent and presentation normalization portable. Platform adapters resolve actual native
-functions/receivers and construct/dispatch events. All admitted input sequences must finish or release their transient
-state without a later MCP request.
+Developer-symbol disassembly shows separate game/UI preparation calls and a direct `GameRenderer::render()` call before
+`GuiRenderer::render(...)`. Live debugger stacks confirm the direct scene-render caller in all three modes. The actual
+InteractionArea vtable uses the empty base `Widget::paintComponent`; its background painter draws a style image layer.
+RemoteControllerView::FrameAround also uses ordinary widget/layout painters. Neither is a canvas widget whose component
+paint method draws the main map.
 
-Do not infer a function's optimized ABI from its C++ name. One experiment incorrectly treated `Gui::render`'s entry
-register as a usable receiver; disassembly showed the method loads the global GUI internally. The corrected probe
-captured a receiver from a verified method instead. Preserve this lesson when extending coverage.
+Those UI nodes still matter for layout and interaction. In the sampled remote view, InteractionArea is inset inside the
+outer frame; in normal view it spans the presentation. Their bounds must not be treated as verified scene-render
+clipping
+bounds. GameView also reads presentation dimensions, so separate render dispatch does not mean the engine has no GUI
+layout dependencies. We did not unmount or destroy required UI objects, and do not claim arbitrary UI deletion is safe.
 
-## Remaining verification
+Consequently, a selector can address the actual interaction region or frame but cannot descend into terrain/entities as
+native widget children. Adding a scene node to a future combined document would be an explicit MCP projection, not an
+existing native canvas hierarchy. Embedded minimap/camera widgets follow a different path, verified below.
 
-- Fresh native GUI-event construction without a seed interaction.
-- Linux-specific debug information and optimized ABI validation.
-- Inventory grids, crafting slots, quality choices, text editing, sliders, drag and scroll controls, and modifier/button
-  combinations.
-- Stable identity, destruction during dispatch, world/VM replacement, modal transitions, focus restoration, and cleanup
-  after interruption.
-- Binding changes, missing bindings, and finite continuous world controls.
-- Production lifecycle handling for menu operation, save loading and observation through world switches; a limited live
-  route is established below.
-- Live validation of the proposed spatial-component adapter described below.
+The [rendering investigation](temp/ui-map-render-research/findings.md) retains static and live evidence;
+[26 retained checks](temp/ui-map-render-research/results.json) cover the traces, vtables and restoration. The normal
+controller/zoom were restored and a full client/server CRC passed. An earlier attempt to use production `status` on
+another
+client caused a crash; that failure was preserved and bypassed, not fixed. The successful rendering tests used passive
+debugger observations and the existing research reader, not the failing production injection path.
 
-Coverage must be established by actual control behavior and authoritative effects, not by tool count or successful
-function returns.
+## Embedded scene widgets: alert previews and mod cameras
 
-## Extending the component model
-
-The requested "belt" means the on-screen quickbar and shortcut toolbar. It does not mean transport-belt entities on the
-map.
-
-The inspected PDB and disassembly support a shared public component vocabulary, with different execution adapters:
-
-| Surface                   | Native evidence                                                                     | Suitable public representation                                               | Execution boundary                                                   |
-|---------------------------|-------------------------------------------------------------------------------------|------------------------------------------------------------------------------|----------------------------------------------------------------------|
-| Quickbar                  | `QuickBarGui`, `QuickBarItemSlot::mouseClick`, slot identity/count accessors        | A paged slot collection with item, quality, count and supported interactions | Native slot event processing, including relevant input state         |
-| Shortcut toolbar          | `ShortcutButton`, `getBasePrototype`, `updateFromBehavior`, `mouseClick`            | Named actions, enabled/toggled state and optional associated game control    | Native shortcut activation; mod shortcuts remain mod-defined         |
-| Research                  | `TechnologyGui`, `TechnologySlot::mouseClick`, technology references                | Technology nodes, selection, details, prerequisites and research queue       | Native node selection and actual available buttons                   |
-| Minimap/map canvas        | `MinimapWidget::mouseDown`, `GameView`, cursor/map projection helpers               | A spatial view with a surface, position, zoom and bounded targets            | View-local or world-space interaction, not an arbitrary child button |
-| Main menu and load dialog | `MainMenuGui`, `SinglePlayerMainMenuGui`, `LoadMapGui`, `InLoadGameDialog::process` | Windows, save rows, selection, load/confirmation controls and progress       | Native GUI dispatch followed by application-state transitions        |
-| World entities/tiles      | `Entity`, `LuaEntity.selection_box`, player selection and input submission          | Bounded spatial targets with identity, location and capabilities             | Normal targeting, player constraints and synchronized game actions   |
-
-These are adaptation families, not a proposal for one public MCP tool per native class or gameplay feature.
-
-### Additional live results
-
-The component experiment reused one Windows graphical process for the successful multiplayer and subsequent
-single-player/menu sequence. It did not build or run the MCP project.
-
-| Experiment                     | Result and limit                                                                                                                                                                                                                                                               |
-|--------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Quickbar slot activation       | A direct left-event dispatch picked up 30 normal transport belts. The non-admin multiplayer client's cursor change matched the server at tick 5572; subsequent forced-CRC checkpoints showed no desynchronization.                                                             |
-| Quickbar middle-event dispatch | Retargeting a middle-button seed did not reproduce the expected clear-filter operation. An empty slot instead received the held item, and the populated first-slot filter remained unchanged. This is a negative result for treating the event's button field as sufficient.   |
-| Research entry                 | Direct activation of the HUD research control opened the native technology interface.                                                                                                                                                                                          |
-| Research node selection        | In the later single-player world, direct activation of a technology slot changed the detail panel from Electronics to Steam power. The panel exposed its crafting trigger and a disabled Start research button. Starting research and queue mutations were not verified.       |
-| Multiplayer exit               | Direct activation of Quit game disconnected the controlled client and returned to the menu. The server continued running. A temporary file-IPC response-write race lost the immediate probe response; game logs and later observations independently confirmed the transition. |
-| Menu navigation                | Direct widget activation traversed About/Confirm, Single player and Load game. Menu observation and dispatch worked without a player-world Lua VM.                                                                                                                             |
-| Save selection                 | Direct activation of the `component-a` save row changed the selected save's detail label before Load was activated.                                                                                                                                                            |
-| World loading                  | Native Load activation loaded the local `component-a.zip`; both scenario logs and the structured GUI identified world A.                                                                                                                                                       |
-| World replacement              | From world A's pause menu, direct Load game, `component-b`, and Load activations loaded world B in the same process. A subsequent structured observation identified world B.                                                                                                   |
-| Stale control reference        | The old world A seed reference was rejected after world B loaded. This verifies one destruction case, not every allocator-reuse or queued-action race.                                                                                                                         |
-
-The menu sequence still used experimental seed events. A menu seed was copied onto a live, observed version-label widget
-before its original About button was destroyed. This avoided retaining a destroyed source while navigating menus. A
-fresh native event-construction contract remains required. Raw Escape/T input in the scaffolding only opened test
-interfaces; it is not the proposed binding-independent public contract.
-
-### Quickbar and toolbar implications
-
-`QuickBarItemSlot::mouseClick` invokes `ControlInput::isActive` through the current control settings. Its behavior is
-not determined solely by `MouseEvent.button`. This explains why direct dispatch can work for ordinary pickup while a
-synthetic middle event fails to request clearing a filter. The matching failure is evidence consistent with this
-explanation; the full corrected input-state adapter has not been tested.
-
-A production control interaction must preserve the native interpretation of the requested slot operation and current
-bindings. It may need an operation-scoped, correctly constructed input state in addition to a widget-targeted event,
-with guaranteed cleanup. Exposing keycodes to the agent or assuming every slot accepts the same generic click recipe
-would defeat the intended abstraction.
-
-The official Lua quickbar APIs can supply slot/page metadata, but their existence does not make client-only writes
-synchronized. They also do not turn a toolbar shortcut into an inventory item. Read and interaction capabilities must
-reflect the actual control.
-
-### Research is structured, but not uniformly a list of buttons
-
-The technology interface supplies native technology slots plus ordinary labels and controls. Its selected detail panel
-already explains differing research mechanisms: the tested Steam power node required crafting iron plates, and Start
-research was disabled. A projection should expose these live conditions rather than assume every technology starts
-through the same action.
-
-For context efficiency, expose the selected technology, current research/queue, available actions, and a bounded set of
-neighboring or searched nodes. Expand prerequisites/effects separately. A complete dump of every painted node and
-dependency line is unnecessary.
-
-An attempted technology-icon identity reader produced incorrect identities and caught access violations because the
-prototype getter was called with the wrong subobject receiver. The class has multiple native bases; a method's name and
-a valid outer widget pointer are insufficient ABI evidence. That reader was removed. Any `semanticText` in the initial
-`snapshot-research.json` is invalid experimental output and must not be used as evidence. The clean snapshots and
-node-selection result do not depend on it. Capture the game's actual getter receiver/result or validate a game-provided
-conversion before implementing icon metadata; do not repair this with hardcoded field offsets.
-
-## Spatial components for map interaction
-
-Map operations can share the *public* component model, but the inspected `Entity` representation is not an`agui::Widget`
-hierarchy. A chest is a simulation entity; the chest window is a GUI. Clicking empty terrain, placing a ghost, selecting
-an area and interacting with a rendered mod overlay are also different target kinds.
-
-Use a spatial view with bounded expansion into entities, tiles, positions and areas. A target reference can carry a
-world generation, surface, identity and observed revision. Entity names are not unique identities, and `unit_number` is
-optional for some entity kinds. Position alone is insufficient when an entity is removed and another is built at the
-same location.
-
-The game adapter should resolve a target again at execution time and follow the corresponding ordinary targeting/action
-route:
+Unlike the main world view, an embedded camera really is a widget whose paint callback renders a scene. In the installed
+Linux build, developer-symbol inspection resolves this native alert path:
 
 ```text
-Spatial reference or explicit world position
-  -> validate current world, surface, identity and observation bounds
-  -> establish the game's actual target/cursor context
-  -> submit the named game control or corresponding normal action
-  -> confirm the result, rejection or bounded completion
-  -> release temporary input state
+AlertGroupTooltip::updateContent
+  -> AlertGroupTooltip::createCamera
+    -> AreaCamera construction
+AreaCamera::paintComponent
+  -> CameraBase::paint
+    -> GameViewWidgetLogic::renderGameView
+      -> GameRenderer::render
+      -> DrawQueue::drawTexture
 ```
 
-`PlayerInputSource::processOpenGui` provides concrete static evidence: it calls `clientCheckCanOpenEntityGui`,
-constructs/submits an `InputAction` through the input source, and has alternate chart/cursor-position paths. It does not
-invoke an entity as if it were a GUI button. The existing project's world-input adapter likewise uses the game's
-MapPosition parser, `GameView` projection, named-control lookup, and scoped cursor-position handling. This is supporting
-code evidence, not a new acceptance test of map actions in this research run.
+The helper configures an offscreen render target and draws its texture into the component. This does not imply every
+camera owns an independent GameRenderer. The alert's area camera receives a surface and bounding box; it is not a
+subtree
+containing widgets for every train, rail and terrain tile.
 
-Selection boxes and collision boxes differ. Overlapping entities, selection priorities, reach, ghosts, remote view,
-fog/chart knowledge, and the held tool affect the chosen action. The wrapper must verify the game's selected target
-rather than promise that every entity reference can always be directly activated. Coordinates remain necessary for empty
-space and areas; they can be world coordinates or component-local coordinates instead of screen pixels.
+The bundled 2.0.77 LuaGuiElement API also exposes `camera` and `minimap` elements for mods. A synchronized test fixture
+created one of each. Native traversal found `CustomCameraWidget` and `CustomMinimapWidget`, both leaf nodes, and a
+background window capture showed their scene and chart contents. Live stacks confirmed GUI traversal entering the
+camera,
+then the nested GameRenderer call. Minimap dispatch instead enters `MinimapBase::paint`, with GUI clipping and chart
+draw
+queues; do not describe it as the same full-scene framebuffer path.
 
-The minimap is a useful boundary example: it is a GUI widget, but its mouse handler consumes a position within a spatial
-canvas. Native component identity alone does not specify which map location was intended. Keep a spatial target in the
-interaction contract.
+An ancestor-visibility experiment counted eight GUI frames per sample: visible camera/minimap painted 8/8 times, hidden
+camera/minimap painted 0/0 times, and restored camera/minimap painted 8/8 times. The hidden nodes remained in the raw
+tree
+with `visible_in_tree: false`. Existence in raw traversal therefore does not imply active presentation or action
+eligibility.
 
-Arbitrary mod rendering can draw pictures, text, circles or other shapes without declaring an independently clickable
-semantic object. Available render-object metadata may help describe them, but does not establish their action meanings.
-Full compatibility with every possible visual or custom-input convention cannot be promised without additional mod
-metadata or a fallback. This limitation does not prevent broad compatibility with standard mod GUI controls and ordinary
-prototype-based entities.
+### Observation contract
 
-## Menus and world lifetime
+Keep these components in the same semantic document and address them with the same selector. Distinguish widget state
+and geometry from scene metadata. The official API provides position, surface, zoom and optional associated entity for
+cameras/minimaps, plus minimap-specific force/player selection. For example, the fixture's camera returned the following
+actual logical-GUI observation (not a native-node enrichment already implemented by MCP):
 
-The successful save-loading sequence establishes that world switching can use ordinary GUI controls.
-`InLoadGameDialog::process` obtains the selected map name/path from `LoadMapGui`, checks mod synchronization
-information, and advances application state. The adapter should activate these controls and observe the resulting state,
-allowing the game's load warnings and mod decisions to appear naturally.
-
-Process-level presentation readiness must be separate from player-world readiness. A GUI dispatch phase such as the
-verified `agui::Gui::logic` boundary runs in menus and while single-player simulation is paused. A scheduler that
-depends exclusively on world ticks or `PlayerInputSource::sendStateChanges` cannot cover those states. This can coexist
-with the existing requirement that world actions need explicit attachment to the current world: menu access needs its
-own presentation readiness, without silently binding Lua.
-
-Two live observations constrain lifecycle detection:
-
-- Main-menu background simulations create and destroy Map objects. The first prototype incorrectly invalidated menu
-  references on every Map destruction. The corrected experiment kept GUI lifetime tracking separate. The historical
-  `worldEpoch` field in these raw snapshots is only a Map-destruction counter, not a validated player-world generation.
-- `AppManager::isAppInMenu` returned true both at the main menu and in the in-game pause menu. It is not sufficient to
-  determine whether an attached player world exists.
-
-A production design therefore needs distinct process, presentation, player-world and Lua-binding identities. World
-replacement invalidates world actions, Lua references and world-bound controls. A menu transition invalidates controls
-actually destroyed or replaced; a background simulation transition must not invalidate an unrelated menu. Mod
-synchronization may restart the entire process, which requires rediscovery rather than treating it as an ordinary world
-replacement.
-
-Completion of Load means the new world is ready and identifiable, not merely that its button handler returned. An
-uncertain response must trigger observation, never automatic replay. The local single-player load tests do not
-demonstrate changing the authoritative world on a remote multiplayer server.
-
-## Recommended first boundary
-
-Keep the public interface small: observe/expand a component, inspect its current capabilities, activate/edit it, or
-submit a named finite game control against a spatial target. Return the observed result and invalidation information.
-Implement native adapters for control families and application lifetimes behind that boundary.
-
-Default observations should contain the active window/modal, meaningful HUD summaries, selected details, available
-actions and bounded collections. Omit layout plumbing and repeated captions. Keep stable prototype identity separate
-from localized presentation and from the current value. Report unknown icon semantics explicitly until the getter path
-is verified.
-
-The evidence supports extending this architecture to quickbars, research and menus. It also supports a spatial-component
-abstraction for maps, with a separate native execution path. It does not establish that a single `dispatchClick` call, a
-raw widget dump, or the official Lua GUI API alone provides full, safe coverage of every interaction.
-
-## General UI hosts and mod extension mechanisms
-
-Quickbars and research are examples, not the coverage boundary. A broader scan of the installed PDB identified 559
-named, non-template classes whose recorded inheritance reaches `agui::Widget`, including the base class and
-presentation-only classes. This is a discovery catalog, not 559 verified interactive controls. The inheritance catalog
-is retained in `temp/interaction-components-research/widget-class-catalog.json`.
-
-The important distinction is between a **host**, which contains or generates interface content, and a **control**, which
-the agent observes and interacts with. Discover hosts and their current children dynamically; project them into a small
-number of semantic roles. Do not turn the native class catalog into a public tool catalog.
-
-### Top-left mod tools
-
-The installed `data/core/lualib/mod-gui.lua` provides the exact mechanism used by many top-left mod buttons:
-
-```lua
-local mod_gui = require("mod-gui")
-mod_gui.get_button_flow(player).add{
-  type = "button",
-  name = "example_tool",
-  caption = "Example tool"
+```json
+{
+  "name": "camera",
+  "type": "camera",
+  "position": {
+    "x": 8,
+    "y": -12
+  },
+  "surface_index": 1,
+  "zoom": 0.75,
+  "visible": true
 }
 ```
 
-This is an illustrative mod-side creation call, not an MCP observation operation. `get_button_flow` obtains
-`player.gui.top`, reuses a legacy `mod_gui_button_flow` when present, or creates/reuses `mod_gui_top_frame` and
-`mod_gui_inner_frame`. `get_frame_flow` similarly creates/reuses `mod_gui_frame_flow` under `player.gui.left`. The game
-handles ordinary flow/frame layout; the mod supplies its controls and contents. The bundled wave-defense and
-team-production scripts use these same helpers.
+The logical/native join and a universal native camera-parameter reader remain unimplemented. A native alert AreaCamera
+is not automatically a LuaGuiElement. Do not invent getters, offsets or parameters for it. Scene entities can eventually
+be observed through a separate verified scene source, but must not be fabricated as native widget children. A preview
+also does not establish permission to interact with every displayed entity, bypass chart visibility, or invoke map input
+on a camera whose own widget/mod behavior does not support it.
 
-These helpers are not side-effect-free getters: they create containers when absent. A reader must inspect existing GUI
-roots and children instead of calling them to discover whether a mod toolbar exists. Do not require their conventional
-container names; mods can add controls directly or use other containers.
+### Alert validation boundary
 
-### Shortcut buttons beside the quickbar
+The local server produced a real train with a missing destination and a train-no-path alert. The reader observed its
+visible AlertGui, but the attempted hover did not yield a captured AlertGroupTooltip/AreaCamera. The alert construction
+path above is static evidence; the camera paint and visibility tests are live evidence from the mod-style fixture.
+They are not a screenshot comparison of an expanded train alert. Gui::addToolTip maintains tooltip references
+separately;
+the inspected method alone does not prove how every tooltip is mounted. Complete tooltip/popup root coverage remains a
+reader gap, and absence from the sampled primary tree is not proof of absence from the presentation.
 
-This is a different extension mechanism. A mod declares a `ShortcutPrototype` with `type = "shortcut"`, a stable name,
-icons and an action. The game constructs the shortcut-bar buttons, lays them out and manages their
-selection/configuration interface. `action = "lua"` causes normal shortcut activation to raise `on_lua_shortcut`,
-carrying the player index and shortcut prototype name. Other declared actions include spawning an item or invoking
-supported built-in behavior.
+All temporary camera/train objects were removed and a full client/server CRC passed. No production tool changed. See
+[the experiment record](temp/ui-embedded-view-research/findings.md),
+[retained checks](temp/ui-embedded-view-research/results.json) and
+[camera/minimap capture](temp/ui-embedded-view-research/mod-views.png).
 
-The installed `data/base/prototypes/shortcuts.lua` defines the base game's alt-mode, undo, redo, copy, blueprint and
-other shortcuts this way. Native disassembly adds direct evidence:
+## Map observation: spatial selection and API-shaped results
 
-- `ShortcutBarGui::createShortcutButtons` constructs actual `ShortcutButton` objects.
-- `ShortcutBarGui::reattachShortcutButtons` assigns their current behavior and calls
-  `ShortcutButton::updateFromBehavior`.
-- `ShortcutButton::mouseClick` delegates to the base button, invokes the attached behavior, then refreshes its state.
-- The class also owns the shortcut selection frame, search bar, scroll pane and reorderable rows. `QuickPanelGui`
-  provides a different host for controller input.
+The agreed first-version scope does not require special tooltip layers or the contents of embedded scene previews.
+Preserve ordinary observable UI nodes, but do not block the interface redesign on those gaps. Normal character view and
+remote view remain the required map observation/interaction scenarios. The design below concerns reads; previous
+rendering
+traces do not establish that these queries or all map actions are implemented.
 
-This means a surviving widget pointer can represent a different shortcut after reconfiguration. References must validate
-semantic identity/revision as well as object lifetime; a destructor-only stale-reference check is insufficient.
+### Two read operations, with selection separate from projection
 
-The runtime `prototypes.shortcut` dictionary supplies registered shortcut identities and metadata. Custom Lua shortcuts
-expose availability/toggle queries on `LuaPlayer`. Keep this catalog separate from actual instantiated/docked controls
-and the current shortcut-selection popup. A registered prototype is not proof that its button is currently present or
-usable.
+The proposed overview operation describes the whole map region corresponding to the current screen, without internal
+machine details such as recipes, crafting progress or combinator settings. A requested region and observation scale may
+produce a coarser overview without changing the actual camera. Region/scale are observation parameters, not authority to
+inspect an otherwise unavailable area. Exact camera-to-world bounds and the visibility policy still need validation.
 
-`associated_control_input` is explicitly documented as **tooltip keybinding information only**. It does not itself wire
-shortcut activation to a custom-input handler. Do not replace clicking a shortcut with emitting that named input or
-manually raising `on_lua_shortcut` and assume equivalence. The two routes can intentionally execute different code.
+The proposed detailed query has two independent parts:
 
-### Other documented custom-GUI roots
+- **Selection:** which surface, point, tile cell, area or existing game object to query; which object kinds and filters
+  to include. A position may select several objects, not just the visually topmost one.
+- **Projection:** which properties and bounded related objects to return for every match. Field names, values and object
+  relationships should follow the official runtime API wherever possible. Selecting objects must not depend on which
+  detail fields are requested.
 
-The installed `LuaGui` API exposes six roots:
+Both operations should use compatible object representations: an overview supplies basic fields; a query adds requested
+details. Do not introduce a separate tool for every machine prototype. Record surface, observation tick, effective
+bounds,
+coverage and any truncation/aggregation in the result envelope. An empty observed region differs from an unobserved
+region.
 
-| Root       | Intended host                                            | Discovery consequence                                            |
-|------------|----------------------------------------------------------|------------------------------------------------------------------|
-| `top`      | Top flow inside a scroll pane; commonly mod tool buttons | Summarize persistent tools and expand their controls             |
-| `left`     | Left flow inside a scroll pane                           | Discover mod/scenario panels, including helper-created frames    |
-| `center`   | Center flow                                              | Include centered custom dialogs                                  |
-| `screen`   | Freely located screen widgets/windows                    | Discover floating windows and their current placement/lifetime   |
-| `relative` | Widgets anchored beside native game interfaces           | Associate the extension panel with its currently applicable host |
-| `goal`     | Flow in the objectives window                            | Include scenario objective controls/content when present         |
+### Confirmed model for overlapping content
 
-`LuaGuiElement.anchor` / `GuiAnchor` specifies a native GUI type and relative position, with optional name/type/ghost
-restrictions. The installed `defines.relative_gui_type` lists 75 host types, including containers, assembling machines,
-player inventory, logistics, trains, blueprints, production, equipment grids and space-platform hubs. Mods can therefore
-extend native windows without computing their screen coordinates. A relative panel may exist in the custom tree while
-its matching native host is closed; report that distinction.
+The installed 2.0.77 API separates tiles from entities. A single invented stack such as ground -> floor -> rail -> train
+would misrepresent that model:
 
-`LuaGuiElement` supplies children, type, index, name, enabled/visible state, captions/tooltips, values and mod
-ownership, subject to the attributes supported by each element type. Its index is unique among that player's current GUI
-elements, not a promised permanent cross-world identifier. Arbitrary `tags` are mod-defined metadata, not standardized
-action semantics.
+| Content                                                               | Runtime API representation                                                  | Consequence for the result                                                                                                    |
+|-----------------------------------------------------------------------|-----------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------|
+| Current terrain or paving at a tile coordinate                        | LuaTile, with name, position, prototype and surface                         | Return the current tile as its own object. Paving is not a second generic entity layer.                                       |
+| Tile material retained underneath                                     | LuaTile.hidden_tile and double_hidden_tile, optional prototype-name strings | Preserve the actual fields when requested; do not invent an unlimited stack or claim they reconstruct all historical terrain. |
+| Rail, locomotive, wagon, machine, resource, ground item, entity ghost | Matching LuaEntity objects                                                  | Return all matches in an entity collection; multiple entities can occupy/overlap the queried location.                        |
+| Tile ghosts                                                           | LuaTile.get_tile_ghosts returns LuaEntity objects                           | Keep their real object type; ordinary tile reads alone do not enumerate every ghost.                                          |
+| A train containing several carriages                                  | LuaEntity.train references LuaTrain, whose carriages reference entities     | Express a related game object, not a spatial parent containing the rail or tile.                                              |
 
-The installed GUI element vocabulary contains buttons, sprite buttons, checkboxes, radio buttons, text fields/boxes,
-dropdowns, lists, sliders, switches, prototype selectors, tabs, and layout containers. It also contains cameras,
-minimaps and entity previews, which require spatial or preview semantics rather than assuming every visual child is
-another button.
+For example, querying a paved rail position may return a current tile with its hidden-tile metadata, a rail entity and a
+rolling-stock entity. The entities are siblings in the query result. Their identities, geometry and relationships carry
+the meaning; array order must not imply visual stacking or input priority. A locomotive is an entity belonging to a
+train;
+the train itself is not another object occupying a tile in this collection.
 
-### Wider native interface inventory
+Decoratives are queried through a separate LuaSurface API. Their existence reinforces that a query must declare which
+content categories it covers. An entity-only scan must never be labeled as every rendered object or pixel in the region.
 
-The following families were found through actual widget inheritance/type information. Except for the live cases
-documented earlier, this establishes their presence and structure, not complete interaction acceptance coverage.
+### Point, cell and hit-testing semantics
 
-| Family                            | Native examples                                                                                                 | Useful semantic projection                                          |
-|-----------------------------------|-----------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------|
-| Inventory, equipment and crafting | `ControllerGui`, `InventoryGuiSlot`, `EquipmentGridGui`, `RecipeSlot`, `CraftingQueueSlot`                      | Tabs, bounded slots, held stack, recipes, queue entries             |
-| Entity configuration              | `AssemblingMachineGui`, `InserterGui`, `SplitterGui`, `DisplayPanelGui`, circuit-control GUIs                   | Current window, controls and dependent sections                     |
-| Logistics                         | `LogisticGuiBase`, `LogisticGuiSection`, `LogisticNetworksGui`                                                  | Sections, filters, requests, network tabs                           |
-| Trains and vehicles               | `TrainGui`, `TrainsGui`, `TrainStopGui`, `WaitConditionsList`, `EditInterruptGui`                               | Schedules, condition rows, interrupts and embedded map views        |
-| Blueprints and planners           | `BlueprintLibraryGui`, `BlueprintBookGui`, `BlueprintSetupGui`, `BlueprintParametrisationGui`, `UpgradeItemGui` | Collections, selected document, filters, parameters and actions     |
-| Selection dialogs                 | `QualityGui`, `QualitySelector`, `SignalOrNumberSelectGui`, `ItemAndDoubleCountSelectGui`, `GhostPickerGui`     | Dynamically present fields, choices and confirmation state          |
-| Research and reference            | `TechnologyGui`, `TechnologySlot`, `Factoriopedia`, `TipsAndTricksGui`                                          | Selected entry, linked entries, details and actions                 |
-| Statistics                        | `ProductionGui`, `GlobalElectricNetworkGui`, graph controls                                                     | Tabs, filters, timespan and structured series where supported       |
-| Remote view and space             | `MapViewOptionsGui`, `UniverseWidget`, space-location/platform child widgets, `PinsGui`                         | Surfaces/locations, pins, view controls and spatial canvases        |
-| HUD information and notifications | `AlertGui`, `AlertsOverview`, `AchievementNotificationContainer`, `HotkeySuggestionsGui`                        | Bounded alerts, actionable notifications and contextual hints       |
-| Settings and mod management       | `ControlSettingsGui`, `ModSettingsGui`, `ModsGui`, load-error/mismatch dialogs                                  | Typed settings, choices, apply/restart actions and errors           |
-| Menus, saves and multiplayer      | `LoadMapGui`, game menus, lobby/browse/connect dialogs                                                          | Available entries, selection, navigation, progress and confirmation |
-| Transient overlays                | `FloatingGuiWindow`, dropdown/list popups, tooltip classes, `MessageDialog`, `ConsoleInput`                     | Focus, modal stack, expanded content and transient lifetime         |
+The API distinguishes spatial queries in ways the public contract must preserve:
 
-A native control's presence does not grant permissions or expand product scope. For example, discovering console input
-does not authorize a console-command execution path, and discovering editor/admin controls does not imply they are
-usable by an ordinary player.
+- LuaSurface.get_tile rounds non-integer coordinates down to the containing tile.
+- find_entities_filtered with position alone matches entities whose collision boxes contain the point.
+- With position and radius, it searches by entity center distance.
+- With area, it searches entities whose collision boxes intersect that area.
 
-### Where unified discovery should attach
+Consequently, "at this coordinate" must have a documented spatial meaning. Support an explicit point versus
+containing-cell
+or area distinction rather than silently switching between these methods. The native mouse-selection target is a
+separate
+question: collision geometry, selection geometry and rendered sprite bounds are not interchangeable. LuaEntity exposes
+bounding_box, selection_box and an optional secondary_selection_box; these fields do not prove that a collision query
+finds every selectable or rendered object. Rails, zero-size/noncolliding objects and overlapping entities need focused
+live
+tests before claiming exhaustive point selection. No new cursor hit-test adapter was verified by this documentation
+pass.
 
-The PDB records `GameView` hosts such as `topLeftCustomGuiHolder`, `bottomContainer`, `bottomLeftContainer`,
-`rightContainer`, `rightBottomContainer`, `activeWindow`, notifications, alerts, pins, research and remote-view panels.
-`CustomGui` separately records root elements, root holders and widget-to-custom-element mappings. In the actual
-executable, `CustomGui::loadWidgets` iterates roots, and `loadWidget` calls `CustomGuiElement::buildWidgetRecursively`to
-obtain native widgets, including scroll-pane wrappers. These are concrete links between mod-owned logical elements and
-the native presentation system.
+### Result projection aligned with the Mod API
 
-At the general widget layer, debug types declare parent/children/private-children relationships and`agui::TopContainer`;
-the GUI manager tracks focus, modal routing, tooltips and anchored widgets. A complete observer should therefore
-combine:
+Preserve established names such as object_name, name, type, position, direction, quality, health and status where
+applicable.
+Keep runtime objects separate from their prototypes. A LuaEntity is an instance; LuaEntity.prototype describes its type.
+An unfamiliar mod prototype should remain readable through the entity's supported API class, without a name-specific
+adapter. This does not expose arbitrary private state stored in a mod's scripts.
 
-1. Process/menu presentation roots and overlays.
-2. Current player HUD, active windows and native popup/tooltip relationships.
-3. All existing custom-GUI roots, preserving relative-host metadata; mod ownership is optional diagnostic metadata.
-4. Prototype-backed catalogs only as supplemental semantics for the corresponding controls.
-5. Spatial views as a separate target model.
+Details should follow their actual API ownership. For example, crafting_progress is an entity attribute, the current
+recipe
+comes from get_recipe (), an inventory from get_inventory (index), and combinator configuration from the appropriate
+object
+returned by get_control_behavior (). Methods with arguments need typed query parameters; do not pretend every detail is
+a
+zero-argument property or expose arbitrary Lua execution as a read tool. The final wire schema for method-derived values
+has not been fixed.
 
-The follow-up now verifies `Widget::callRecursively` as a common traversal of the current native root. Several other
-child/parent getters declared in the PDB had no separate callable public symbol in this optimized executable; they are
-unnecessary for this route. No reconstructed C++ vector or copied field offsets were used. The remaining distinction is
-attached native content versus detached logical or not-yet-created content. Painting hooks alone miss hidden/unpainted
-controls; creation hooks alone miss objects that existed before attachment.
+Lua objects are not plain JSON tables. The adapter must make a deliberate, bounded projection:
 
-The agent should initially see a small host summary, active/modal windows and actionable entries, then request bounded
-expansion of a host or collection. Preserve native shared interactions underneath, while allowing family-specific
-metadata readers. This directly addresses the examples of mod-added top-left tools and right-side shortcuts without
-hardcoding either region as the complete set of supported UI.
+- Keep scalars, enums, records and arrays faithful to the documented types; define consistent serialization of nil.
+- Include the API object class when useful and preserve typed related-object identities rather than recursively
+  expanding
+  surface -> entities -> surface or train -> carriages -> train.
+- Use game-supplied identities where available. LuaEntity.unit_number is optional: the installed documentation limits it
+  to certain entity families and describes save-lifetime allocation without reuse until overflow. It is not a universal,
+  process-global handle. Resolve identities against the current world and recheck validity, without an MCP object
+  registry.
+- Allow bounded explicit expansion or subsequent queries for related objects. For objects without a usable game
+  identity,
+  resolve a fresh spatial/semantic description and report ambiguous matches rather than choosing the first.
+- Distinguish a supported nil value from an unsupported member, a failed read or an unobservable target. Do not fill
+  every
+  inapplicable field with a misleading null or guess a default.
 
-### Clarified discovery contract: built-in host collectors
+The bundled machine-readable runtime-api.json can guide schemas, inheritance, member types and documented subclass
+applicability. It does not make blind enumeration/calling safe: each exposed read path still needs applicable-type
+checks,
+bounds and verification that it has no simulation side effects. No generic native-object serializer has been
+implemented.
 
-The requested discovery capability is concrete: MCP knows the game's supported UI attachment mechanisms and uses
-built-in collectors to report what is currently inside those hosts. For example, an observation reports the buttons
-currently present in the top-left tool area. It does not need to identify which mod created each button.
+### Overview compression and evidence boundary
 
-Implement collectors by game extension mechanism, with dynamic contents:
+Lossless encoding of repeated tiles is different from grouping resources or buildings into a coarse summary. A coarse
+overview must state its aggregation and precision; it cannot masquerade as a complete exact object list. Prefer optional
+MCP-side formatting/aggregation over adding game-side business logic. Exact reads must report their bounds and any
+result
+limit, and observations across separate calls are not promised to describe the same tick.
 
-| Built-in collector                     | Runtime content to discover                                                                                                                                                                                  |
-|----------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Existing custom-GUI roots              | Read existing `LuaGui.children`, then bounded `LuaGuiElement.children` traversal across top, left, center, screen, relative and goal. Follow nested containers; do not require `mod-gui` naming conventions. |
-| Shortcut hosts                         | Read the native bar/quick-panel's current shortcut bindings, visible entries and selection popup; enrich actual entries with shortcut prototype metadata.                                                    |
-| Native HUD hosts                       | Read current alerts, notifications, objectives, side-menu entries and other attached HUD controls, including content populated by mods through game APIs.                                                    |
-| Active native windows and transient UI | Read current windows, anchored extensions, selectors, dropdown popups and dialogs after any interaction. Mod-supplied prototypes/data can change their contents.                                             |
-| Application menus                      | Read the currently active menu/dialog and its available entries independently of world Lua readiness.                                                                                                        |
+This section records a design supported by inspection of the installed 2.0.77 runtime API, not new live map-query
+acceptance
+tests. The excerpts are retained in [bundled-api.json](temp/map-observation-research/bundled-api.json). Online
+references:
+[LuaSurface](https://lua-api.factorio.com/latest/classes/LuaSurface.html),
+[LuaTile](https://lua-api.factorio.com/latest/classes/LuaTile.html), and
+[LuaEntity](https://lua-api.factorio.com/latest/classes/LuaEntity.html). The current online release is newer; installed
+documentation remains authoritative for implementation against this executable. No Factorio window interaction was
+needed.
 
-These collectors can share a compact output: a region/window reference, meaningful control references, labels/tooltips
-or available semantic identities, current values, visibility/enabled state and verified interactions. Mod ownership need
-not appear. Re-read or invalidate affected collections when content is added, removed, rebound or replaced; a
-startup-only inventory is insufficient.
+## Evidence and scope
 
-A typical interaction is: observe the top-left host, find a newly added tool button, activate that control, then observe
-the newly opened window. No prior mod-specific button name or workflow is necessary. A relative extension should appear
-with its matching open native window; a registered but undocked shortcut belongs in the shortcut chooser/catalog state,
-not the current bar's list of buttons.
+### This Linux experiment
 
-The research goal is to account for the game's extension mechanisms and their discovery paths. Acceptance should then
-exercise representative additions through those mechanisms, including nested containers, late creation, removal, hidden
-controls, anchored panels and shortcut rebinding. It does not require anticipating every future mod's business logic.
-Current research has identified these host categories; a complete implemented collector suite and its acceptance
-coverage have not been established.
+The installed Steam executable identifies itself as Factorio 2.0.77, build 84539, Linux x86-64 with Space Age. The
+matching
+runtime API documentation is bundled under the installation's `doc-html/runtime-api.json`. Function addresses and
+relevant RTTI/vtable symbols were resolved from this executable's developer-provided ELF/DWARF and symbol table.
+No game addresses, field offsets, vtable slot numbers or instruction signatures were stored as version lookup tables.
 
-An additional native inspection found `Widget::callRecursively`: its inspected body traverses both private and ordinary
-children and calls the visitor without the descendant flag filtering seen in `getWidgetRecursively`. The follow-up
-validation above subsequently verified a real compiled `std::function` callback and live traversal against game-owned
-roots, including existing unpainted controls. `LuaGui::luaReadChildren` and `LuaGuiElement::luaReadChildren` also
-provide concrete native implementations of the documented logical-tree reads. Traversal coverage remains distinct from
-complete semantic metadata coverage.
+One graphical client was run at a time, using the ordinary Steam installation, configuration and loading caches. A local
+headless server supplied a temporary scenario. The controlled player was verified to be a non-admin. The scenario
+creates
+custom GUI elements using the same official API available to mods. The later validation also exercises installed
+Factory Planner and Factory Search interfaces; it is not a test of every third-party mod.
 
-## UI extension-point audit and discovery validation
+The experiment reused the project's tracer and protected-call infrastructure. A temporary shared library calls game
+readers at a verified GUI phase. The initial tree collector installs no additional detours. A later, separate lifecycle
+experiment installed temporary observers and restored them after validation; the window-order experiment used the
+original
+collector and added no detours. Existing production MCP tools were used through the
+standard HTTP transport to prepare machine/research screens. A separate temporary client used the existing resident's
+typed IPC to collect read-only logical GUI metadata. Server-console operations were confined to fixture setup and full
+CRC assertions, not product functionality.
 
-The practical design is a finite set of built-in host collectors with dynamic contents. Mods use the game's attachment
-mechanisms; MCP discovers the resulting entries without needing mod names or mod-specific workflows. The audit below
-combines the installed 2.0.77 runtime/prototype documentation, bundled `mod-gui.lua`, PDB types, executable inspection
-and a two-mod live fixture. It is an extension-point inventory, not a claim that every native collector has been
-implemented or validated.
+Before game calls, an isolated native fixture passed 2,000 iterations covering compiler-created callbacks, postorder
+subtree accounting, string/reference and rectangle returns, multiple-inheritance RTTI conversion and prototype-label
+string returns. These ABI fixtures are distinct from actual-game validation.
 
-### Mod-provided entries and their discovery paths
+### Earlier Windows investigation
 
-| Extension mechanism                       | How mods populate it                                                                                             | How MCP should discover current content                                                                      | Evidence and boundary                                                                                                                                                                                          |
-|-------------------------------------------|------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Top-left tools and panels                 | `player.gui.top`, `player.gui.left`; optionally the bundled `mod-gui` helper                                     | Traverse existing roots and nested `children`; retain button captions, sprites and tooltips                  | Two independent mods discovered live, including one that does not use `mod-gui`. Do not call helper creation functions during observation.                                                                     |
-| Floating, centered and objective UI       | `gui.screen`, `gui.center`, `gui.goal`; `set_goal_description` for objective text                                | Traverse those roots; supplement the objective host with `get_goal_description`                              | All six roots enumerated live. A floating window need not be assigned to `player.opened`.                                                                                                                      |
-| Extensions beside native windows          | `gui.relative` plus `GuiAnchor`                                                                                  | Enumerate logical children and anchor restrictions, then associate them with the applicable open native host | Installed API lists 75 relative host types. Live fixture confirms `visible=true` does not imply the host is open.                                                                                              |
-| Shortcut buttons beside the quickbar      | Data-stage `shortcut` prototypes; runtime availability/toggle APIs for Lua shortcuts                             | Enumerate the actual native shortcut bar and chooser; enrich with `prototypes.shortcut` metadata             | Custom shortcut found live in the native chooser. Prototype registration alone does not establish docking, order or current presentation. The chooser's toggle changes docking; it is not shortcut activation. |
-| Game-generated mod settings               | Startup, runtime-global and runtime-per-user setting prototypes                                                  | Discover the current `ModSettingsGui` controls; enrich with setting type, allowed values and bounds          | Live native tree verified for fixture per-user settings, labels, controls and dropdown selection. Settings values/prototypes alone do not describe current tab, unsaved edits or restart dialogs.              |
-| Alerts                                    | `add_alert`, `add_custom_alert`                                                                                  | Use `get_alerts`, enabled/muted state and actual native `AlertGui` / `AlertsOverview` entries                | Documented data path and native hosts; a registered alert is not necessarily an onscreen actionable entry.                                                                                                     |
-| Recipe notifications                      | `add_recipe_notification`                                                                                        | Use `get_recipe_notifications` to enrich the corresponding current native notification controls              | Documented runtime list; complete native control binding remains untested.                                                                                                                                     |
-| Pins and map tags                         | `add_pin`; `LuaForce.add_chart_tag`                                                                              | Native pins host; `find_chart_tags` scoped to the current force/surface and chart presentation               | The installed `LuaPlayer` API has no general pins enumeration accessor identified by this audit. Do not assume newer online pin APIs exist in 2.0.77. Chart markers also require spatial semantics.            |
-| Messages and chat                         | `show_message_dialog`; game/force/player `print`                                                                 | Current native message-dialog and console/chat presentation, including actionable links where supported      | `show_message_dialog` is restricted to maps with exactly one player. Text output is not automatically a button or permission to execute console commands.                                                      |
-| Prototype-backed native content           | Modded items, qualities, recipes, technologies, entities, signals and related prototypes                         | Inspect the actual selector, technology tree or configuration window that is open                            | Data changes can add choices, fields and constraints. A static prototype catalog cannot replace the current UI observation.                                                                                    |
-| Mod-triggered native windows              | Inherited `LuaControl.opened`, `open_technology_gui`, `open_factoriopedia_gui` and other documented entry points | Native active-window and overlay collectors, then any matching relative extensions                           | `opened` and `opened_gui_type` are useful hints, not a registry of all displayed GUI.                                                                                                                          |
-| Custom inputs without buttons             | `custom-input` prototypes                                                                                        | Expose supported named controls separately; discover their settings UI when open                             | A custom input need not create any GUI entry. `ShortcutPrototype.associated_control_input` supplies tooltip information; it does not establish equivalent activation behavior.                                 |
-| Rendered world content and embedded views | Rendering API, flying text, camera/minimap/entity-preview GUI elements                                           | Treat supported views as spatial components; report available structured metadata separately                 | Arbitrary rendered content is not a general custom-button registry. Do not infer a click handler from appearance alone.                                                                                        |
+The previous document records Windows PDB-based experiments with native GUI traversal, custom controls, generated mod
+settings, item/quality selection, menu navigation and synchronized inputs. Those results are useful prior research, not
+new Linux acceptance results. The referenced Windows raw artifact directories are not present in this Linux checkout.
+Their reported 24/48-assertion runs and timings were therefore not rerun or independently checked here.
 
-The first three rows cover the documented custom `LuaGuiElement` attachment roots. Later rows matter because mods can
-also populate game-owned interfaces without creating a custom GUI tree. Native menus, HUD, transient popups and
-prototype-backed windows therefore remain part of discovery even when all custom roots have already been scanned.
+The common widget architecture is consistent across the inspected builds. Different ABIs and optimized symbol
+availability
+require platform adapters; they do not imply that Linux lacks a UI tree. Linux traversal and metadata reads are now
+independently demonstrated below.
 
-The native class audit found 559 named, non-template widget-derived classes. This includes base classes and
-presentation-only widgets, so it is neither a tool count nor a tested capability count. It supports the broader family
-inventory above; collectors should follow actual attachment and presentation relationships rather than maintaining
-hundreds of feature-specific public tools.
+### Platform and build differences
 
-### Live discovery experiment
+Shared findings are described once in this document: native widget traversal, the distinction between native and logical
+GUI, semantic JSON, prototype-backed labels and lifetime requirements. The table below records only differences in the
+binary interface or the experimental access path. Windows entries come from the earlier record; Linux entries come from
+the current executable and live probe. Neither column establishes a contract for every release on that platform.
 
-The fixture used two independent mods and a scenario observer on a local multiplayer server, with a non-admin graphical
-client. Mod A used `mod-gui` for its top-left tool; Mod B used an unrelated nested flow and an icon-only button. The
-observer recursively enumerated existing `player.gui.children` and `LuaGuiElement.children`, with a 300-node budget and
-depth limit of 24. It did not filter by mod ownership or require either producer's container names.
+| Area                                          | Windows investigation                                                                                               | Linux investigation                                                                                                                                                                        | Interpretation                                                                                                                                                                                    |
+|-----------------------------------------------|---------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Developer debug information                   | Matching executable and developer PDB; the record includes class/type information.                                  | ELF symbol table and DWARF embedded in the executable. The supplied debug information did not expose usable complete `agui::Widget`/`agui::Gui` types to the tested GDB lookup.            | Debug readers and available metadata differ. Incomplete types are a property of the inspected build's debug information, not an inherent Linux or DWARF limitation.                               |
+| Native C++ boundary                           | Microsoft MSVC/STL callback fixture and Windows calling conventions.                                                | Linux x86-64 System V calls, Itanium C++ ABI and a compiler-created libstdc++ callback.                                                                                                    | Resolve and verify arguments, returns, virtual dispatch and runtime-library compatibility per target. Do not copy callback, string or RTTI representations between platforms.                     |
+| Multiple-inheritance receiver conversion      | Game runtime `__RTDynamicCast` with PDB-resolved type descriptors.                                                  | C++ runtime `__dynamic_cast` with ELF-resolved type information.                                                                                                                           | The required conversion is shared; the ABI and runtime entry point differ.                                                                                                                        |
+| Root acquisition and selection                | Actual `TopContainer` calls supplied roots; `Widget::getGui` distinguished menu GUI from background simulation GUI. | The probe captures the root argument passed from `Gui::logic` to `Gui::recursiveDoLogic`. Complete active-root selection remains unverified.                                               | These are different tested access paths, not evidence that the game uses a different UI architecture.                                                                                             |
+| Parent reconstruction and helper availability | `Widget::getParentPathString` supplied path depth for postorder reconstruction.                                     | Repeated `callRecursively` traversal supplies subtree spans. The inspected ELF symbol table contains no separately named callable `Widget::getGui` or `Widget::getParentPathString` entry. | The Windows helper route cannot be copied directly from the available Linux symbols. Missing standalone symbols do not prove missing source methods; they may be inlined or omitted in the build. |
 
-Retained logs and snapshots establish the following:
+Two apparent contradictions are experimental differences, not established platform behavior differences:
 
-- All six roots were found. Top-left entries from both mods appeared in the same observation, including the icon-only
-  button's sprite and tooltip.
-- A button created after startup appeared in the next observation. Its later removal and replacement were also
-  reflected. Initial attachment cannot be the only discovery pass.
-- Disabled controls remained identifiable. A child with `visible=true` under a hidden parent was correctly distinguished
-  from an effectively visible control.
-- Twelve logical scroll-pane rows were available, while only three were painted. Render hooks alone would omit valid
-  collection contents.
-- A relative panel and its button existed with `visible=true` while the matching container window was closed; neither
-  was painted. Ancestor visibility alone is insufficient for relative-host applicability.
-- Both top-left tools opened new floating windows. Those windows and their next-step buttons appeared in subsequent
-  logical/native observations even though `player.opened` remained empty.
-- The native shortcut chooser displayed the mod's `Discovery shortcut` entry with its label.
-- Passive observation of the game's normal `CustomGuiElement::buildWidgetRecursively` calls, followed by the verified
-  `getIndex` getter, linked newly created native controls to logical GUI indices. Clicking the mapped A next-step widget
-  produced the authoritative `on_gui_click` for logical index 41 at tick 22669.
-- Both peers agreed on the observations and click. A forced full CRC after the final window observation was recorded on
-  both peers at tick 23379, with no desynchronization reported during the experiment.
+- The Windows record rejected **passively observing recursive logic calls** as a complete tree collector. The Linux
+  probe uses a logic call only to obtain a root, then explicitly invokes `callRecursively` to enumerate descendants.
+  It does not claim that logic callbacks themselves visit every control.
+- Windows reported native quality-tooltip observation, selection gestures and menu transitions that this Linux task
+  did not test. Linux currently reads some custom-control properties through Lua. These are coverage differences;
+  they do not establish that the corresponding native readers or interactions are unavailable on Linux. Conversely,
+  a successful Linux reader is not Windows ABI validation.
 
-The retained verification script passes 24 assertions over these artifacts. These are fixture assertions, not production
-MCP acceptance coverage. Logical enumeration ran in synchronized scenario code on both peers; this experiment does not
-independently establish the safety of every equivalent injected client-only Lua read. Native clicks reused captured
-event templates, with the construction limits described earlier. The MCP project was neither built nor run.
+No difference in the shared widget-tree semantics has been established by these records. Node counts, timings, localized
+labels and fixture coverage are not platform comparisons: the experiments used different screens, fixtures and probes.
+Future findings should distinguish a reproduced behavior difference from a different implementation choice or an
+unverified path, and add a platform-specific rule only when supported by the evidence.
 
-### Logical controls, native bindings and lifetime
+## How the native tree is obtained
 
-`LuaGuiElement.index` identifies a current logical element for a player; zero is valid, as demonstrated by the root
-indices 0 through 5. Names and captions need not be unique. Mod ownership can remain diagnostic metadata and is
-unnecessary in normal agent output.
+The following sequence is the verified Linux probe path; the differing Windows root and parent helpers are listed above.
 
-The original live native binding experiment established a route for controls created after observation begins. The
-follow-up traversal now also discovers pre-existing native controls. The native
-`CustomGuiElement::buildWidgetRecursively` method is a constructor-like operation: the inspected implementation rejects
-an already built element. Never call it as a getter to obtain an existing widget. Passive capture of actual game calls
-is different from invoking construction again.
+1. Resolve and validate `agui::Gui::logic(bool)` and `agui::Gui::recursiveDoLogic(agui::Widget*)` against the target
+   image.
+2. Rendezvous at the former, then capture the actual widget argument at a call to the latter from that GUI logic
+   function.
+   Check the caller against the dynamically resolved function range. This supplies the root argument without
+   reconstructing
+   a GUI object or reading a private root-field offset.
+3. Call `agui::Widget::callRecursively(const std::function<void(agui::Widget*)>&)` with a real compiler-created
+   callback.
+   The inspected implementation traverses private and ordinary children, followed by the current widget. It does not use
+   painting as a discovery filter.
+4. Read runtime class identity, text, bounds and supported properties while the relevant main-thread phase is stopped.
+5. Reconstruct parent relationships from postorder subtree spans. The temporary probe obtains each span by calling the
+   same game traversal for that node; it does not interpret `std::vector` or parent-pointer layouts.
+6. Return typed records to the external experiment and serialize/format them with Python's JSON library.
 
-A live game-owned enumeration route for existing widgets is now verified through `Widget::callRecursively`. A production
-collector still needs robust invalidation on destruction, replacement, player/world changes and process exit, and
-complete association with logical metadata where required. The follow-up address-reuse failure demonstrates why this
-remains necessary. Logical indices and raw native pointers must not be exposed as durable public references.
+This captures controls that already existed before attachment. No constructor history, screenshot coordinates or pointer
+movement is required. Repeated subtree traversal is an intentionally simple research method with worst-case quadratic
+work; it is not a proposed optimized production collector.
 
-One early fixture error retained Frida's transient return-value wrapper as a pointer; a later dispatch then failed.
-Copying the returned pointer value fixed that probe error, after which logical-to-native binding and the authoritative
-click passed. This is not evidence of a game ABI guarantee. The failure and corrected evidence remain in the experiment
-artifacts.
+The sampled root's traversal is complete within the explicit node bound. This is not proof that every independently
+managed GUI root, background simulation, detached control or lazily created popup has been enumerated. Production still
+needs explicit active-presentation/root selection and same-phase target validation. Stateless selectors do not require a
+persistent public widget-lifetime registry.
 
-### Compact observations and refresh rules
+## What can actually be read
 
-Use a two-level observation rather than returning every widget:
+| Information                | Linux evidence                                                                                                                                                       | Boundary                                                                                                                                |
+|----------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------|
+| Hierarchy                  | Native root, ordered descendants, parent relationships, runtime control classes                                                                                      | Current projection has no public component refs or special window indices; every node uses the same path grammar.                       |
+| Displayed text             | Titles, labels, buttons, tabs, input fields, multiline content, localized Chinese text                                                                               | Preserve rich-text tags and observed escaping; do not treat all text as plain English.                                                  |
+| Geometry                   | Absolute x/y/width/height through `Widget::getAbsoluteRectangle`                                                                                                     | A rectangle does not establish visibility, clipping or modal eligibility.                                                               |
+| Common state               | Native enabled, focused, visible-subtree membership, button toggled, tab selected and dropdown expanded getters                                                      | Geometric hit testing and modal routing are separate; generic native checked/switch/progress values remain incomplete.                  |
+| Selections                 | Native dropdown text/index and list selected index; list entries also appear as child controls                                                                       | Native indices are zero-based; Lua GUI selection indices are one-based. Closed dropdown options need another source or an opened popup. |
+| Numeric values             | Native slider value 37; verified `NumberInputGui::getValue` ABI                                                                                                      | No claim that all specialized numeric controls or ranges are decoded.                                                                   |
+| Prototype semantics        | Item, recipe, entity and technology tags plus localized labels; shortcut labels; native quality prototypes and number-provider counts                                | Quantity semantics depend on the control; this is not every specialized slot property.                                                  |
+| Custom GUI state           | Six Lua roots; names, indices, captions, text, checked state, items, selection, slider, switch, progress, sprites, tooltips, anchors and item-with-quality selection | Logical custom GUI is not the complete built-in interface. These fields were read on the controlled client.                             |
+| Hidden/offscreen structure | Hidden fixture label and all 20 overflowing buttons remain discoverable natively                                                                                     | Discovery is not permission or proof that direct activation is currently appropriate.                                                   |
+| Mixed windows              | Native assembling-machine window and the fixture's relative extension appear in one tree                                                                             | Logical existence can precede attachment to an open native window.                                                                      |
 
-1. Summarize hosts, active/modal windows and meaningful entry controls. For example: top-left tools with two buttons;
-   objectives; quickbar; shortcut bar; open window; relative extensions.
-2. Expand a selected host, window or collection within explicit bounds. Flatten uninformative layout wrappers while
-   retaining grouping, tabs, selection, validation messages and required fields. Lists and slots should support paging
-   or bounded ranges, with total/partial status where known.
+### Text requires virtual dispatch
 
-Each actionable entry should carry an opaque reference, role, available caption/tooltip or semantic identity, current
-value, enabled state and verified interactions. Keep existence, logical visibility, current presentation, relative-host
-applicability and modal restrictions distinct. A compact public `available` result can summarize these conditions, but
-diagnostics should explain why an entry cannot currently be used. Being outside a scroll viewport is different from
-belonging to a closed relative host.
+Calling `Widget::getText` directly returned empty text for labels and text boxes whose subclasses override it. The Linux
+image also contains callable symbols for `Label::getText` and `TextBox::getText`. The successful generic reader locates
+the base getter's slot in the current executable's Widget vtable, then dispatches through each actual object's vtable.
 
-Icon-only buttons require sprite/tooltip metadata; neither a blank caption nor an unrecognized mod name should make an
-entry disappear. Do not obtain localized labels through client-only `request_translation`, which can mutate synchronized
-counters. Prefer verified game presentation getters or preserve localized-string/prototype identities until a safe
-localization path is available.
+The slot is discovered from symbols each time; it is not a hardcoded game offset. The only structural interpretation is
+the platform's standard Itanium C++ ABI. Return conventions were checked against the executable and fixture. This
+recovers both base-button text and subclass text without a hand-maintained class-to-text-getter list.
 
-Refresh after an action's confirmed effect and when an observation is requested. `on_gui_opened` / `on_gui_closed` do
-not announce every custom element creation or deletion; the installed API has no general element-created/destroyed event
-that can replace discovery. Native hooks can accelerate invalidation, but periodic or request-driven bounded
-reconciliation is still needed. An immediate snapshot after submission may show the previous state; the fixture observed
-this before the synchronized replacement arrived. Do not replay the mutation because the next page is not yet visible.
+A long startup changelog exceeded the probe's per-node text buffer and is explicitly marked `text_truncated`. This is a
+research transport bound, not noise filtering. No native nodes were removed by the semantic formatter.
 
-The resulting agent interaction is concrete: discover current entries in a known host, choose a returned control
-reference, perform one semantic control operation, then discover the resulting page. The follow-up experiment verifies
-the common native traversal. Remaining engineering concerns include semantic adapters, binding/lifetime safety and
-acceptance coverage, rather than anticipating each mod's UI workflow.
+### Icon controls carry semantic data
 
-## Sources and local evidence
+A widget pointer is not necessarily the correct receiver for its prototype interface. The successful reader uses the
+platform C++ runtime's `__dynamic_cast` with the game's actual RTTI for `agui::Widget` and `PrototypeProvider`. This
+yields
+the adjusted provider subobject pointer, including multiple inheritance.
 
-- [Wube: native widgets and deterministic mod GUI state](https://www.factorio.com/blog/post/fff-305).
-- [Wube: GUI event callbacks and end-to-end input tests](https://www.factorio.com/blog/post/fff-366).
-- [Custom input prototype](https://lua-api.factorio.com/latest/prototypes/CustomInputPrototype.html).
-- [LuaSimulation](https://lua-api.factorio.com/latest/classes/LuaSimulation.html).
-- [LuaGuiElement](https://lua-api.factorio.com/latest/classes/LuaGuiElement.html).
-- [LuaPlayer: quickbar, selection and player context](https://lua-api.factorio.com/latest/classes/LuaPlayer.html).
-- [LuaEntity: identity and selection bounds](https://lua-api.factorio.com/latest/classes/LuaEntity.html).
-- [Wube: technology tree presentation](https://direct.factorio.com/blog/post/fff-238).
-- [LuaGui: documented custom-GUI roots](https://lua-api.factorio.com/latest/classes/LuaGui.html).
-- [ShortcutPrototype: game-generated shortcut buttons](https://lua-api.factorio.com/latest/prototypes/ShortcutPrototype.html).
-- [on_lua_shortcut: normal custom-shortcut event](https://lua-api.factorio.com/latest/events.html#on_lua_shortcut).
-- [GuiAnchor: relative interface attachment](https://lua-api.factorio.com/latest/concepts/GuiAnchor.html).
-- [LuaControl: inherited opened-window and native-window APIs](https://lua-api.factorio.com/latest/classes/LuaControl.html).
-- [LuaForce: chart tags](https://lua-api.factorio.com/latest/classes/LuaForce.html).
-- [Mod setting prototypes](https://lua-api.factorio.com/latest/prototypes/ModSettingPrototype.html).
+The provider's `getBasePrototype` virtual slot is discovered from the current TechnologySlot vtable and its named thunk,
+then used through the actual provider vtable. `PrototypeBase::getRichTextTagWithLocalisedName` supplies a game-generated
+label. This works across the tested recipe, item, entity, technology and shortcut controls without anticipating their
+content names. Missing provider/prototype metadata remains absent rather than being guessed.
 
-The installed 2.0.77 bundled API documentation was used to avoid treating newer online APIs as available locally.
+Examples actually read from the client include:
 
-Raw local evidence is retained under `temp/ui-static-research/`, `temp/ui-live-research/`,
-`temp/ui-widget-click-research/`, `temp/interaction-components-research/`, `temp/ui-discovery-research/`, and
-`temp/ui-tree-verification/`. The discovery directory contains the earlier two-mod fixture and 24-assertion report. The
-tree-verification directory contains the follow-up native CMake fixture, disassembly, all-type mod fixture,
-complete-tree snapshots, peer logs and 48-assertion `verified-results.json`. These ignored artifacts are supplementary;
-this document summarizes their material conclusions and limits.
+- `[recipe=iron-gear-wheel] 铁齿轮`
+- `[entity=assembling-machine-1] 组装机1型`
+- `[technology=automation] 自动化`
+- `[item=transport-belt] 基础传送带`
+- Native shortcut labels such as `撤销` and `蓝图（建设规划）`.
+
+The external formatter separates recognized rich-text prototype tags into a kind/name identity and retains the original
+caption. It does not infer mod ownership, recipe feasibility or gameplay behavior from those labels. No client-only
+`request_translation` call is used.
+
+## Current formatted output: no public component refs
+
+The revised research formatter emits `ui-tree-research/3`: a single synthetic `root` with role `document`, containing
+the
+sampled native root (s) and their complete nested children. There is no window summary, window index, public component
+`ref`,
+pointer, lifecycle token, or per-node traversal ID. All source nodes are preserved; there is no noise pruning. Unknown
+roles
+remain `component`, and unsupported state remains null. The capture name is research provenance, not an action
+credential.
+
+The following is one complete fixture window subtree, with geometry and diagnostics omitted for readability. It is an
+excerpt, not a fabricated whole-screen root. The current frame contains a layout, its button, the caption label and a
+filler.
+
+```json
+{
+  "window_subtree_excerpt": {
+    "role": "window",
+    "text": "Duplicate title",
+    "state": {
+      "enabled": true,
+      "in_visible_tree": true,
+      "pending_destruction": null
+    },
+    "children": [
+      {
+        "role": "group",
+        "text": "",
+        "state": {
+          "enabled": true,
+          "in_visible_tree": true,
+          "pending_destruction": null
+        },
+        "children": [
+          {
+            "role": "button",
+            "text": "Order A",
+            "state": {
+              "enabled": true,
+              "in_visible_tree": true,
+              "pending_destruction": null
+            },
+            "children": []
+          }
+        ]
+      },
+      {
+        "role": "group",
+        "text": "",
+        "state": {
+          "enabled": true,
+          "in_visible_tree": true,
+          "pending_destruction": null
+        },
+        "children": [
+          {
+            "role": "label",
+            "text": "Duplicate title",
+            "state": {
+              "enabled": true,
+              "in_visible_tree": true,
+              "pending_destruction": null
+            },
+            "children": []
+          },
+          {
+            "role": "spacer",
+            "text": "",
+            "state": {
+              "enabled": true,
+              "in_visible_tree": true,
+              "pending_destruction": null
+            },
+            "children": []
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+The `pending_destruction: null` values above mean that this older generic collector did not collect that field. The
+separate lifecycle experiment established the getter. Production must check it at action execution; null must never be
+interpreted as evidence of safety.
+
+Machine content remains semantic without refs. The full machine projection retains the observed dropdown selection
+`Beta` at native index 1, slider value 37, and `[recipe=iron-gear-wheel]` prototype metadata. Inventory projection
+retains
+quality and quantity readers. No component address or snapshot number is required to express those attributes in a
+selector.
+
+Current complete projections and executable experiments:
+
+- [Machine interface: all 713 nodes](temp/ui-path-research/machine-prototype-semantics.dom.json).
+- [Inventory: all 968 nodes](temp/ui-path-research/inventory.dom.json).
+- [Remote view: all 911 nodes](temp/ui-path-research/remote-view.dom.json).
+- [Train schedule: all 1,099 nodes](temp/ui-path-research/train-schedule-final.dom.json).
+- [Two-window fixture: all 712 nodes](temp/ui-path-research/initial.dom.json).
+- [Unified formatter and selector](temp/ui-path-research/selector.py).
+- [Unified read/target checks](temp/ui-path-research/results.json).
+
+The earlier `.semantic.json` artifacts retain their original snapshot-local refs, and `ui-window-order/*.dom.json`
+retains
+superseded window descriptors, as historical evidence. Neither is the current proposed public schema. Their source
+observations are preserved, not overwritten to resemble newer tests.
+
+The independent logical custom GUI observation still supplies names, official player-scoped indices,
+checked/switch/progress
+values, dropdown items, sprites, tooltips and selected item quality. Its indices are API metadata, not universal native
+window IDs or new public action handles. A reliable native/logical identity join remains unverified, so keep the two
+sources
+explicitly separate. Never join them by caption or coordinates.
+
+## Live coverage and validation
+
+| Screen/fixture                           | Recorded result                                                                                  | Evidence                                 |
+|------------------------------------------|--------------------------------------------------------------------------------------------------|------------------------------------------|
+| Startup presentation                     | 111 nodes, including changelog tabs, dropdowns, labels and modal notice controls                 | `startup-dialogs.json`                   |
+| Scenario error dialog                    | 24 nodes; localized title and leave/save/reconnect controls                                      | `scenario-error-dialog.json`             |
+| HUD plus custom GUI                      | 601 nodes; hidden label and all 20 overflow rows included                                        | `custom-gui-and-hud.json`                |
+| Machine recipe selector                  | 642 nodes, including `AssemblingMachineSelectRecipeGui`                                          | `machine-and-custom-extension.json`      |
+| Machine settings plus relative extension | 713 nodes; both `AssemblingMachineGui` and custom machine controls                               | `machine-settings-and-relative-gui.json` |
+| Machine prototype semantics              | 42 prototype/shortcut captions within the 713-node snapshot                                      | `machine-prototype-semantics.json`       |
+| Open technology tree                     | 548 nodes, including 219 `TechnologySlot` nodes and 217 prototype captions across the whole tree | `technology-tree.json`                   |
+| Logical custom GUI                       | 45 elements across six roots; 18 distinct element types including root types                     | `logical-custom-gui.json`                |
+
+All filenames in this table are relative to `temp/ui-tree-linux/`. Some technology slots are empty/placeholder controls;
+219 structural slots does not mean 219 populated technologies. `technology-prototype-semantics.json` is an earlier
+research-HUD snapshot taken before the technology window was explicitly opened; it must not be mistaken for the final
+technology-tree snapshot.
+
+The retained verifier passes 48 assertions and checks hierarchy, metadata, absence of node pruning, fixture values,
+non-admin identity, and matching
+full-CRC request markers in both peer logs. The server independently confirmed the sampled checked state, selection,
+slider value and item/quality; see `authoritative-ui-state.json`. Repeated full CRC requests were followed by continued
+execution without a
+reported desynchronization. This supports the sampled readers and setup operations, not all possible UI getters.
+Native ABI fixtures and retained-evidence assertions are different kinds of validation.
+
+The isolated probe reparses debug information and performs expensive symbol lookup for each snapshot. Observed
+end-to-end
+calls took roughly 7–19 seconds, including symbol lookup and debug parsing. Collection time was not isolated. These are
+not per-frame timings or a
+production performance claim. Optimization was not the current objective.
+
+## Extended Linux state and screenshot validation
+
+The second investigation is retained under `temp/ui-state-validation/`. It used a non-admin client connected to the same
+local headless server throughout, with one client restart after a failed temporary observer experiment. It enabled the
+installed Factory Planner 2.0.20, flib 0.16.3 and Factory Search 1.13.3 mods, in addition to Space Age. The original
+normal
+mod-list configuration was backed up for restoration. These are real mod interfaces, not only scenario lookalikes.
+
+### Visibility, clipping and input eligibility
+
+The native probe now runs two game-owned traversals:
+
+- `Widget::callRecursively` discovers the complete sampled structure, including hidden content.
+- `Widget::getWidgetRecursively` with an always-false predicate collects the reachable visible subtree. The inspected
+  implementation skips children hidden by their visibility flag or by search, and therefore also skips their
+  descendants.
+  It visits its starting root unconditionally; the observation uses the actual GUI root, not an arbitrary hidden
+  element.
+
+A hidden leaf and a visible child under a hidden parent were absent from the second traversal but present in the first.
+Calling the game's `hideBySearch`/`showBySearch` on a fixture row similarly changed native visible-tree membership while
+its logical Lua `visible` property remained true. These are different visibility concepts.
+
+All twelve scroll rows remained in the visible subtree, although the screenshot showed only rows 1–3. Calling
+`Widget::getWidgetUnderMouse` at their centers used the game's own clipping and stacking logic: rows 1–3 hit themselves,
+while row 8 did not. After official scrolling to the bottom, row 12 became hittable and row 1 ceased to hit itself.
+The hit-test argument/rectangle ABI was checked against the actual GUI caller and an independent native fixture.
+This is a **point hit test**, not a reconstructed complete visible region or proof that the entire widget is painted.
+A failed center hit can mean clipping, another control, or interaction transparency; it must not automatically be
+labeled
+"hidden". A partly exposed control might still have another valid interaction point.
+
+`Widget::isEnabled` reports the widget's own flag. In the fixture, a disabled container and its enabled child had
+different
+values. The probe preserves those facts rather than inventing an inherited-enabled rule. Disabled controls can still be
+returned by geometric hit testing. The input-ignored copper sprite remains in the logical/native structure and has
+`ignored_by_interaction=true` through Lua; presence does not mean it is an input target.
+
+### Modal focus is a separate routing system
+
+The actual dropdown expansion calls `FocusManager::requestModalFocus`. A scoped observer captured its real widget
+argument, priority and boolean argument. That widget matched the popup `agui::ListBox` in the subsequently collected
+native tree. Closing the dropdown called `FocusManager::releaseModalFocus` for the same widget. Acquisition priority was
+200 in this observation; it is evidence, not a version-independent constant for an adapter. Only the receiver/widget
+arguments apply to the release function; other raw argument registers in its diagnostic are not release parameters.
+
+The open popup exposed Alpha/Beta/Gamma, selected index 1, and `DropDown::isDropDownShowing=true`. Closing it returned
+false and removed its option subtree from the active tree. Controls outside the popup still passed geometric center hit
+tests. Inspection of `Gui::logic` also found separate modal mouse-down dispatch, followed by checks of whether modal
+focus
+changed. Thus a hit-test result cannot stand in for modal routing or whether an outside click is consumed/dismisses a
+popup.
+
+The lifecycle observation path is verified. **Bootstrapping the full already-existing modal stack on late attachment is
+not solved through a stable reader in this build.** There is no separately callable getter in the inspected symbols and
+no usable complete FocusManager layout in the tested debug-type lookup. A direct enumeration of all 565 DWARF
+compilation units found no Widget/FocusManager/CheckBox/Switch/Gui implementation unit; the retained unit-name inventory
+and GDB lookups are in `debug-type-evidence.json` and `debug-type-lookup.log`. Embedded DWARF presence alone does not
+establish game-class field metadata. `checkThatModalFocusedWigetIsOnTop` mutates the
+stack/ordering and can bring a widget forward; it is not a query. Creating a temporary window to provoke reordering was
+rejected as an observation strategy. Request/release events alone do not reconstruct events missed before attachment,
+nested priorities, all destruction paths or their routing flags. The formatted snapshot therefore keeps
+`modal_eligible=null`; it does not optimistically advertise every visible control as actionable.
+
+Setting `LuaPlayer.opened` to a custom frame did not produce a modal-acquisition event in the sampled path. An opened
+custom frame is not automatically a modal dialog. A separate attempt to use `show_message_dialog` was rejected by its
+one-player precondition in this multiplayer fixture and supplies no modal evidence.
+
+### Quantities, quality, toggles, tabs and render-only text
+
+Two more shared native interfaces substantially improve icon semantics:
+
+- `PrototypeProvider::getQualityPrototype`, dispatched through the actual provider vtable, supplies a quality prototype;
+  the same rich-text/localized-name reader returns tags such as `[quality=rare] 稀有`.
+- A runtime cast to `ButtonNumber` supplies the correctly adjusted receiver for its virtual count reader. The slot is
+  derived from the current QuickBarItemSlot vtable and its named thunk. Counts are returned as doubles, not integers.
+  This reads inventory, quickbar and real mod `IconButtonWithNumber` values without knowing the content names.
+
+The formatter calls the generic result `number_provider_value`: its meaning depends on the control. A badge containing
+4 can mean four result groups/entities, not four iron plates. A prototype-backed slot can have no actual item, and a
+zero number-provider result is not a universal value for a specialized control.
+
+Additional verified native readers are `Button::isToggled`, `Tab::isSelectedTab`, and
+`DropDown::isDropDownShowing`. The Widget `asButton` slot is derived from the executable and invoked on the actual
+object
+before calling the Button reader. Checkbox checked state is not Button toggled state; the probe does not substitute one
+for the other. The train schedule tab reported selected=true and the fuel tab false.
+
+The train item-count condition exposed a useful counterexample: its `ChooseSignalOrNumberButton` displayed **100**, but
+`getText` was empty and its generic number-provider value was zero. The control formats and draws its constant directly.
+A temporary hardware-breakpoint observer captured entry into its real `paintComponent`, then the actual call to
+`StringUtil::shortNumberFormat`, checked that the return address belonged to that paint method, and read the double
+argument from the platform ABI. It observed **100.0**. This is a demonstrated render-observation path, not OCR, a
+private
+field offset or a complete generic render collector. Correlation must retain the paint receiver, frame and lifetime;
+never attach an unrelated global formatter call to the current UI node. A render-only value cannot be promised when no
+relevant frame is rendered, and the present JSON stores this observation separately from the tree snapshot.
+
+### Screenshots without requesting window focus
+
+The game-side `game.take_screenshot` path with `show_gui=true`, the current viewed position/zoom and `force_render=true`
+produced usable GUI screenshots while the X11 window was iconified (`WM_STATE=IconicState`). Native tree collection also
+continued. No OS mouse/keyboard events or focus requests were used. Resolution changed from 3840×2160 to 1920×1080
+during
+that window-state transition, so each observation must read the current geometry instead of assuming one display size.
+
+However, **that API is not a faithful screen capture in remote map mode**. At viewed position (160,0), physical position
+(0,0), zoom 0.15 and `render_mode=chart`, the API image rendered terrain across the screenshot. An independent X11
+Composite client-pixmap capture showed the actual chart, charted region, black unexplored area and map icons. It
+preserved
+the pre-existing non-game focus. Inspection of `RenderUtil::takeScreenshots` confirms a separately constructed
+GameRenderer
+plus GUI rendering; it is not a read of the application's current presented frame. The API also omitted the on-screen
+FPS/time debug overlay in this comparison. The ordinary and remote images are therefore labeled by capture source.
+
+The X11 helper names the window pixmap, temporarily requests automatic Composite redirection if necessary, and releases
+its resources. It does not activate, raise or send input to the game window. This tested path requires a mapped window;
+it deliberately rejects an unmapped one rather than presenting a stale image as current. The experiment has **not**
+established a faithful, fresh map-mode screenshot while the window is minimized. The game API remains suitable for the
+sampled GUI comparisons, but its terrain image must never establish fog visibility or what the player can currently see.
+Neither the screenshot workaround nor window manipulation was added to product code.
+
+### Requested examples and comparison results
+
+Files below are relative to `temp/ui-state-validation/`; screenshots and native JSON share each listed stem unless
+noted.
+The images were actually inspected, in addition to machine checks of the captured fields.
+
+| Example                                                             | Expected and observed                                                                                                                                                                                                                                | Remaining boundary                                                                                                                                                                                                                                                    |
+|---------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `hud-counts`, `hud-minimized`                                       | Twenty displayed quickbar slots; stone furnace 2 and transport belt 4, normal quality; empty slots retained; real Factory Planner top-left entry visible.                                                                                            | Hidden quickbar page controls also exist and must not be counted as displayed slots. The top-left mod button's sprite/name/tooltip come from logical GUI.                                                                                                             |
+| `inventory`                                                         | Sixteen occupied visible InventoryGuiSlot controls; 37 rare iron plates distinguished from 20 normal iron plates, plus all other shown stacks. Counts/quality matched the inventory query and screenshot.                                            | Equipment contents, durability bars and every overlay are not implied by a stack count.                                                                                                                                                                               |
+| `train-schedule`, `train-schedule-final`                            | Iron Mine and Smelter, 30 s, OR, full-cargo condition, iron-ore signal, `<` comparator; schedule selected and fuel not selected.                                                                                                                     | The native automatic/manual switch state remains unknown in the generic tree. The screenshot shows manual; the fixture sets manual. A separate train API read is possible but is not a UI-state reader. Constant 100 needs the separately verified paint observation. |
+| `remote-view`, `remote-map`                                         | Remote-view frame, controls and UI changes; separate viewed/physical positions and render modes from LuaPlayer.                                                                                                                                      | Terrain, entities, chart tiles and fog are not child widgets. `remote-map-window.png` is the actual chart comparison; the game-API image is not fog evidence.                                                                                                         |
+| `factory-search`, `factory-search-complete`                         | Real Factory Search title, item chooser, checkboxes, raw tooltip/localization data and result summary 251. Character/chest result badges were 4/1 through both native number readers and logical GUI; sprite names identify their meaning logically. | The earlier `factory-search-results.png` caught "searching" before its JSON caught completed results; it is retained as asynchronous-state evidence, not a matching pair. The final complete snapshot is bracketed by matching observations.                          |
+| `control-states`, `control-states-changed`                          | Native enabled/focus/text/selection/slider; logical checked/unchecked, right→left switch and 0.42→0.75 progress; toggled button true→false, slider 37→80, Beta→Gamma; scroll rows 1–3→10–12.                                                         | Labels intentionally stay unchanged while values flip, demonstrating why state must not be inferred from caption text. Native checkbox/switch/progress value gaps remain distinct from complete logical values.                                                       |
+| `dropdown-modal-captured`, `modal-final-open`, `modal-final-closed` | Popup option subtree, expanded flag and selected index; actual modal request/release refer to the same ListBox.                                                                                                                                      | This establishes the sampled lifecycle, not full late-attach modal-stack reconstruction.                                                                                                                                                                              |
+
+### Concrete updated JSON projection
+
+The full formatter preserves all source nodes. For example, this actual inventory node has no caption of its own, yet
+its item identity, quality, quantity and native state are recoverable:
+
+```json
+{
+  "role": "inventory_slot",
+  "text": "",
+  "state": {
+    "enabled": true,
+    "focused": false,
+    "in_visible_tree": true,
+    "pending_destruction": null,
+    "modal_eligible": null
+  },
+  "center_hit_is_self": true,
+  "prototype": {
+    "kind": "item",
+    "name": "iron-plate"
+  },
+  "quality": {
+    "kind": "quality",
+    "name": "rare",
+    "label": "稀有"
+  },
+  "number_provider_value": 37.0
+}
+```
+
+The complete files also contain geometry and children. Logical GUI remains a separate tree with official indices,
+properties, localization expressions and `logical_ancestor_visible`. That computed property describes logical ancestors,
+not renderer clipping or controller-dependent native mounting. Native/logical identity is still not joined by caption or
+coordinates. Some raw research files include native addresses solely for within-process experimental correlation; the
+current formatter removes them. Historical snapshot refs remain only in archived projections; the current interface uses
+one document-rooted path grammar with structural and semantic predicates for every control.
+
+### Exhausted or still unsafe generic reader paths
+
+| Gap                                             | Investigated alternatives and current conclusion                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+|-------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Native checkbox/radio state and switch position | No standalone state getter was found in this build. The checked/switch state is read inline by painting/style code. Checkbox graphical-set selection depends on enabled/hover/pressed state as well as checked state; arbitrary mod styles can reuse graphics. LabeledSwitch refresh changes label styles and reads private state, so it is not a pure getter. Do not decode by fixed field offsets, force a toggle/restore, or infer truth from a color. Official Lua GUI provides exact state for mod-created controls. |
+| Native progress value                           | Logical progress is exact. Native painting/`getBarRectangle` does not establish a general original numeric value/range; pixel-width inference would be quantized presentation, not an exact value reader.                                                                                                                                                                                                                                                                                                                 |
+| Full clipping/occlusion region                  | The game's point hit test works. `recalculateClippingRect` mutates a cached child-bounds calculation and is not a viewport rectangle getter. Painting has a clipping stack and special container paths. Bounds intersection alone is not proven equivalent. Do not label a center sample as complete paint visibility.                                                                                                                                                                                                    |
+| Existing modal stack                            | Acquire/release observation works; a complete late-attach bootstrap and all lifecycle/routing semantics do not. Keep eligibility unknown until established, or route future inputs through the game's own GUI dispatcher.                                                                                                                                                                                                                                                                                                 |
+| Every icon's tooltip                            | Native base `createToolTip` returns null; specialized tooltip creation can allocate transient UI. The train numeric button's tooltip does not expose its constant. Logical GUI supplies declared sprite paths/tooltips; not every native icon has a verified pure metadata getter.                                                                                                                                                                                                                                        |
+| Native/logical identity join                    | `CustomGuiElement::fillBaseProperties` receives the native widget during construction, but that event may predate attachment. `LuaGuiElement::getRegistrationTarget` returns a registration descriptor, not a native-widget getter. Neither establishes a complete join for existing arbitrary controls without a verified lifetime/layout contract.                                                                                                                                                                      |
+| Arbitrary drawing and complete map observation  | A canvas, minimap, camera, chart and rendered world are not an accessibility subtree. Standard widgets do not encode every painted mark's meaning. These need a separate verified observation source, not invented widget children.                                                                                                                                                                                                                                                                                       |
+
+These are limits of the verified access paths in the inspected build, not claims of mathematical impossibility or of a
+Linux-wide limitation. They are explicitly unknown in output rather than silently omitted or filled from guesses.
+
+### Validation and failed experiment record
+
+The extended ABI fixture passed 2,000 callback/RTTI/string/rectangle/point-hit/quantity iterations. A separate fixture
+passed 20 protected nested observations while another target thread allocated memory. Real-game screenshots, native
+snapshots, logical reads and server assertions are checked by `temp/ui-state-validation/verify.py`. Full CRC requests
+were followed by continued client/server operation; the final retained peer logs contain matching successful markers.
+The final retained run passed 81 assertions and contains 7 matching full-CRC markers after the client restart.
+These counts describe evidence coverage, not proof that every game widget/property is supported.
+
+One early nested-observer attempt incorrectly resumed helper threads before calling a tracer method that requires them
+stopped. A ptrace error triggered the protected-call safety stop. The test client was restarted; the server remained
+running. The fix changed only the temporary observer's sequencing, was validated with the concurrent fixture, and then
+passed actual dropdown acquire/release plus full multiplayer CRC checks. No corresponding production code was changed.
+This failed experiment must not be counted as a passing injection/no-interruption test. The earlier client's stdout was
+replaced by the fixture restart; its regular Factorio log is retained separately, and final CRC evidence uses the
+current
+client log. Server-rejected setup commands are likewise not successful GUI observations.
+
+Warm snapshots with symbol metadata already cached in Python took about 0.64–0.70 seconds end to end in this fixture.
+That excludes the initial ELF/RTTI scans and is not isolated collector time or a per-frame production performance
+promise.
+The temporary probe still has explicit bounds and synchronous game-thread work; production integration remains separate.
+
+## Limits and important distinctions
+
+- **Native widgets and deterministic logical GUI are different layers.** Wube describes custom GUI's saved logical state
+  separately from the actual client widgets. Built-in interfaces are not all represented by `LuaPlayer.gui`.
+  See [FFF-305](https://www.factorio.com/blog/post/fff-305).
+- **Structure is not complete meaning.** Standard controls expose useful semantics; arbitrary pictures, graphs, maps,
+  cameras, world rendering and custom canvases can contain content with no separate widget or declared action meaning.
+  A map entity is not an `agui::Widget` merely because its configuration window is one.
+- **A prototype is not a complete slot value.** Native quantities and quality now have verified shared readers.
+  Progress,
+  filters, ranges and other specialized states still require separate evidence. Logical and native item/quality sources
+  are explicitly distinguished.
+- **Presence, local visibility, effective visibility and input eligibility differ.** Hidden descendants and detached
+  relative content can exist. Bounds and `enabled` do not resolve clipping, focus routing or modal restrictions.
+- **Lazy content does not exist yet.** A closed popup may have no instantiated option subtree. A later observation after
+  expansion can expose it without a new gameplay-specific tool.
+- **Descriptions and identities differ.** The current interface resolves descriptions afresh and permits reconstructed
+  targets. It does not retain raw addresses as public handles. Native window ordinals are current positions; logical GUI
+  indices are scoped to a player/world/element lifetime and may include zero.
+- **An observation is a snapshot.** The main-thread sampling phase provides the tested consistency boundary; this
+  experiment is not a proof of all renderer/thread interactions. Production reads need explicit ownership and bounds.
+- **Read-like APIs can still mutate state.** Avoid helper calls that create roots/widgets, automatic reconstruction,
+  synthetic numbered items and client-only translation requests. Use verified readers and full multiplayer CRC checks.
+
+## Useful prior input findings, with evidence boundaries
+
+These are preserved from the earlier Windows investigation and existing project research. They were not newly validated
+as a Linux semantic-input implementation in this task.
+
+### Named controls and bindings
+
+`LuaSimulation::luaControlDown` was investigated as an example of the game's own route from a named `ControlInput` to
+active-input-method values, `eventsToTriggerThis`, and `InputEventSender::sendEvents`. `LuaSimulation` itself is not an
+ordinary-world mod API and must not be instantiated by guessing an object layout.
+
+The useful principle is to resolve the current named control and preserve normal routing, custom-input consumption,
+focus and modifiers. A missing binding needs explicit handling. A shortcut's associated input does not by itself prove
+that dispatching the shortcut and dispatching that input have identical mod-event semantics.
+
+### Widget dispatch is not a generic click recipe
+
+Prior tests reported that native widget dispatch could deliver synchronized custom GUI events, but also bypassed
+ordinary
+screen hit testing: hidden, offscreen, covered and non-modal-subtree controls could be activated. Disabled controls were
+rejected in the tested path. Successful bypass is not proof that every such operation respects all GUI assumptions.
+
+Checkboxes required an appropriate enter/down/up/leave sequence in that experiment. Dropdowns reacted to down/up rather
+than click alone. Some controls generate click during down, so blindly adding a second click can duplicate an operation.
+Inventory slots and quickbar controls may read current game input state beyond fields in a supplied event.
+
+The earlier probe copied a real event using `MouseEvent::copyWithNewSource`; it did not establish safe fresh-event
+construction for production. Modifier handling, control-local coordinates, ownership, finite input release and teardown
+must be verified. Calling a registered closure directly or raising an arbitrary Lua GUI event is not equivalent to
+normal game input.
+
+The reported later Windows quality-selection flow superseded its earlier incomplete chooser test: selecting an item
+could leave the picker open, and a separate confirmation control completed it. An observer should expose those controls
+and changed states rather than hardcode an item-picker workflow. Linux item/quality *input* remains unverified by this
+task.
+
+### Tooltip observation is an operation
+
+The prior investigation found that a generic base `createToolTip` was not a universal metadata getter. The normal
+tooltip
+path could create transient widgets, which then needed explicit removal and subsequent cleanup verification. Those
+experiments reportedly identified icon-only quality choices. This Linux task did not implement tooltip creation or claim
+that every icon's tooltip is available through a pure read.
+
+### Presentation and world lifetimes
+
+The earlier Windows tests reported menu/save-load traversal, paused-world presentation and background-simulation
+pitfalls.
+`AppManager::isAppInMenu` could also describe an in-game menu; destruction of a background Map did not necessarily
+destroy
+the active menu. Treat these as constraints to revalidate, not a complete platform-independent lifecycle classifier.
+
+A GUI-phase observer can operate outside world ticks. A production design should distinguish process/presentation
+readiness, the actual player world and Lua attachment. World replacement must invalidate world-owned work; ordinary menu
+presentation should not depend on a running `on_tick` callback.
+
+Address reuse previously caused stale type metadata to select an incorrect getter. Actual receiver conversion and
+current
+RTTI checks fix one failure mode, but same-type address reuse invalidates pointer-based historical identity. The later
+Linux experiment demonstrated independent
+lifecycle tokens, while the current public design intentionally avoids retaining component identity between calls.
+Current-root resolution and action-phase validation remain necessary.
+
+## Later window-state and identity findings
+
+The technology window uses shared full-viewport layout machinery and separately suppresses controller presentation.
+Opening it unloads the ordinary controller/inventory window; closing it rebuilds that presentation from the retained
+logical open target. Independent custom screen windows can remain attached underneath. Thus technology is not merely an
+opaque layer, and not every covered window has been unloaded. Effective suppression is not completely described by the
+public `show_controller_gui` setting. See [window mechanism evidence](temp/ui-window-mechanism/findings.md).
+
+In the real remote item/quality picker, empty item selection with default normal quality disables confirmation;
+selecting
+an item enables the same confirmation object. Normal quality can already be selected, so the adapter must not invent a
+requirement to click a quality explicitly. Generic semantic labels for every plain quality icon remain unverified.
+
+`Widget::isFlaggedForDestruction()` supplies an explicit native pending-deletion state. A real pending IconButton was
+still
+enabled, proving that enabled state alone is insufficient. The game also uses invalidating GenericTargeter references;
+its dispatch helper checks whether a receiver survived its own callback. Current tree membership, self/ancestor deletion
+state, and operation eligibility must be checked independently of how the target was described.
+
+The lifetime experiment distinguished 304 reused addresses across one inventory/technology/inventory cycle. A separate
+same-window comparison kept the same ancestor chain, address, type, caption and position while replacing the button.
+These invalidate historical pointer/ordinal identity claims, not the chosen semantics of fresh description matching.
+See [lifecycle evidence](temp/ui-lifetime-research/findings.md)
+and [descriptor comparison](temp/ui-descriptor-research/findings.md).
+
+## Menu compatibility
+
+Fresh Linux captures establish that the startup main menu and in-game multiplayer menu use the same native widget system
+and traversal functions as gameplay. The startup menu had 51 nodes under `agui::TopContainer`, including ordinary
+buttons
+for Single player, Multiplayer, Settings, Mods and Quit, plus the language dropdown. The in-game menu had 502 nodes and
+included `MultiplayerMenuGui`, ordinary buttons, retained HUD/background controls, and a disabled Pause button. The text
+and
+disabled state matched screenshots captured through XComposite without changing focus during capture.
+
+Both scenes work with the same structured path matcher. No special menu selector or menu-window ordinal is necessary.
+A menu requires process-level UI readiness and a GUI execution phase, not Lua/world attachment. Production must separate
+these prerequisites from the existing gameplay tools' world-bound `attach` checks. This is a proposed integration
+change;
+it has not silently changed the current product tool prerequisites.
+
+Root discovery and action eligibility still need separate validation: two repeated main-menu samples found the expected
+foreground root, but do not prove that every arbitrary GUI logic call belongs to the active presentation. The menu's
+animated world is not a tree of selectable UI entities. Settings/load/join subpages and generic menu action dispatch
+were
+not validated in this experiment. Desktop clicks attempted solely for submenu setup did not change the captured tree;
+that is not evidence for a working input adapter.
+
+See [menu evidence and limitations](temp/ui-path-research/findings.md), the
+[main-menu DOM](temp/ui-path-research/main-menu.dom.json), and the
+[in-game menu DOM](temp/ui-path-research/pause-menu.dom.json).
+
+## Validation of the unified document/path proposal
+
+- Current contract verification: 55 checks using real captures. These cover complete document reads, filtered reads with
+  zero/multiple matches, unique action targets, intermediate ambiguity, current positions per context, deduplication,
+  subtree containment, reordering/reconstruction, remote non-window controls, main/in-game menus, disabled-state
+  queries,
+  invalid selectors and incomplete-search rejection. These are matcher tests, not native action acceptance tests.
+
+- Live window-order experiment: six native snapshots, same-title windows raised/closed/reopened, 10 evidence checks,
+  and one full client/server CRC after synchronized fixture cleanup. It reused the existing non-admin client and local
+  server. No native click test is implied by changing order through authorized server-side fixture setup.
+- Superseded window-contract/projection verification: 33 checks against real-game captures, covering title-only
+  uniqueness, ambiguity,
+  absent windows, title/index disagreement, invalid indices, no cross-window fallback, distinct child/descendant axes,
+  component-level rejection after window reordering, subclass classification, and preservation of every source node.
+- Earlier selector evaluation: 14 checks; earlier window-qualified identity comparison: 12 checks. These are offline
+  evaluations of actual captured trees, not additional live action acceptance runs.
+- Earlier lifecycle/native validation: 41 evidence checks, 2,000 fixture lifetimes, native register/relocation fixtures,
+  and three additional full CRC checks. The temporary lifecycle hooks were restored; the product resident was retained.
+
+Matching, observation, and actual input dispatch are separate validation claims. The unified path scheme is verified as
+a
+current-tree matcher on the sampled roots. A complete generic production UI action executor still requires the
+control-family
+input, synchronization and safe-phase validation listed below. No new MCP tool is advertised by this document.
+
+## Remaining work before production integration
+
+1. Establish safe active-root selection across menus, pause screens, background simulations and world replacement.
+2. Integrate unified full/filtered DOM reads and path-based actions with current-root discovery and same-phase dispatch.
+   Validate
+   production limits and error schemas. Native/logical identity association remains a separate observation problem.
+3. Resolve the remaining native checked/switch/progress properties, full modal bootstrap, native/logical identity and
+   specialized render/tooltip observations described in the extended gap table. Preserve the now-verified quantities,
+   quality, visible traversal, point hit tests, toggles, tabs and dropdown state; keep unsupported properties explicit.
+4. Validate semantic input independently: fresh events, named bindings, custom inputs, exact control-family dispatch,
+   completion, multiplayer acceptance and game-owned cleanup.
+5. Package the fixed native readers behind the platform adapter and keep formatting/protocol work portable. The
+   temporary
+   probe is not a resident design: it loads test libraries, blocks for snapshots and retains research buffers.
+6. Only after correctness and coverage are established, decide how to reduce observation size. No pruning or
+   context-budget
+   policy from the earlier draft is a requirement of the current raw-tree investigation.
+
+## Reproduction and evidence
+
+Check the current projections and unified contract with:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 temp/ui-window-order/native_ancestry.py
+PYTHONDONTWRITEBYTECODE=1 python3 temp/ui-path-research/selector.py
+PYTHONDONTWRITEBYTECODE=1 python3 temp/ui-path-research/verify.py
+```
+
+The earlier `temp/ui-window-order/verify.py` and `verify_contract.py` retain the ordering evidence and superseded window
+contract tests. They are historical comparisons, not the current public targeting rules.
+
+`native_ancestry.py` reads the installed executable's RTTI inheritance using the standard platform ABI. The derived
+class
+map is research output for that executable, not a production version/offset allowlist. `live.py` in that directory is a
+command fragment for the already-authorized fixture parent; it does not start another client. Runtime libraries,
+callback
+layouts, debug formats and hook mechanics still require platform-specific verification.
+
+The extended project and evidence are under `temp/ui-state-validation/`. Run its retained checks with:
+
+```sh
+python3 temp/ui-state-validation/semantic.py
+python3 temp/ui-state-validation/verify.py
+ctest --test-dir temp/ui-state-validation/build --output-on-failure
+```
+
+`semantic-examples.json`, complete `.semantic.json` snapshots, PNG files and `verified-results.json` preserve the
+extended
+results. `native-evidence/` contains the inspected methods. `live.py` owns the single client and local server and
+restores
+the backed-up normal mod-list when closed; `states.lua` and `train.lua` contain fixture setup. GUI setup mutations and
+the
+scoped popup experiments are research operations, not part of the read-only collector or new MCP tools.
+
+The following paths describe the original baseline:
+
+The temporary CMake project is `temp/ui-tree-linux/CMakeLists.txt`. `probe.cpp` contains typed native readers;
+`inject.cpp`
+reuses the repository tracer; `symbols.py` resolves vtable/RTTI metadata from the actual image. `fixture.cpp` checks ABI
+assumptions independently. `live.py`, `start-world.py`, `controls.lua` and `logical.lua` describe the local live
+fixture.
+The production native build's generated payload header and formatting headers are prerequisites of this research build.
+
+The currently retained final observations can be checked with:
+
+```sh
+python3 temp/ui-tree-linux/semantic.py
+python3 temp/ui-tree-linux/verify.py
+```
+
+`verified-results.json` records the checks and matching CRC markers. `live/client/launch.log` and
+`live/server/launch.log` contain actual game evidence. The original longer document is archived in
+`temp/ui-tree-linux/interaction-architecture-research-before-linux.md`; overlapping claims have been consolidated here.
+
+The startup fixture initially used a reserved custom-element name, which the official API rejected. It was corrected to
+namespaced fixture names. The resulting error-dialog snapshot is valid UI evidence, not an injection crash. The initial
+base-only text snapshot is retained as `main-menu.json` for the negative getter result; that filename does not mean it
+is
+a clean, unobstructed main-menu catalog.
+
+Use the installed 2.0.77 runtime JSON as the API authority for this machine. Current online
+[LuaGui](https://lua-api.factorio.com/latest/classes/LuaGui.html) and
+[LuaGuiElement](https://lua-api.factorio.com/latest/classes/LuaGuiElement.html) documentation may describe a newer
+release.
+The [Wube GUI/input testing discussion](https://www.factorio.com/blog/post/fff-366) is supporting architectural context,
+not binary ABI evidence for these native calls.
