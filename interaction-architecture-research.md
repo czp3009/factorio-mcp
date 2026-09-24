@@ -9,13 +9,21 @@ All paths in commands are relative to the project root.
 
 ## Architectural decision
 
-The basic interface should expose **semantic input and structured observations of the actual interface**. It should not
-require a new public tool or a hardcoded workflow for each recipe, machine, technology or mod feature.
+The basic interface should expose **current input bindings, finite physical-input sequences and structured observations
+of the actual interface**. Direct UI operations continue to use the shared DOM selector model. Neither path requires a
+new public tool or a hardcoded workflow for every recipe, machine, technology or mod feature.
 
-For input, an agent identifies a control or a named game input such as movement to the right. The adapter resolves the
-current game binding and normal game input path. A semantic input is not an arbitrary simulation mutation, an OS
-keycode,
-or an assumption that a particular physical key still has its default binding.
+The agent reads the running game's effective bindings, chooses keyboard/mouse inputs, and submits a finite sequence.
+The selected input direction is event delivery through the game's in-process SDL path. Normal game code interprets
+bindings, context, consumption, held state and synchronized actions. Shared bindings may activate multiple eligible
+controls; isolating a named control such as `mine` or `build` is no longer the public promise. MCP must not contain a
+`build -> processBuild` table or maintain gameplay state such as MiningState itself.
+
+Minimal fixed hooks for safe execution, observation, IPC and lifetime management remain allowed. Overriding
+`triggeredBy`, `isActive`, permissions or cursor getter results remains unacceptable. The binding-independent and
+direct-handler investigations below are retained as historical evidence, not as requirements for the selected adapter.
+The finite input sequence contract below supersedes their semantic-only input recommendations. This is a design
+agreement, not a claim that the new production tools or all input shapes have been implemented and tested.
 
 For output, discover the actual native UI tree and read its presentation, state and associated prototype metadata.
 Custom interfaces should appear because the game created controls, not because MCP recognizes the mod or its workflow.
@@ -30,6 +38,144 @@ for both reads and these actions, including minimized menus, saving and single-p
 observation, matching and input claims; they do not
 establish a generic executor for every control family. This work does not replace the existing production tool catalog.
 Noise reduction, pruning, paging policy and workflow automation are deliberately deferred.
+
+## Current input contract: bindings and finite sequences
+
+### Binding discovery and input vocabulary
+
+Physical input may operate UI as well as the world. Direct UI selector operations are the preferred path in MCP server
+instructions, not an exclusive route enforced by the adapter. The agent may choose a configured window-closing key or
+mouse input without first attempting a direct widget action. Normal game context and bindings determine the effect.
+
+An optional game-rendered screenshot complements physical UI input when structured observations are unclear or omit
+embedded views/mod-drawn content. MCP forwards images; it does not implement image recognition. Retain this fallback
+only through a verified game-owned rendering path without desktop capture or focus manipulation. Factorio's own graphics
+context is still required. The existing `game.take_screenshot` path is not faithful to the current remote chart; expose
+capture source and limitations rather than claiming universal current-screen fidelity. See
+[the screenshot evidence](#screenshots-without-requesting-window-focus).
+
+A discovery tool reports the running game's registered control names and current effective primary/alternative
+bindings, including custom controls, modifiers, shared bindings and unbound controls. Read live values rather than
+assuming default bindings or trusting a configuration file. The agent uses these observations to decide what to press;
+MCP does not translate gameplay intent into a control-specific function call.
+
+Control enumeration and the game's own binding text have been verified. Complete structured extraction into device,
+key/button and modifier fields still needs validation. Do not claim an unverified parser is already available. A binding
+is a relationship, not a promise that a control is eligible in the current context. The game retains its normal input
+arbitration, including multiple actions associated with one physical input.
+
+### Request and execution order
+
+The following field names are proposed protocol names, not registered production tool names:
+
+```json
+{
+  "operations": [
+    {
+      "controls": [
+        {
+          "device": "keyboard",
+          "key": "W"
+        }
+      ]
+    },
+    {
+      "controls": [
+        {
+          "device": "keyboard",
+          "key": "D"
+        },
+        {
+          "device": "keyboard",
+          "key": "S"
+        }
+      ],
+      "ticks": 60
+    }
+  ],
+  "stop_previous": false
+}
+```
+
+- `operations` is an ordered array. Each element describes one finite input step.
+- `controls` describes the keyboard keys and/or mouse buttons held together during that step. These are physical-input
+  descriptions, not semantic control IDs such as `mine`. Modifier keys can participate in the same combination.
+- `ticks` defaults to 1 and, when supplied, is a positive integer. It measures client game input ticks, not elapsed
+  wall-clock time or guaranteed authoritative movement/mining ticks. Repeated input-phase calls in the same tick do not
+  consume additional duration. Pause/stall handling must retain a safe cancellation/release path.
+- A step establishes its requested combination, holds it for its duration, and releases its inputs before the next step
+  starts. Repeated keys in consecutive steps are released and pressed again; a longer uninterrupted hold is one step
+  with a larger `ticks` value. SDL events themselves are sequential: the chord is a logical input combination, not a
+  claim of atomic event delivery. Modifier ordering and transient combinations need acceptance tests.
+- An empty `controls` array waits for that step's tick duration without holding bridge input.
+- An empty `operations` array with `stop_previous` false returns immediately without waiting behind older sequences.
+- The tool remains pending until its complete sequence, including final input release, finishes. Concurrent ordinary
+  sequence requests are serialized in delivery order rather than interleaving held inputs.
+
+The example holds W for one tick, releases it, then holds D and S together for 60 ticks and releases both. MCP does not
+interpret this as a particular movement direction or distance; the running game's bindings and context decide that.
+
+### Cancellation and replacement
+
+`stop_previous` defaults to false. When true, cancel all older unfinished input sequences for the attached client,
+including the running sequence and queued sequences. Release bridge-held inputs before starting this request's new
+sequence. Older pending tool calls complete with cancellation details. Cancellation must be serviceable while an older
+call is waiting; it cannot sit behind that sequence in the ordinary execution queue.
+
+An empty replacement is a stop-only request:
+
+```json
+{
+  "operations": [],
+  "stop_previous": true
+}
+```
+
+This request returns after cancellation and release have been processed, rather than taking the ordinary empty-array
+shortcut. Order cancellation and admission at a defined boundary so the replacement does not cancel itself or newer
+requests. Validate a request before applying its cancellation side effect.
+
+Stopping means releasing inputs owned by the bridge. It does not undo completed steps, cancel a crafting queue, stop
+an autonomous game/mod task, or force the whole character into an idle state. It must not release the user's own held
+inputs. Correct handling of human and bridge input on the same key/button requires explicit validation; SDL does not
+by itself establish separate ownership for them.
+
+### Completion, failures and lifetime
+
+Success means that the finite input sequence and its release completed. Queue admission or SDL event enqueue success
+alone is insufficient. Success does not prove server acceptance or a gameplay effect. Missing materials, an invalid
+build location or another normal game-rule no-op is not an input-tool error. The agent observes the resulting UI/world
+separately; multiplayer acceptance tests still assert authoritative effects and force full CRC checks.
+
+On an execution error, stop the remaining steps and release bridge-held input. Report the reason and the completed
+prefix, with the failing operation index and within-operation progress where known. Use explicitly documented indexing
+and distinguish completed ticks from the tick/phase in which failure was detected; do not fabricate exact timing when
+only partial progress is known. Cancellation reports partial progress in the same way. Report cleanup failure or an
+unknown final state explicitly. Already-produced game effects are not rolled back, and an uncertain sequence is never
+automatically replayed. Exact result field names remain an implementation detail.
+
+MCP owns protocol validation and work not yet admitted. The game resident receives each admitted finite sequence as a
+complete task and autonomously advances/releases it without MCP sending intermediate steps or a later release message.
+This small generic sequence executor does not perform gameplay planning. After MCP loss, admitted finite work still
+finishes or safely releases; replies remain nonblocking and unknown task IDs are discarded after reconnect. Explicit
+cancellation also reaches admitted work left by an earlier MCP session. World changes invalidate world-bound work and
+release bridge input instead of replaying it into another world.
+
+### Evidence and remaining validation
+
+The ordinary SDL-input experiment in
+[semantic-dispatch-access-research](temp/semantic-dispatch-access-research/findings.md) verified finite movement and
+mining with normal input processing and matching full client/server CRC checks. It did not establish a complete
+production sequence executor, simultaneous chords, cancellation ownership, or every device/input kind. Earlier tests
+that overrode matching, active-state or cursor getters do not establish those capabilities for this adapter.
+
+Next validation covers structured live bindings; ordered steps and modifiers; same-key step boundaries; finite holds;
+empty waits/no-ops; queued and active cancellation; replacement and stop-only requests; user-input coexistence; MCP
+loss;
+world teardown; and release completion. Mouse target placement/cached cursor state must use a verified normal event or
+game-method path. Wheel, analog/controller, pointer motion and text input need their own validated shapes; do not
+pretend
+all input kinds are holdable buttons. Direct UI selector operations remain separate and retain live eligibility checks.
 
 ## Current contract: one DOM and one selector model
 
@@ -303,7 +449,8 @@ traces do not establish that these queries or all map actions are implemented.
 The proposed overview operation describes the whole map region corresponding to the current screen, without internal
 machine details such as recipes, crafting progress or combinator settings. A requested region and observation scale may
 produce a coarser overview without changing the actual camera. Region/scale are observation parameters, not authority to
-inspect an otherwise unavailable area. Exact camera-to-world bounds and the visibility policy still need validation.
+inspect an otherwise unavailable area. Client camera-to-world bounds have since been sampled in normal and remote views;
+see the Linux gap investigation below. Full observation eligibility remains separate from camera geometry.
 
 The proposed detailed query has two independent parts:
 
@@ -409,9 +556,10 @@ MCP-side formatting/aggregation over adding game-side business logic. Exact read
 result
 limit, and observations across separate calls are not promised to describe the same tick.
 
-This section records a design supported by inspection of the installed 2.0.77 runtime API, not new live map-query
-acceptance
-tests. The excerpts are retained in [bundled-api.json](temp/map-observation-research/bundled-api.json). Online
+This section originally recorded an API-inspected design. The later Linux gap investigation adds live overlap/projection
+and chart-cache evidence on the server, plus client camera-transform checks; it does not certify an exhaustive map
+renderer or generic client query adapter. The excerpts are retained
+in [bundled-api.json](temp/map-observation-research/bundled-api.json). Online
 references:
 [LuaSurface](https://lua-api.factorio.com/latest/classes/LuaSurface.html),
 [LuaTile](https://lua-api.factorio.com/latest/classes/LuaTile.html), and
@@ -422,7 +570,8 @@ needed.
 ## World tools: shared contract, context-dependent execution
 
 The recommended public API does **not** duplicate normal-view and remote-view tools. Both use the same spatial
-selection, object projection and named-action vocabulary. The adapter must obtain valid current input and presentation
+selection, object projection and physical-input sequence vocabulary. The adapter must obtain valid current input and
+presentation
 context at execution time; this does not require branching on controller type for each control. The Windows live tests
 below demonstrate one shared dispatcher for the sampled controls. Delegating gameplay rules to the game is compatible
 with exposing context through observations. The action tool completes the finite input operation without interpreting
@@ -460,14 +609,15 @@ Recorded instruction addresses and PDB offsets are evidence for this build, neve
 
 ### A small tool surface with several observation granularities
 
-Keep the two read operations proposed above and add a shared semantic action operation. The following names are
-illustrative, not newly registered MCP tools:
+Keep the two read operations proposed above, add live binding discovery, and share the finite input sequence tool
+defined above. The following names are illustrative, not newly registered MCP tools:
 
 | Tool             | Selection and parameters                                                                                     | Returned meaning                                                                                                                                                                                             |
 |------------------|--------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `world_overview` | Current viewport by default; optional bounded region, cell size and content categories.                      | Context plus a spatial summary: terrain regions, resource/entity groups and supported chart overlays. Aggregate cells state their area, resolution and coverage; counts are not entity identities.           |
 | `world_query`    | Explicit point, tile cell, area, game identity or current selection; filters and requested field projection. | Exact typed objects and bounded related data, with geometry and identities sufficient for later targeting. A separate `hit_test` selection mode asks what the game would target in the current presentation. |
-| `world_action`   | Named game intent, typed target, optional semantic variant and a finite execution extent.                    | Empty successful result after finite input execution and release; tool execution errors remain explicit. No gameplay-effect verdict.                                                                         |
+| `input_bindings` | Current registered controls and effective bindings.                                                          | Binding observations for the agent; no guarantee of current action eligibility.                                                                                                                              |
+| `input`          | Ordered physical-input steps, finite tick durations and optional cancellation of older sequences.            | Completion after input release, or partial failure/cancellation details; no gameplay-effect verdict.                                                                                                         |
 
 Granularity has **two independent dimensions**. Spatial resolution controls whether a region is summarized as cells or
 enumerated as objects. Property projection controls whether an object contributes only identity/position or additional
@@ -554,7 +704,10 @@ player-equivalent visibility/field policy, chart-cache reader and complete overl
 research and live comparisons. The current static investigation does not establish pixel-equivalent structured output
 for every mod's arbitrary script-rendered graphics.
 
-### Actions should express controls, targets and finite gestures
+### Historical proposal: semantic controls, targets and finite gestures
+
+Superseded by **Current input contract: bindings and finite sequences**. The following proposal and experiments explain
+the explored alternatives; their semantic-only wire format and isolated-control requirements are no longer selected.
 
 The vocabulary is grounded in the installed controls, not invented gameplay verbs. The installed English labels are
 `build=Build` and `mine=Mine`; use these native IDs on the wire and the game's localized labels for presentation. Mine
@@ -597,15 +750,18 @@ release; the agent does not send modifier keycodes or promise to release a held 
 Preserve direct widget operations for the UI. Named controls complement widget activation/value editing and supported
 slot interactions; they do not replace current-tree widget targeting with screen coordinates.
 
-There is a precision limit to the tested named-binding route. The installed left-button default is shared by `build`,
+There is a precision limit to the earlier tested named-binding route. The installed left-button default is shared by
+`build`,
 `open-gui`, `select-for-blueprint`, `craft` and `pick-item`; E is shared by `open-character-gui` and `confirm-gui`, and
 Q by
 `pipette` and `clear-cursor`. `sendEvents` receives generated events, not an exclusive control identity, and the
 inspected
 dispatcher applies normal contextual consumption and handler ordering again. Consequently, invoking a named binding
-does not guarantee that only its namesake handler runs. Preserve that arbitration, including linked custom inputs,
-rather than bypassing it to manufacture an exclusive gameplay effect. An unbound control or unsupported binding shape
-is an adapter limit, not proof of a game-rule rejection. No new live binding-collision test was performed in this pass.
+does not guarantee that only its namesake handler runs. This is a limitation of that route, not the desired public
+semantic-control contract. The subsequent binding-independent investigation below supersedes the recommendation to
+preserve accidental shared-key arbitration. Preserve game context and simulation rules while isolating the requested
+control. An unbound control is not inherently unavailable to a semantic adapter. Explicitly linked custom inputs remain
+distinct from unrelated controls sharing a key and require separate verification.
 
 Use the game's named control meaning, such as build, mine, rotate, open, directional movement or selecting an area with
 the held tool. Targets are world coordinates on a surface, validated object selectors, or an area/drag endpoint as
@@ -657,8 +813,9 @@ Custom inputs and selection tools matter for mod compatibility. `PlayerInputSour
 control triggering, uses cursor context and constructs an InputAction. The installed CustomInputPrototype API includes
 `name`, `enabled`, `linked_game_control`, `consuming`, and `include_selected_prototype`. Discover named controls and
 held
-tool semantics rather than maintaining a mod-name allowlist. A native-control adapter must also verify linked custom
-inputs and consumption ordering; directly invoking a built-in handler can bypass a mod's linked input. Native prototype
+tool semantics rather than maintaining a mod-name allowlist. A native-control adapter must also verify explicitly linked
+custom inputs and their ordering; directly invoking a built-in handler can bypass a mod's linked input. Do not preserve
+unrelated physical-key consumption merely because it existed in the earlier event-synthesis route. Native prototype
 existence is not proof that a generic MCP executor supports its dispatch or completion. For arbitrary mod actions,
 completion can confirm dispatch and input release without claiming to understand the mod's eventual business outcome.
 
@@ -667,6 +824,393 @@ calling `CommonInputHandler` or `GameActionHandler` directly on one client is no
 access
 at a safe presentation phase also does not automatically authorize arbitrary world mutation there. World actions need
 their verified submission phase, game-owned release/cleanup, world-lifetime invalidation, and multiplayer acceptance.
+
+### Direct-registration investigation: call-only semantic dispatch
+
+The requirement during this investigation was to discover and invoke controls without interpreting their game meaning.
+An implementation
+that contains a `build -> PlayerInputSource::processBuild` association fails that requirement, even if the individual
+call works. Method-level experiments below establish execution mechanisms only. Function and ABI adapters for generic
+engine interfaces are distinct from hardcoded control-specific mappings.
+
+The game does have a generic registration mechanism. In this Linux build, `PlayerInputSource::processEvent` iterates
+`ActionsTriggeredByInputs` entries containing either a control-associated `std::function<bool()>` or a generic
+`std::function<bool(Event const&)>`. It performs binding matching before calling the first category; the second category
+can perform matching internally. Callback captures supply context such as the actual input-source receiver. A uniform
+handler interface can take parameters; the engine need not know each handler's business meaning to invoke it.
+
+The research adapter copies actual typed zero-argument callbacks at their registration boundary, groups them by the
+actual owner and control object, and preserves their order. Requests resolve an ID with the game's `findControlInput`,
+then invoke the associated chain at a verified input phase. There is no control-name-to-method table in this path.
+The constructor's generic registration itself establishes each association. The final capture observes only actual
+item construction; observing both vector expansion and item construction had initially duplicated some registrations.
+
+The current catalog contains 208 reverse-verified control IDs; 138 have captured zero-argument handlers, totaling 175
+callbacks. `build` has three, `open-gui` one, and `toggle-map` two. These are observed facts from this run, not a
+compiled
+allowlist. `move-right` has no captured callback of that kind and instead uses continuous input polling.
+
+Using the same generic dispatcher and only changing the supplied control ID, a non-admin client successfully:
+
+- Built a real chest at normal reach, consuming exactly one item.
+- Opened that chest while still holding building items, without consuming them or mining the target.
+- Entered remote view, then used the same `build` control to place an entity ghost, and returned to character control.
+- Submitted build with a server permission group denying it; the game rejected the mutation and retained the items.
+
+These cases generate no keyboard/mouse Event and do not override matching, active-state, inGui or cursor getter results.
+The fixture requested several identical physical bindings, but a later configuration readback found that spaced INI
+delimiters did not apply requested settings in this installation. Those additional bindings were not verified in this
+run and are not certified collision coverage. Authoritative server observations still confirm the sampled
+effects; the final corrected run passes a forced full CRC. Across this investigation, seven full-CRC markers match both
+peer logs. Three native fixtures pass separately. The callback's handled boolean is not a business-success result:
+permission rejection and invalid placement may still return handled.
+
+For call-chain understanding, the first build callback calls `processBuild`, which uses the game's builder and normal
+`PlayerInputSource::process(InputAction&&)` submission. The open-GUI callback uses `OpenGuiLogic::canOpenEntityGui` and
+normal submission. Those names describe inspected game behavior, not how MCP selects a handler.
+
+There are four unresolved production requirements:
+
+1. **Late handler discovery.** The catalog can be read after startup, but the handler associations in this experiment
+   were captured during construction. No callable collection accessor or complete game type definition was found for
+   the existing ActionsTriggeredByInputs collection. Private offsets visible in disassembly were not encoded. A
+   constructor-only solution does not satisfy attachment to an already-running world.
+2. **All dispatch families.** Generic Event handlers, outer context checks and registration eligibility flags are not
+   fully represented by the copied zero-argument chains. One inspected generic handler loops through custom controls,
+   performs matching, gathers context and creates a shared custom-input action. Thus mods need no individually known
+   native business handler. However, this routine still needs a matching Event; no post-match call-only entry for an
+   arbitrary custom control has been established. Explicit mod links and consumption must survive the replacement.
+3. **Continuous input.** A common registration interface does not imply that movement/hold behavior is an edge callback.
+   No new call-only finite hold/release mechanism is proven; overriding isActive remains excluded.
+4. **Target and context preparation.** These direct calls use the unmodified current cursor. Synchronized test setup
+   adjusts zoom to bring it within reach. No arbitrary-coordinate target setter, all-context eligibility or complete
+   client-state equivalence is claimed. CRC covers synchronized state, not every client-only interaction rule.
+
+The detailed [findings](temp/direct-control-call-research/findings.md) distinguish the accepted direction, native
+fixtures, successful generic cases, rejected approaches and missing access paths. This is a working subset and a
+verified engine mechanism, not a finished generic input executor or a change to the production MCP catalog.
+
+#### Follow-up: existing registrations and continuous-input access
+
+The next investigation traced all 187 PlayerInputSource constructor callback invocation symbols after attaching to an
+already-running world, without modifying input decisions. Ordinary test input was used only to measure the unmodified
+engine pipeline, not as the proposed semantic backend.
+
+- Idle observation across 333 ticks produced 333 sendStateChanges calls, 15,984 active-state predicate calls and no
+  events or registered callback invocations.
+- Holding D for 300 client input ticks produced exactly 300 authoritative walking ticks. Only two input events occurred;
+  the twelve generic Event handlers each ran twice. No zero-argument callback ran. The 335-tick observation window,
+  including final observation delay, contained 335 sendStateChanges calls and 15,784 active-state queries.
+- After verifying the configured mine binding, holding F8 for 180 client input ticks invoked the mine callback once,
+  with two input events and repeated polling. The server observed 179 active mining ticks and one mined item. The
+  admission interval is not relabeled as exact server execution duration.
+
+Thus **the engine does not execute every registered control callback every tick**. The inspected movement code reads
+active key/button/stick state directly; mining combines an edge callback with continued polling. This is compatible
+with arbitrary mod custom-input events being handled by a separate common Event callback. Mod extensibility does not
+establish a uniform callable row for every native control.
+
+Two promising named-control entry points were inspected: InputEventSender::tapControl and LuaSimulation::luaControlDown.
+Both eventually call ControlInputValue::eventsToTriggerThis and send the resulting physical-binding events. They do not
+provide the required independent post-binding activation. Located ControlInputValue setters configure bindings rather
+than providing a verified held-state setter by control ID. Repeating callbacks, temporarily rebinding controls or
+reintroducing isActive overrides is not an accepted resolution.
+
+For existing callback access, this installed Linux binary exposes method symbols but no verified collection accessor.
+Its 565 enumerated DWARF units contain no game-named source units, and GDB cannot resolve complete PlayerInputSource,
+ActionsTriggeredByInputs, Item, ControlInputValue, InputState or Event definitions. Reconstructing another input source
+is not reading the existing one; its connection operation allocates state and can submit actions. No fake object,
+borrowed Windows layout or private-offset reader was used. These are concrete limitations of the investigated paths,
+not proof that every possible entry point has been exhausted.
+
+This pass also identified a fixture defect: spaced ConfigParser INI delimiters did not apply the requested settings.
+Original game getters reported the default mine binding. Compact delimiters plus a client restart produced the intended
+F8 binding and verified shared left-button bindings for build/rotate/open-gui. Previous changed-binding claims based
+only on spaced files are therefore qualified; their observed gameplay effects remain evidence. The first failed mining
+stimulus is retained as a negative configuration test.
+
+The [follow-up findings](temp/semantic-dispatch-access-research/findings.md) retain the inspected candidates, four live
+observations, configuration readback, native release fixture and two full client/server CRC checks. No complete
+late-table reader, generic post-match mod input entry or binding-independent finite hold setter was established. The
+production MCP is unchanged; the general semantic-input backend remains unresolved under the current constraints.
+
+### Binding-independent semantic activation: Linux live evidence
+
+Historical experiment: the active-state/getter substitution in this section is superseded by the call-only constraint.
+Its synchronization observations remain evidence for those exact experiments, not approval of that adapter design.
+The later INI readback finding also qualifies the intended collision/unbound configurations described here: without
+runtime binding confirmation, those labels do not establish changed-binding coverage. Positive game effects remain
+observations; do not infer that build was actually unbound from the generated configuration alone.
+
+The user identified a mismatch in intent -> current binding -> event synthesis: `build` becomes a physical key/button,
+and event dispatch then interprets that key again, possibly as several other controls. The adapter should retain the
+control identity instead. This changes the input contract; it does not require changing game rules or bypassing normal
+multiplayer submission.
+
+Two routes were investigated against the installed Linux 2.0.77 developer symbols:
+
+| Route                                                                                              | Result                                                                                                                     | Limitation                                                                                                                                                                                |
+|----------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Call PlayerInputSource::processBuild at the input phase                                            | A near chest was built and synchronized without sending a key/button event, with both colliding and absent build bindings. | The method still reads active control values for transient drag state. Calling it directly also skips checks/arbitration in its caller; it is not the preferred universal input boundary. |
+| Supply the requested control's active state only during normal PlayerInputSource::sendStateChanges | Build followed the game's ordinary polling branches, builder and synchronized submission; finite move-right also worked.   | Verified for these polling controls. Event-driven controls, analog inputs, linked custom inputs and all controller modes remain separate work.                                            |
+
+The candidate selected at that stage was the second route; it is no longer accepted:
+
+```text
+native control ID + target + finite extent
+  -> resolve the current registered ControlInput by ID
+  -> acquire its actual input-value receivers through the game's own methods
+  -> for this operation's game input phase and thread, supply semantic activation
+     for the requested control and no activation for unrelated controls
+  -> let normal PlayerInputSource processing construct and submit InputActions
+  -> remove the override and let the normal release phase execute
+  -> acknowledge finite input completion
+```
+
+The optimized Linux sendStateChanges body inlines many ControlInput-level tests and directly calls
+ControlInputValue::isActive. Hooking only ControlInput::isActive would therefore miss them. The experiment resolved
+findControlInput and called the game's isActive method while recording its actual lower-level receivers. This obtains
+the selected control's own primary/alternative value objects without private field offsets. Two controls with identical
+key settings still had separate receivers, so only build's receivers were activated. An empty binding still supplied
+receivers and did not prevent semantic activation in the tested polling branch.
+
+The native wrappers scope both activation and the game cursor-position getter to the executing thread and input phase.
+MapPosition values are produced by the game's Lua position parser in a private test VM, rather than hand-encoded fixed
+point fields. The experiment neither constructs InputAction payloads nor calls CommonInputHandler/GameActionHandler to
+mutate the client world. It does not inject keyboard/mouse events or alter the running game's bindings. The alternative
+configuration files used to establish colliding/unbound test conditions are fixture inputs, not part of the adapter.
+
+#### Actual checks
+
+One non-admin client at a time connected to the same isolated local server. The collision configuration bound build,
+mine and open-character-gui to mouse-button-1. The second launch left build unbound while retaining those other
+bindings.
+The client used the ordinary installation, mod set and asset paths; temporary launcher instrumentation kept its window
+unmapped from startup. No OS pointer motion, focus activation or restoration was performed. This launcher behavior is
+test infrastructure, not a product requirement.
+
+| Case                                               | Authoritative observation                                                                                                                         |
+|----------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------|
+| Near build with shared binding                     | One iron chest built; one cursor item consumed; inventory GUI stayed closed.                                                                      |
+| Near build with no build binding                   | Same result, through both direct-method comparison and normal polling.                                                                            |
+| Too-distant real build                             | No construction or item consumption.                                                                                                              |
+| Occupied build location                            | No extra construction or item consumption.                                                                                                        |
+| Build permission denied                            | No construction or item consumption.                                                                                                              |
+| Empty cursor                                       | No construction; the polling path did not enter processBuild.                                                                                     |
+| Finite move-right through the same polling adapter | Authoritative x advanced from 0 to 0.1484375; y stayed 0. A later sample confirmed no continued movement. No build or inventory opening occurred. |
+
+Native observations recorded PlayerInputSource::process and NetworkInputListener::actionPerformed on accepted paths.
+Those call counts include supporting input actions and are not a one-to-one completion correlation. Server assertions
+and forced full client/server CRC checks independently passed. A native fixture separately checked scoped overrides,
+admission exclusion, restoration and completion after the release phase. The final thread-scoped build variant also
+passed a focused live check and full CRC. These are research results, not production MCP acceptance.
+
+#### Boundaries of the initial polling experiment
+
+The following limits describe the first experiment. The context/duration follow-up below adds live evidence for several
+of these cases; remaining production gaps are listed separately there.
+
+- The registered control catalog is broader than the verified polling adapter. No universal public `execute(control)`
+  binary API was established. Event-driven registered callbacks need a separate semantic dispatch adapter; invoking
+  arbitrary captured closures or assuming their ABI would be unsafe.
+- The one-phase experiment suppresses unrelated polling inputs within its scope and restores normal evaluation outside
+  it. Concurrent human input, world teardown, longer finite gestures and crash/reconnect behavior need production
+  validation. The temporary single-slot research request mechanism is not a production scheduler.
+- Explicit linked_game_control extensions are not accidental key collisions. The official custom-input model links
+  those controls intentionally and also defines consumption/enablement. This polling experiment does not establish that
+  their Lua events fire or that their ordering is preserved. Do not silently advertise full mod input compatibility.
+- The new route does not inherit the earlier Windows event-route acceptance matrix. Remote/chart modes, held selection
+  tools, editor/cutscene contexts and mod-defined actions require their own tests on the new route. Its implementation
+  is internal and build-sensitive; symbols and optimized ABIs must be resolved and validated per executable.
+- Correct dispatch still allows a legitimate game no-op. Keep the existing finite-input completion contract: do not
+  interpret a local handler bool or the adapter's completion as a successful build or server acknowledgement.
+
+See [the experiment record](temp/exclusive-input-research/findings.md),
+[live results](temp/exclusive-input-research/live-results.json),
+[movement observations](temp/exclusive-input-research/movement.json), and
+[retained verification](temp/exclusive-input-research/verified-results.json).
+
+### Context, ordered handlers and finite duration: Linux follow-up
+
+Historical experiment: target/active-state overrides used here are not part of the current accepted design. See the
+later direct-registration investigation for calls without those substitutions.
+
+A further non-admin Linux client/local-server experiment simulated control discovery and semantic submission through a
+temporary native probe. It did not add production MCP tools. Shared fixture bindings assigned build, mine, open-gui and
+open-character-gui to the same mouse button; the tested submissions never converted the requested control back into that
+button.
+
+The live registry contained **208 controls: 194 native and 14 bundled custom inputs**. All captured IDs resolved to
+actual
+current registry entries. Linux exposes the named function-local registry vector, while its getter body is inlined in
+this executable. The experiment used typed standard-library operations and actual constructor arguments, not private
+ControlInput field offsets. Constructor capture demonstrates the vocabulary, but is not yet a complete late-attach
+acquisition solution. Discovery does not imply every listed control has a verified executor.
+
+#### Context remains part of the game's control semantics
+
+| Semantic request and context                                          | Independently observed result                                                                                                                               |
+|-----------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `build`, character view, real building in cursor, empty location      | Real building placed and cursor item consumed.                                                                                                              |
+| `build`, character view, building in cursor, existing chest at target | No extra building, item consumption or chest opening.                                                                                                       |
+| `open-gui`, same occupied target, 20 iron chests still in cursor      | Chest GUI opened; all 20 cursor items remained; no build handler ran. Repeated successfully with the final ordered callback adapter.                        |
+| `build`, remote view, iron-chest cursor ghost                         | An iron-chest entity ghost was placed, including a visible target 40 tiles from the character. The adapter did not translate the control to build-ghost.    |
+| `open-gui`, remote view, cursor ghost still held                      | Existing chest GUI opened and the cursor ghost remained.                                                                                                    |
+| `build`, character view, actual blueprint in cursor                   | Blueprint's chest ghost placed; blueprint remained in the cursor.                                                                                           |
+| `build-ghost`, character view, real iron chest in cursor              | Chest ghost placed without consuming the held chest. This is a separate explicit control.                                                                   |
+| `mine` held 180 ticks, nearby chest in character view                 | Chest dismantled and item recovered. Mining itself ended after 25 server ticks because the target was gone. The finite input interval still ended normally. |
+| `mine` held 180 ticks, chest in remote view                           | Existing chest marked for deconstruction rather than dismantled by the character.                                                                           |
+| `mine` held 180 ticks, reachable ore in character view                | Exactly 180 server mining ticks; one ore obtained, deposit 1000 -> 999, mining released afterward.                                                          |
+| `move-right` held 300 ticks                                           | Exactly 300 server walking ticks; x 0 -> 44.53125, y unchanged; stopped without another input request.                                                      |
+
+Thus an agent may use the same `build` control in ordinary and remote views. It still needs observations of the current
+view/controller and cursor to predict the result. Remote-view cursor-ghost placement is not synonymous with using a
+blueprint item. The adapter forwards the selected control; it does not promise to construct a real building in every
+context or silently change control IDs to obtain a desired gameplay outcome.
+
+The held-building/open-chest result directly answers the shared-key concern: the semantic open action can be selected
+independently even when a physical click would be interpreted as building. Other game eligibility checks remain intact.
+For example, the test character had entity reach 10 but resource reach 2.7. Mining at (2.5, 2.5) did nothing; mining at
+(1.5, 0.5) succeeded. The adapter did not encode or override those distances.
+
+#### One control may have several handlers
+
+The observed PlayerInputSource registration contained three ordered callbacks for build, two for rotate, eleven for
+confirm-gui and eighteen for toggle-menu. A control-ID -> single callback map is incorrect. An intermediate adapter
+retained only the last callback and failed to rotate a held belt. Preserving the matching callback chain in registration
+order, stopping when handled, made the subsequently built belt rotate from direction 0 to direction 4. Callback lookup
+also needs the actual PlayerInputSource owner; the last constructed source for an ID need not be the active client
+source.
+The native C++ fixture verifies typed callback copying, ordered fallback and stop-on-handled independently of the game.
+
+Additional live checks verified quick-bar selection, clear-cursor, pipette, drop-cursor and a 60-tick pick-items hold.
+Opening inventory with open-character-gui for a finite 180-tick hold produced one open operation, not a toggle every
+tick.
+A second open-character-gui did not close inventory; confirm-gui did close it, and also closed the chest GUI. Semantic
+controls preserve these distinctions even when human key bindings make them appear to be one key's context-sensitive
+use.
+The event callback is an activation edge; holding state and repeat behavior must not be implemented by blindly calling
+every callback once per tick.
+
+#### World targeting and tick measurement
+
+A world target must establish world input context as well as a position. The first remote-view trials were no-ops
+because
+the existing UI hover context still affected InputState::inGui. The successful probe captures the actual GUI root from
+Gui::logic -> Gui::recursiveDoLogic and scopes getWidgetUnderMouse to that root during world-target processing. Map
+positions are supplied through the verified game getters. Other inGui logic remains game code; no global always-false
+inGui hook or OS pointer motion is used. Complete modal and widget-target handling is still a production concern.
+
+The working finite scheduler observes MapTick at InputSource::flushActions, supplies activation over the finite tick
+interval, and processes release before the corresponding flush. The 300-tick movement trial contained 600 polling calls;
+counting polls would have produced the wrong duration. The initial InputSource::nextTick hook did not enclose the
+relevant
+calls in this optimized build and was discarded. Server on_tick auditing independently checks effective durations, so a
+local input timestamp is not confused with the later server application tick.
+
+The final test admitted move-right for 300 ticks, made the temporary resident independent of its instrumentation
+session,
+and **disconnected the research IPC**. With game speed 0.5, the character still walked exactly 300 server ticks, moved
+44.53125 tiles, and stopped after approximately 10.5 seconds of observed elapsed time. A later sample remained stopped.
+No subsequent control or release message was sent. Full CRC passed afterward. This demonstrates finite execution without
+the external submitter; it is not a production MCP crash/reconnect or world-teardown acceptance test.
+
+The intended common request remains a semantic control, finite tick duration, and optional target, for example:
+
+```json
+{
+  "control": "mine",
+  "ticks": 180,
+  "target": {
+    "kind": "world",
+    "position": {
+      "x": 1.5,
+      "y": 0.5
+    }
+  }
+}
+```
+
+The backend's polling/ordered-callback distinction is not an agent-facing mode. Do not reject a duration merely because
+MCP believes a control should be instant. Conversely, a held control is not a promise of one completed gameplay action
+per tick. A completion acknowledges the finite input and release, not a successful build or a server-side task result.
+
+#### Verification and remaining gaps
+
+Forced full client/server CRC checks passed for the context group, ordered callback group and detached finite-input
+test.
+Two native fixtures separately passed. These are research validations; the production MCP was not rebuilt or refactored.
+
+The discarded early callback variant crashed one client on clear-cursor after probe reloads with a control-only callback
+lookup. Owner association and probe lifetime both changed afterward, so the precise cause was not independently
+isolated.
+A diagnostic also stalled a client by symbolizing addresses inside a hot hook and caused a disconnect; it was removed.
+Both failures are retained in the evidence and are not hidden by the later successful cases.
+
+This earlier callback adapter is not an all-control executor. The later Linux gap investigation avoided constructor
+capture by overriding matching in the original dispatcher; that substitution is now rejected. Its custom/linked input
+and lifecycle evidence does not solve late attachment under the current call-only constraint. Analog/repeat coverage
+and production queue/thread/lifetime safety remain incomplete. Target-sensitive tests used a preparation interval; that
+must not
+become a production assumption that a fixed delay establishes selection or synchronization. Technology opening was
+submitted but its local UI effect was not independently inspected in this pass and is not counted as newly validated.
+
+See [the detailed findings](temp/semantic-control-context-research/findings.md),
+[control discovery](temp/semantic-control-context-research/controls.json),
+[live cases](temp/semantic-control-context-research/results.json),
+[ordered callback chains](temp/semantic-control-context-research/callback-chains.json),
+[disconnected finite execution](temp/semantic-control-context-research/detached-movement.json), and
+[evidence verification](temp/semantic-control-context-research/verified-results.json).
+
+### Mixed entity GUI and world input: Linux follow-up
+
+A non-admin client on the local 2.0.77 server opened an iron chest through semantic `open-gui`, then submitted
+world-targeted `mine` for 180 ticks without first closing the window. The experiment reused the finite native input
+adapter above. It did not implement new production MCP tools or mutate the target through a server command.
+
+| Open UI and semantic world target                                | Authoritative world result                                      | Client UI result                                                                               |
+|------------------------------------------------------------------|-----------------------------------------------------------------|------------------------------------------------------------------------------------------------|
+| Character view: chest open; mine a separate nearby stone furnace | Furnace removed; one entity mined, with 25 actual mining ticks. | The same chest remained open throughout every audited tick; its 17 iron plates were unchanged. |
+| Character view: chest open; mine that chest itself               | Chest and its contents recovered by the character.              | `player.opened` cleared and the visible ContainerGui disappeared automatically.                |
+| Remote view: chest open; mine a separate assembling machine      | Machine remained and was marked for deconstruction.             | The same chest remained open throughout every audited tick.                                    |
+| Remote view: chest open; mine that chest itself                  | Chest remained and was marked for deconstruction.               | Its window remained open; marking is not removal.                                              |
+| Explicit `confirm-gui` afterward                                 | Marked chest remained in the world.                             | Chest UI closed; a normal on_gui_closed event was recorded.                                    |
+
+The ordinary open-chest snapshot contained ContainerGui, InventoryGui and InventoryWithBarGui. The visible tree had
+288 widgets both before and after mining the separate furnace. After mining the opened chest, it returned to 142 widgets
+and no ContainerGui. Remote snapshots contained both RemoteControllerView::FrameAround and ContainerGui; all 261 visible
+widgets remained after either deconstruction-marking test. These are current-tree snapshots through the game's
+`Widget::getWidgetRecursively` at the captured GUI traversal phase, not stale object references or screenshot guesses.
+The helper only uses standard ABI RTTI to name widget types; it does not reconstruct game fields.
+
+The server scenario recorded opened-GUI state on every tick, GUI open/close events, mining ticks and mining events. For
+all three cases that preserved the chest window, the increase in opened ticks exactly equaled elapsed server ticks,
+and there were no intervening open/close events. Thus the retained window is not merely a matching before/after snapshot
+of a close/reopen sequence. Entity identity and final GUI state were also checked independently.
+
+One lifecycle caveat was directly observed: mining away the opened chest cleared opened state and removed the visible
+window **without an on_gui_closed event** in this run. The same handler did receive the later explicit confirm-gui
+close.
+Do not use that event as the sole UI-validity oracle. Resolve selectors in the current tree and re-check current widget
+eligibility at the operation's safe phase; this experiment does not change the stateless selector design.
+
+This demonstrates that an ordinary entity GUI and a semantic world-targeted operation can coexist. The adapter
+establishes
+world hover context only during its input scope, as described above; it does not close the GUI, globally disable inGui,
+or move the OS pointer. This result does not imply arbitrary modal dialogs, text-entry focus or every mod GUI permit
+world input. It also does not claim that a physical click over a chest slot is a world action. GUI selector targets and
+world positions remain distinct input targets, with game rules deciding the consequences.
+
+Two native fixtures passed before launch, including the typed visible-tree callback boundary. Seven live cases passed
+34 saved-evidence assertions and a forced full client/server CRC check. The client remained non-admin. The temporary
+probe was used instead of the unreworked production MCP; server commands only prepared and inspected fixtures and
+requested CRC. All experiment-owned processes were stopped afterward.
+
+See [mixed-test findings](temp/ui-world-input-mixed-research/findings.md),
+[live cases](temp/ui-world-input-mixed-research/results.json),
+[visible chest snapshot after mining](temp/ui-world-input-mixed-research/ui-after-other-machine-mining.json),
+[verification](temp/ui-world-input-mixed-research/verified-results.json), and
+[full CRC](temp/ui-world-input-mixed-research/crc.json).
 
 ### Unified discovery of registered controls
 
@@ -684,7 +1228,9 @@ This is supported by registration and consumer code, not only a method name. Bot
 constructors append their receiver to the same function-local static vector. ControlSettings constructs native controls
 and loops over the custom-input prototypes; postSetup resolves linked controls. The game's own keybinding-settings UI
 reads this list before filtering it. `findControlInput` searches the same list by the configuration key used as the
-native control ID. The getter itself has no Map/player/Lua dependency.
+native control ID. The registry itself has no Map/player/Lua dependency. The callable getter and field extraction
+described here are Windows evidence; the later Linux gap investigation uses the symbol-resolved static vector and
+verified localization lookup arguments because this Linux build has no separately callable getter.
 
 Two sequential Windows launches verified main-menu and loaded-save discovery using the normal user configuration and
 caches, with a temporary mod directory. There was one graphical client at a time, with foreground activation suppressed
@@ -712,8 +1258,9 @@ Important metadata distinctions are established by these samples and the dispatc
 not check custom-input enablement. The native `triggeredBy` and `isActive` paths do follow linkedGameControl. Therefore,
 retain each custom control's ID and meaning, while separately resolving and reporting its binding source. An empty own
 binding is not necessarily an unavailable input. This corrects any earlier implication that checking one binding getter
-alone suffices. Following the linked source for eventual input still preserves normal shared dispatch; it does not
-create an exclusive call to the mod function.
+alone suffices. In the earlier event-synthesis route, following the linked source preserves shared dispatch and does not
+create an exclusive call to the mod function. The binding-independent route must handle this explicit semantic link
+separately; the registry observation alone does not implement that dispatch.
 
 The discovery contract should expose the registered vocabulary and relevant observed metadata, not a blanket
 can_execute promise. Actual gameplay eligibility remains with the game. Return IDs even when labels/descriptions are
@@ -806,7 +1353,10 @@ See [the live experiment and its limitations](temp/world-input-tests/findings.md
 fixture, PDB identity, disassembly and negative evidence are retained there. Both game processes and the temporary
 bridge were stopped after testing.
 
-### Design decision and remaining verification
+### Historical semantic-input decision and remaining verification
+
+The named-intent input contract in this section is superseded by the current finite physical-input sequence contract.
+The distinction between input completion and gameplay effects remains applicable.
 
 Unify tools by **operation semantics**, not by controller class. Keep current input-context acquisition and native
 target routing inside the adapter; let the game choose controller-specific behavior. Expose context and actual state
@@ -850,6 +1400,149 @@ Verify movement/panning separately. Pure hit testing
 must be distinguished from selection updates that raise events. Continue server-side assertions and full CRC for new
 mutation paths. The earlier Windows static-analysis pass did not start a game; the dated follow-up above did, and its
 scope must not be generalized to every controller, mod or parameter combination.
+
+## Low-level gap investigation: Linux results
+
+The follow-up under [interaction-gap-research](temp/interaction-gap-research/findings.md) tests the gaps in observation,
+fresh UI input and semantic world input. It used two sequential non-admin clients and local headless servers, with one
+client at a time. No OS input or foreground activation was used. This section supersedes earlier statements that these
+specific paths have only been designed; it does not declare the production MCP refactored or all control families ready.
+
+### Fresh UI input and the unsafe-setter distinction
+
+Fresh game-internal SDL events successfully edited text, clicked a text button, toggled a checkbox, opened a dropdown,
+selected an option, dragged a slider and scrolled it. The game constructed its own Event/agui event objects and handled
+normal routing. Server GUI values and events confirmed the effects. The slider changed 50 -> 77 on drag and 77 -> 78 on
+wheel input. No historical MouseEvent had to be retained. This establishes a fresh-event route for these families.
+
+Direct method invocation is not automatically an equivalent route. TextBox::editText accepted nonnumeric text in a
+numeric field and modified a read-only field; those changes even synchronized successfully. Through fresh text events,
+the same constraints were respected. DropDown::setSelectedIndex alone did not submit an authoritative selection.
+Therefore, neither a setter's name nor a successful CRC is sufficient evidence of player-equivalent UI semantics.
+The valid eight-character text entry generated eight GUI text-change events: request/event correlation is not
+universally
+one-to-one.
+
+The tested event route follows normal geometry. It does not yet implement intent-directed activation of every clipped or
+covered widget. It also resolves the target before queued dispatch; a production selector must be resolved and checked
+again at the actual safe execution boundary, because focus, layout or widget lifetime can change. Complete modifier,
+selection/IME, long-text, right-click, inventory-slot and drag ownership coverage is not established by the sample set.
+Disabled/unloaded targets must still be rejected; these structural checks are not game-business policy.
+
+The native checked/switch/progress, full modal-stack bootstrap and native/logical identity gaps in the extended reader
+table remain unresolved under the no-private-offset requirement. Prior complete DWARF-unit inspection and
+symbol/painting
+analysis remain the evidence for those negative results. Normal game event routing can enforce the modal rules during
+an action without providing a pure modal-state reader. It does not make unknown snapshot fields known. Special tooltip
+and embedded-preview decoding remains outside the agreed first-version requirement.
+
+### Original semantic dispatch, including mod controls
+
+Historical experiment: this route modifies input matching and is explicitly excluded by the latest design constraint.
+Retain its findings about linked controls and generic handlers when evaluating a replacement; do not ship its overrides.
+
+A probe installed after the world already existed now executes the original PlayerInputSource::processEvent. It resolves
+the requested ControlInput, observes which actual ControlInputValue receivers its original triggeredBy consults, then
+scopes matching to those receivers during the original dispatcher call. This preserves generic Event handlers, ordering,
+explicit linked controls and consumption. It avoids the earlier requirement to capture zero-argument callbacks during
+construction. No requested control is translated into its configured physical binding.
+
+A temporary mod verified the important distinctions:
+
+| Input                                               | Server-observed result                                                                                               |
+|-----------------------------------------------------|----------------------------------------------------------------------------------------------------------------------|
+| Custom input with no key binding                    | Its custom event fired once.                                                                                         |
+| Two custom inputs bound to the same key combination | Requesting either triggered only that input.                                                                         |
+| Native rotate with a linked custom input            | Both the native rotation and linked mod event occurred.                                                              |
+| Reverse-rotate consumed by linked custom input      | Mod event occurred; native rotation did not. Subsequent construction retained the prior direction.                   |
+| The linked custom control requested directly        | It also activated the associated native rotation. This is the game's explicit link, not an accidental key collision. |
+
+Native give-blueprint, clear-cursor, inventory and technology open/close were also exercised. The native consumption
+boolean can be false even when a custom event reached the server. It must not be presented as a universal operation
+success result. Dispatch completion, finite input release and synchronized effects are separate observations.
+
+The test carrier remains experimental: it identifies a pending keyboard event and scopes matching at the player
+handler. Exact correlation in the presence of simultaneous real input, effects in other/global input chains, full
+cleanup and target preparation still need a production adapter. The proof is that original semantic dispatch is viable,
+not that this particular temporary carrier is ready to ship.
+
+### Linux discovery after startup
+
+The late-installed Linux reader recovered and reverse-verified all **213 current controls** in the fixture: 194 native
+and 19 custom. It reads the symbol-resolved registry through the standard std::vector ABI and calls the game's own
+getLocalisedNameResult. A thread-scoped native wrapper observes the real localization lookup key; an extracted ID is
+accepted only when findControlInput returns the same registry object. Translated labels come from the original getter.
+This needs neither constructor history nor private ControlInput field offsets. The same 213 controls were recovered
+again after world exit in the main menu.
+
+The original metadata-only fallback was incomplete: the bundled LinkedGameControl enum omits look, move and
+normal-button-click. The verified registry reader includes them. An unknown translation is harmless when the ID still
+passes reverse lookup. This does not justify interpreting arbitrary translated labels or enumerating locale files as a
+control registry.
+
+A custom input with its own explicit successfully translated localised_name can bypass that fallback lookup branch;
+use official custom-input prototype names plus game reverse lookup for those entries. That branch was not exercised by
+this fixture. Category/usage metadata and reconstruction during prototype/settings reload remain separate coverage
+items. Windows registry evidence above uses its own PDB/ABI path; it is not a Linux layout description.
+
+### Holds, concurrent input and lifecycle
+
+A 180-tick polling-only hold of a custom input generated no new custom event. Held state alone does not generate a press
+edge, and a duration must not be translated into one synthetic press per tick. The intended finite gesture combines the
+relevant press/held/release phases and leaves repeat semantics to the game. Do not reject long durations based on the
+unmodified game's business rules. Analog move/look also read a vector; a boolean plus duration is not a universal
+representation for those controls. Analog submission was inspected but not live-tested.
+
+With ordinary W input held through the game's internal input path, an exclusive 120-tick rightward task suppressed
+northward movement; northward movement resumed when the finite task ended. W release then stopped it. This confirms
+restoration, but the tested coexistence policy is exclusive during the task, not additive human/MCP input.
+
+A 3000-tick movement interrupted by a server kick exposed a real cleanup gap in the old probe. The client initially
+retained its world/HUD under the disconnect dialog. Clicking its localized Leave game button through the fresh UI route
+then reached MainMenuGui. The native finite task remained pending even after that actual world unload. Production must
+invalidate world/source-bound native tasks and release bridge-owned state explicitly; VM destruction alone is not
+sufficient. Disconnect, world unload and ordinary MCP connection loss are distinct events. This was a negative lifecycle
+test, not a successful cleanup implementation.
+
+### Map transforms, chart memory and API-shaped reads
+
+Actual client GameView conversions round-tripped all four display corners and the center at 3840x2160:
+
+| Context                             | Map rectangle                |
+|-------------------------------------|------------------------------|
+| Character centered at (0,0), zoom 1 | (-60,-33.75) to (60,33.75)   |
+| Character centered at (0,0), zoom 2 | (-30,-16.875) to (30,16.875) |
+| Remote centered at (20,10), zoom 1  | (-40,-23.75) to (80,43.75)   |
+
+The same underlying transform remained callable with the technology screen open, even though its native tree replaced
+the ordinary HUD. A mathematical camera conversion therefore does not establish that the world is visibly presented.
+Report presentation context separately from world-query availability. General display/UI scaling is not certified by
+this single-resolution test.
+
+The installed official LuaForce.get_chunk_chart returns actual cached RGB565 data, or nil for an uncharted chunk. In a
+corrected fogged-chunk test, unseen terrain changed in the live world while those cached bytes stayed unchanged. This is
+a useful stable chart-read path. It is raster information, not semantic historical entity identities/settings or all
+chart overlays. Never report a live hidden-world query as the player's remembered chart contents.
+
+At a paved rail coordinate, a query returned a concrete tile with hidden_tile=grass-1 plus a rail and a locomotive as
+sibling entities. A bounded attribute projector preserved API object classes/references and distinguished a supported
+nil from a failed inapplicable attribute read. These queries were checked on the authoritative server; client viewport
+calls were checked separately. They are evidence for the observation model, not a newly implemented universal client
+serializer. Native cursor selection, collision queries and complete rendering coverage remain different contracts.
+
+### Evidence and remaining boundary
+
+The detailed findings link the scripts, positive and negative cases, snapshots and peer logs under
+[temp/interaction-gap-research](temp/interaction-gap-research/findings.md). Eight native ABI/event fixtures passed
+separately from real-game acceptance. The retained evidence verifier passes 57 assertions and matches eight full-CRC
+markers in both client and server logs, covering the tested groups. No new screenshot
+comparison or Windows rerun was performed; earlier screenshot/Windows evidence retains its original scope.
+
+The remaining issues are now concrete: unsupported exact native widget properties; a generic native/logical identity
+join; complete existing modal/clipping observation; final-phase target-directed UI input and carrier ownership; analog
+and all-family input coverage; world/input lifetime cleanup; and honest separation of live objects from cached chart
+imagery. These must not be replaced with guessed values, private offsets, business-specific workarounds or claims that
+all low-level interaction is already complete.
 
 ## Evidence and scope
 
@@ -1525,15 +2218,17 @@ The temporary probe still has explicit bounds and synchronous game-thread work; 
 These are preserved from the earlier Windows investigation and existing project research. They were not newly validated
 as a Linux semantic-input implementation in this task.
 
-### Named controls and bindings
+### Named controls and bindings: earlier event route
 
 `LuaSimulation::luaControlDown` was investigated as an example of the game's own route from a named `ControlInput` to
 active-input-method values, `eventsToTriggerThis`, and `InputEventSender::sendEvents`. `LuaSimulation` itself is not an
 ordinary-world mod API and must not be instantiated by guessing an object layout.
 
-The useful principle is to resolve the current named control and preserve normal routing, custom-input consumption,
-focus and modifiers. A missing binding needs explicit handling. A shortcut's associated input does not by itself prove
-that dispatching the shortcut and dispatching that input have identical mod-event semantics.
+The retained principle is to preserve the game's input context and synchronized path. Under the current contract, the
+agent explicitly chooses physical inputs after reading bindings; shared-key arbitration is intended game behavior.
+MCP no longer promises isolated semantic activation or access to an unbound control through this input tool. Explicit
+linked custom inputs still need validation. A shortcut's associated input does not by itself prove that dispatching the
+shortcut and dispatching that input have identical mod-event semantics.
 
 ### Widget dispatch is not a generic click recipe
 
@@ -1546,8 +2241,10 @@ Checkboxes required an appropriate enter/down/up/leave sequence in that experime
 than click alone. Some controls generate click during down, so blindly adding a second click can duplicate an operation.
 Inventory slots and quickbar controls may read current game input state beyond fields in a supplied event.
 
-The earlier probe copied a real event using `MouseEvent::copyWithNewSource`; it did not establish safe fresh-event
-construction for production. Modifier handling, control-local coordinates, ownership, finite input release and teardown
+The earlier probe copied a real event using `MouseEvent::copyWithNewSource`. The later Linux gap investigation
+establishes fresh game-internal SDL events for text, button, checkbox, dropdown, slider drag and wheel input; it does
+not establish a universal target-directed executor. Modifier handling, control-local coordinates, ownership, finite
+input release and teardown
 must be verified. Calling a registered closure directly or raising an arbitrary Lua GUI event is not equivalent to
 normal game input.
 
@@ -1717,26 +2414,53 @@ input, synchronization and safe-phase validation listed below. No new MCP tool i
 
 ## Remaining work before production integration
 
-1. Integrate the verified Windows foreground logic-return boundary for both observation and supported actions, and
-   validate the corresponding Linux call chain, ABI and worker synchronization across menus, pause, connection/loading
-   and world transitions. Reacquire the current root for every operation; do not replace this with
-   one-time capture, a root-address assumption or arbitrary-GUI selection. Separate UI readiness from world readiness.
-2. Integrate unified full/filtered DOM reads and path-based actions with current-root discovery and same-phase dispatch.
-   Validate
-   production limits and error schemas. Native/logical identity association remains a separate observation problem.
-3. Resolve the remaining native checked/switch/progress properties, full modal bootstrap, native/logical identity and
-   specialized render/tooltip observations described in the extended gap table. Preserve the now-verified quantities,
-   quality, visible traversal, point hit tests, toggles, tabs and dropdown state; keep unsupported properties explicit.
-4. Validate semantic input independently: fresh events, named bindings, custom inputs, exact control-family dispatch,
-   completion, multiplayer acceptance and game-owned cleanup.
-5. Package the fixed native readers behind the platform adapter and keep formatting/protocol work portable. The
-   temporary
-   probe is not a resident design: it loads test libraries, blocks for snapshots and retains research buffers.
-6. Only after correctness and coverage are established, decide how to reduce observation size. No pruning or
-   context-budget
-   policy from the earlier draft is a requirement of the current raw-tree investigation.
+1. Integrate the verified UI phases and current-root traversal across menu, pause, loading and world transitions.
+   Re-resolve selectors and validate target lifetime/state at final dispatch, including deferred events. UI readiness
+   remains independent of world readiness.
+2. Integrate full/filtered DOM projections while explicitly reporting unsupported native checked/switch/progress,
+   native/logical identity and existing modal/clipping information. Do not reintroduce excluded special-layer work as
+   a blocker, and do not invent values for unreadable state.
+3. Implement live binding discovery and the finite physical-input sequence contract through the normal in-process SDL
+   path. Verify holds, combinations, ordered release/repress, cancellation/replacement, empty sequences and partial
+   failure reporting. Validate bridge/user input ownership and cursor targeting without predicate/getter overrides.
+   Late access to private control-handler tables is no longer a prerequisite for this direction.
+4. Implement and test explicit native world/source invalidation. The research scheduler's stale pending task after
+   world exit is a confirmed failure. A compatible MCP reconnect must not clear valid admitted work in the same world.
+5. Package native control discovery and fresh UI input with verified ABI boundaries. Extend catalog metadata and
+   prototype reload coverage; implement final-phase target-directed input for supported clipped/covered widgets rather
+   than assuming geometric SDL routing satisfies that contract.
+6. Implement bounded API-shaped spatial queries with explicit live/charted/unknown coverage, typed object references,
+   applicable fields and method side-effect checks. Cached RGB565 chart data is not cached semantic entity history.
+7. Keep formatting/protocol work portable and the resident small. The temporary probes are evidence, not a resident
+   implementation: they retain research buffers and include synchronous helper calls. Optimize observation size only
+   after correctness; no pruning policy is imposed by this raw-tree investigation.
 
 ## Reproduction and evidence
+
+Check the latest access/polling follow-up without launching Factorio:
+
+```sh
+python3 temp/semantic-dispatch-access-research/verify.py
+```
+
+Check the latest call-only registration evidence without launching Factorio:
+
+```sh
+python3 temp/direct-control-call-research/verify.py
+```
+
+This verifies dynamic catalog observations, corrected generic callback tests and peer CRC markers. Earlier
+matching/active-state override experiments remain historical and are not the current implementation direction.
+
+Recheck the latest Linux gap evidence without launching Factorio:
+
+```sh
+python3 temp/interaction-gap-research/verify.py
+```
+
+Its [findings](temp/interaction-gap-research/findings.md) distinguish native fixtures, actual client input/server
+effects,
+server-side map queries, failed approaches and remaining coverage. The production MCP catalog was not changed.
 
 Check the Windows scheduling and root/state evidence without launching the game:
 

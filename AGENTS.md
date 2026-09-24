@@ -58,7 +58,13 @@
   blueprint tools; never implement another operation through a temporary blueprint or unrelated game feature.
   Investigate and validate a direct path; reject unsupported parameters explicitly instead of substituting an indirect
   workaround. Keep shared settings schemas and per-entity writable capabilities consistent.
-- Agent-facing tools express game intent. They must not require keycodes, mouse events, or low-level input sequences.
+- The input interface exposes current effective bindings and finite physical-input sequences. Agents may specify
+  keyboard keys, mouse buttons and combinations; the game resolves their meaning through normal bindings and context.
+  Keep direct UI selector operations available. Do not require a separate tool or workflow for every gameplay intent.
+- MCP instructions should prefer direct UI component operations while allowing agents to choose physical input for UI
+  or world interaction. Do not require a failed widget action before accepting UI-directed input. Optional screenshots
+  may supplement structured observations through the game's rendering path, without desktop capture or focus control;
+  report capture limitations and do not label a re-rendered scene as a faithful current screen.
 - Give read tools coherent domain schemas. Do not keep duplicate public aliases for the same query, or split one
   snapshot into multiple tools solely to mirror a reference project. Preserve distinct tools when preconditions or side
   effects differ materially.
@@ -70,7 +76,8 @@
 - Product functionality must not execute in-game console commands, depend on RCON, or require server administrator
   rights. Server-console use is confined to isolated test setup and authoritative assertions; test the controlled client
   as a non-admin.
-- Implementation priority: official Lua API, then game C++ action submission APIs, then game-internal input. Prefer
+- For domain adapters, implementation priority is official Lua API, then game C++ action submission APIs, then
+  game-internal input. Prefer
   keyboard shortcuts over mouse input when a fallback is needed; do not default to OS- or driver-level input simulation.
 - Validate player constraints and multiplayer synchronization for writable APIs. A successful client-side call does not
   prove server acceptance. Calling a C++ state mutation implementation directly is not a substitute for normal
@@ -175,15 +182,35 @@
 
 ## Game input adapters
 
+- Discover registered control names and effective bindings from the running game. Input sequence execution uses the
+  game's normal in-process SDL event path and preserves binding conflicts, consumption and context checks. Do not
+  maintain control-name-to-function tables, derive function names from control names, override game predicates or
+  maintain gameplay state such as MiningState. Catalog discovery alone is not proof of input execution support.
+- An input sequence consists of ordered steps containing simultaneous keys/buttons and a positive tick duration that
+  defaults to one. Release each step before the next; empty controls wait, and an empty sequence normally returns
+  immediately. Serialize ordinary sequences. Success means finite input completion and release, not gameplay success.
+- A stop-previous request cancels older running and queued input sequences, releases bridge-held inputs, then starts
+  its replacement. An empty replacement is stop-only and waits for cancellation/release. Cancellation must be
+  serviceable while an older tool call is pending. Preserve human-owned input and do not promise to undo game effects
+  or stop autonomous game/mod behavior. Report partial progress and cleanup failures without automatic replay.
+- Admit finite sequences as complete tasks. The resident advances and releases admitted input without intermediate MCP
+  messages, including after MCP loss. MCP retains validation and not-yet-admitted work; keep the resident executor
+  generic and small. Validate input ownership, cancellation, teardown and release on the normal event path.
+- Keep code hooks minimal and fixed, for safe scheduling, observation, IPC and lifetime management. Do not change game
+  decisions by overriding input matching, active-state checks, permissions or cursor getter results. Establish input
+  through verified game function calls and preserve normal synchronized submission. Observe registration once at its
+  actual boundary; nested container helpers can otherwise capture the same callback twice.
 - Capture actual constructor or method receivers. Identify GUI targets through the game's own layout APIs; never store
   screenshot coordinates or reconstruct closure/object layouts.
 - Similar register layouts do not imply identical semantics. In particular, distinguish a bounding box's maximum
   coordinates from a rectangle's width and height.
-- A GUI click can read cached game cursor state rather than its supplied pixel coordinates. Use a verified,
-  operation-scoped game getter when needed, with game-owned cleanup on success, failure and world teardown; do not
-  replace state confirmation with a fixed sleep.
-- A successful input submission is not a completion. Confirm the synchronized state or matching game event, and allow
-  client latency state to catch up before the next dependent submission.
+- A GUI click can read cached game cursor state rather than its supplied pixel coordinates. Read that state through
+  verified game getters and establish required input state through game methods, without replacing getter results.
+  Give transient input game-owned cleanup on success, failure and world teardown; do not replace state confirmation
+  with a fixed sleep.
+- A successful input submission is not a completion. For generic input sequences, confirm finite execution and release;
+  do not require a gameplay effect or a server acceptance verdict. Domain operations that promise synchronized effects
+  still need matching state/event confirmation. Keep authoritative effects and full CRC checks in acceptance tests.
 - Any temporary game input state must have game-owned cleanup on completion, failure, and Lua/world teardown. Do not
   depend on MCP remaining alive to release it.
 
@@ -207,6 +234,9 @@
 - Run focused operations and authoritative server assertions during development; force a full CRC after new mutation
   paths. Reserve complete catalog/lifecycle runs for changes that affect those contracts, rather than rerunning them
   after every edit.
+- Verify changed fixture settings through live game getters before claiming coverage of them. Factorio test INI files
+  written with Python ConfigParser must use `space_around_delimiters=False`; a generated file alone does not prove that
+  a key binding or other option took effect. Distinguish admitted input duration from authoritative active tick count.
 - Keep stdout exclusively for MCP frames when transports run together. Ktor Native installs signal handlers during
   startup and its default logger writes to stdout; preserve the application's nonblocking signal cancellation and stderr
   diagnostics.
