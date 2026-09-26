@@ -1,247 +1,137 @@
 # Project conventions
 
-## Documentation language
+## Scope and language
 
-- Write all project documentation, code comments, KDoc, and other docstrings in English, including updates to existing
-  documents. Keep user-facing conversation in the user's preferred language.
+- Keep user-facing conversation in the user's preferred language. Write documentation, comments and docstrings in
+  English.
+- When the user emphasizes or repeatedly requests a rule, assess whether it is a lasting convention rather than a
+  task-specific instruction. If it is a lasting convention, consider whether it belongs in `AGENTS.md`; add it when
+  appropriate, or refine an existing rule to capture the intent precisely without duplication.
+- This is primarily a Kotlin/Native application targeting Windows x64. Keep implemented tool coverage in README and
+  unfinished designs under ignored `temp/`. Do not restore the old gameplay-specific catalog or Linux implementation.
+- Preserve the default KMP source-set layout for future Windows, Linux and macOS implementations. Put portable tool
+  definitions, lifecycle, cancellation, task models, serialization and UI projection in `commonMain`.
+- Put process discovery, developer debug information, injection and platform IPC in the corresponding platform Kotlin
+  source set. Use C/C++ only for necessary resident hooks, atomic wire helpers and game C++ ABI adapters.
+- Write README for end users: concise setup, usage, available tools and practical limitations. Keep detailed public
+  arguments, examples and result semantics in `tools.md`, without duplicating the README catalog. Omit implementation
+  architecture, language responsibilities and internal mechanisms from user guides. Keep build and test instructions in
+  `development.md`. Keep research, experiments, comparisons and unverified plans only under ignored `temp/`; do not
+  duplicate them in tracked documentation. Keep agent-facing `tools/list` descriptions aligned with the implemented
+  contract as well. Preserve historical evidence with its original scope; use an explicit current index instead of
+  rewriting old results as if they came from the latest code.
+- Keep MCP server instructions, tool descriptions and argument help concise and agent-oriented: explain tool choice,
+  prerequisites and result limits, with parameter rules in schemas rather than duplicated pseudo-schemas. Prefer
+  structured observations and direct widget actions; screenshots are for missing visual information, verification or
+  requested images, not a routine step after every action. Describe implemented behavior without gameplay inference.
+- Remove empty source directories left by changes. Preserve original research and useful negative results.
+- Do not describe the project as targeting or aligning with a specific Factorio version. Mention tested Factorio
+  versions briefly in README only; preserve version identifiers in historical research and raw test evidence.
 
-- Keep the README focused on implemented behavior, usage and limitations. Store research notes, reference-project
-  comparisons, experiments and unverified designs only under the Git-ignored `temp/` directory. Do not place research
-  content in tracked or trackable documentation.
+## Build and dependencies
 
-## Source sets and dependencies
+- Prefer Kotlin standard libraries and kotlinx-io, kotlinx-serialization-json and kotlinx-coroutines. Do not add
+  expect/actual wrappers for APIs already provided by portable libraries.
+- Keep native compilation/linking in CMake and reusable Gradle logic in `buildSrc`. Scope platform tasks and native
+  output directories by host and target; never attach Windows dependencies to common or other platform compilations.
+- Reuse Kotlin/Native's bundled compiler, assembler and linker. The resident requires MSVC-compatible C++ ABI and
+  standard-library headers; mention build prerequisites briefly in README and explain setup in `development.md`.
+  Do not require the Visual Studio IDE.
+- Each native artifact has one build-system owner. Declare inputs, dependencies and outputs. Do not create custom
+  distribution or executable-renaming tasks. Do not overwrite an unchanged resident DLL while it is mapped by Factorio.
+- Runtime injection must not depend on Frida, Python, LLVM utilities or an additional hooking library installed by
+  users.
+- Use `factorio-mcp` consistently as the product, executable base name, server name and diagnostic prefix.
 
-- Prefer the default KMP directory layout and source sets. Keep portable MCP, protocol, task descriptions, and game
-  logic in `commonMain`.
-- Put only actual platform differences in platform source sets: process discovery, developer debug information parsing,
-  injection, and platform IPC. The current target is Linux x86-64.
-- Prefer the Kotlin standard library and kotlinx libraries: kotlinx-io for files, kotlinx-serialization-json for JSON,
-  and kotlinx-coroutines for asynchronous work. Do not add expect/actual wrappers for functionality already covered by
-  portable libraries.
-- Prefer imports over fully qualified Kotlin names. Use an import alias to resolve naming conflicts where practical;
-  retain a fully qualified name only when it improves clarity or is required.
-- Use CMake, Gradle, and existing build infrastructure rather than custom compilation scripts.
-- Prefer default KMP configuration, tasks, and artifact layouts. Keep custom Gradle logic limited to the necessary
-  CMake/toolchain integration and native verification; do not add separate distribution or executable-renaming tasks.
-- Put custom Gradle task classes and reusable build logic in `buildSrc`. Keep `build.gradle.kts` focused on DSL,
-  configuration, and small wiring expressions.
-- Give each generated native artifact one build-system owner. Declare its dependencies and required outputs so
-  incremental builds cannot silently reuse stale or missing artifacts. Keep compiler and linker recipes in CMake rather
-  than duplicating them in Gradle.
+## Data and implementation
 
-## Strings and structured data
+- Use typed structures at the native boundary and serialize in `commonMain`. Never concatenate JSON in Kotlin or C/C++.
+- Prefer imports over fully qualified names; use import aliases where useful.
+- Follow conventional Kotlin and C++ formatting: separate functions with a blank line, put annotations on their own
+  lines, and expand multiple statements into separate lines rather than compressing them with semicolons.
+- Use one literal for one-line text and raw literals for multiline text. Use an encoder appropriate to each format.
+- Read-only UI snapshots must execute at the verified frontend safe point, after GUI logic and before rendering/worker
+  work. Reacquire the root on each frame; do not retain widget pointers across frames or world changes.
+- Keep snapshots bounded and report truncation. IDs are snapshot-local. Preserve unknown types and unsupported
+  properties instead of inventing semantic state, visibility or action capabilities.
+- Act as a transparent observation/action adapter. Do not interpret game rules, workflows or the meaning of UI hierarchy
+  or properties. Knowing native types and accessors for safe traversal, serialization and dispatch does not authorize
+  deriving gameplay conclusions or replacing native values with inferred defaults. Expose each widget's own flags
+  without propagating ancestor state, computing effective visibility,
+  inventing semantic roles or dropping containers by type. Agents interpret the returned data and parent relationships.
+- High-frequency player, inventory and catalog reads may use dedicated selectors or tools when they materially reduce
+  calls or context. Prefer extending an existing coherent query contract. Read native references, properties and
+  registries without vanilla-name tables, assumed inventory sizes or inferred crafting/research/action eligibility.
+- Action completion reports dispatch/execution progress and cleanup, never fulfillment of gameplay intent. Verify
+  effects in acceptance tests; do not add runtime effect polling, retries or compensating actions to achieve an outcome.
+- Prefer shared UI interfaces for observation and actions, without interpreting inventory, crafting or machine
+  workflows. Component-specific adapters may expose otherwise unavailable visible properties such as item identity,
+  count or durability; keep these as UI properties and retain generic widget operations.
+- Resolve action selectors against a complete live traversal at the UI safe point. Use widget event handlers rather
+  than OS input. A successful dispatch is not a guarantee of gameplay effects; verify effects separately in acceptance.
+  Finite mouse gestures must also release any native GUI capture they acquire, including capture transferred to another
+  widget. Widget-level mouse-up alone does not prove GUI bookkeeping was cleared. Revalidate lifetimes after callbacks.
+  For selected observations, resolve the selector before collecting bounded optional properties so unrelated widgets
+  cannot consume the selected subtree's resource budget. Keep both phases within the same safe point.
+- Keep queues, lifecycle and cancellation policy in Kotlin. The resident stays small, fixed, bounded and nonblocking.
+  Native wire notifications must never wait for MCP to consume a result.
+- All admitted work finishes or cleans up cooperatively. Detach aborts admitted and waiting observations, waits for
+  their
+  cleanup, removes hooks and then releases the attachment. Do not cancel handlers in a way that drops a live caller's
+  terminal abort result.
+  If native unhook or local resource cleanup fails, retain ownership so detach can retry; do not report successful
+  detachment or discard the original failure before cleanup has completed.
+- Do not add tool execution timeouts. Test watchdogs are allowed. Automatic HTTP disconnect cancellation is optional
+  until verified end to end; do not claim it follows merely from response cancellation.
+- Keep stdio and HTTP sessions separate from the shared attachment. A new MCP reports detached until explicit attach,
+  even when a resident exists. Do not version the resident wire contract or implement cross-build compatibility.
+  Updating factorio-mcp requires restarting Factorio before attaching again; document this usage requirement.
+- A newly acquired IPC mutex does not imply the resident is idle: MCP may have died after admission. Reconcile the
+  outstanding resident command before writing another payload; never replay or overwrite an uncertain mutation.
 
-- Never hand-assemble JSON or other structured data. Use kotlinx-serialization-json serializers, `buildJsonObject`,
-  `buildJsonArray`, and related APIs for Kotlin JSON.
-- Prefer typed protocol structures at the native boundary and serialization in commonMain. Do not concatenate JSON in
-  C/C++.
-- Write text that is semantically one line as one string literal. Do not split it into fragments joined with `+`.
-- Use triple-quoted raw strings, with `trimIndent()` where appropriate, for multiline Kotlin text. Use raw string
-  literals in C++. Do not emulate multiline text with concatenation or repeated `\n` escapes.
-- Use language interpolation or an encoder appropriate to the target format for dynamic content. JSON, Lua source, and
-  shell commands have different escaping rules; never substitute one format's encoding for another without verification.
-- Lua calls can return multiple values. Do not place `assert(value, message)` directly as the last array entry or
-  forwarded argument: bind the validated value first, so the diagnostic text cannot become data.
-- Use explicit source templates for embedded Lua. Generate JSON inside the game through its official
-  `helpers.table_to_json` API, never by concatenating JSON text.
-- Write this AGENTS.md in English.
+## Injection and process boundaries
 
-## Operations and execution boundaries
+- Product code does not launch, terminate, restart or otherwise manage the Factorio process lifecycle. Attach targets an
+  existing fully initialized client; reject initial startup loading. Process-launch helpers belong only in tests.
+- `status` takes no parameters and never injects. `attach` takes exactly a PID or process name. Ambiguous names fail.
+  `detach` is repeatable; an inert retained DLL is permitted after hook removal.
+- Check target liveness before functional calls and reconcile exit during an operation. Process exit and detach must
+  share cleanup, release local resources and reset the attachment without waiting for a dead resident. Event-driven
+  OS exit notification is optional per platform; platforms without it may detect exit on the next tool call. Do not
+  add background polling or treat a still-running, unresponsive process as exited.
+- Read the selected executable's matching developer PDB before injection. Resolve symbols and unwind ranges dynamically.
+  Do not use address tables, hardcoded game object offsets, version allowlists or instruction fingerprints.
+- Game member locations may be resolved dynamically from the target PDB. Validate declaring types, member types,
+  widths and bounds before reading them; never substitute a remembered offset when metadata is missing or incompatible.
+  Resolve virtual-method positions from the same matching debug metadata as well; never encode a researched vtable
+  slot or infer one from declaration order. File-format constants and synthetic fixture layouts are not game offsets.
+- A symbol name alone does not establish its optimized ABI. Verify receivers, hidden return storage and arguments.
+- Conservative detours must reject unsupported instructions or unwind data without patching the target. Test relocation,
+  register/argument preservation, unwind behavior, transaction rollback and removal in native fixtures before game use.
+  Decode only a bounded, readable copy of the entry point; validate function bounds before reading a relocated prefix.
+- Before changing a detour, verify that its current bytes are still owned by that detour. Preserve each affected memory
+  region's protection separately. Before calling resident exports, check the loaded module's path and require an
+  initialized IPC mapping when reusing it. Do not compare resident build identities or maintain compatibility rules.
+- Do not use console commands, RCON or server administrator privileges for product behavior. Do not replace normal game
+  action submission with unsynchronized world mutation. Do not replay mutations after an uncertain result.
+- Avoid forcing game focus or reading the desktop unless the user explicitly permits it for testing. Product tools
+  must not require focus or OS input simulation. Run at most one graphical Factorio client;
+  isolated local multiplayer servers may run alongside it. Never test remote servers.
 
-- Ordinary tools always target the injected client's local player, resolved internally from the game's client ownership.
-  Never select the first/only connected player or accept a player override for ordinary tools. A separate player-summary
-  tool may expose only shallow identity, online/life status, surface, and position.
-- Current product scope is logically basic player operations and observations. An operation may require several internal
-  submissions, but do not expand it into autonomous navigation, production planning, gathering workflows or batch
-  construction without a new scope decision.
-- A basic operation must use the corresponding game action. Blueprint inspection/import/placement belongs only to
-  blueprint tools; never implement another operation through a temporary blueprint or unrelated game feature.
-  Investigate and validate a direct path; reject unsupported parameters explicitly instead of substituting an indirect
-  workaround. Keep shared settings schemas and per-entity writable capabilities consistent.
-- The input interface exposes current effective bindings and finite physical-input sequences. Agents may specify
-  keyboard keys, mouse buttons and combinations; the game resolves their meaning through normal bindings and context.
-  Keep direct UI selector operations available. Do not require a separate tool or workflow for every gameplay intent.
-- MCP instructions should prefer direct UI component operations while allowing agents to choose physical input for UI
-  or world interaction. Do not require a failed widget action before accepting UI-directed input. Optional screenshots
-  may supplement structured observations through the game's rendering path, without desktop capture or focus control;
-  report capture limitations and do not label a re-rendered scene as a faithful current screen.
-- Give read tools coherent domain schemas. Do not keep duplicate public aliases for the same query, or split one
-  snapshot into multiple tools solely to mirror a reference project. Preserve distinct tools when preconditions or side
-  effects differ materially.
-- When auditing another implementation, inspect its actual registered methods and execution paths. Document partial
-  equivalents and deferred capabilities explicitly; a server-side mutation is not evidence that a client-side
-  implementation is synchronized.
-- Inventory constants can alias across entity types. Enumerate actual entity inventory indices with the official API for
-  complete inspections instead of applying every named constant to every entity.
-- Product functionality must not execute in-game console commands, depend on RCON, or require server administrator
-  rights. Server-console use is confined to isolated test setup and authoritative assertions; test the controlled client
-  as a non-admin.
-- For domain adapters, implementation priority is official Lua API, then game C++ action submission APIs, then
-  game-internal input. Prefer
-  keyboard shortcuts over mouse input when a fallback is needed; do not default to OS- or driver-level input simulation.
-- Validate player constraints and multiplayer synchronization for writable APIs. A successful client-side call does not
-  prove server acceptance. Calling a C++ state mutation implementation directly is not a substitute for normal
-  synchronized submission.
-- Do not assume a query-like API is free of simulation side effects. In this game, `LuaInventory.can_insert` with a
-  synthetic numbered item can allocate an item number and desynchronize a client. Client-only
-  `LuaPlayer.request_translation` likewise increments a serialized map counter. Avoid these mutations; prefer inspection
-  of existing stacks and locale-independent GUI selection. Force a full client/server CRC in real-game acceptance tests,
-  since periodic partial checks can miss mismatches.
-- The resident inside Factorio executes and finishes basic operations autonomously. MCP submits complete tasks and
-  receives their IPC results; it does not drive intermediate phases or release inputs later.
-- Keep recipe prototype content, current force availability, and current inventory/hand-crafting feasibility distinct.
-  Use bounded live Lua queries; do not add a recipe cache without measured need and an explicit invalidation contract.
-- Put snapshot sorting, aggregation, material analysis, passive polling waits, and compound-action orchestration in
-  commonMain. Reuse verified finite submissions for mutations; never replay a mutation after an uncertain result.
-  Serialize compound mutations against other player actions while permitting reads and passive waits.
-- Report bounds and partial results explicitly. A truncated area scan is not a global nearest search or complete
-  resource total. A placement preview does not reserve materials or guarantee a future build. Preserve quality, product
-  probabilities, and alternative placement items.
-- Keep planning, parameter translation, compound-operation orchestration, and queues of not-yet-admitted work in
-  MCP/commonMain. Keep the game side thin and fixed: nonblocking IPC, a bounded queue for admitted low-level tasks,
-  minimal completion/input-release state, and necessary game adapters. World-bound state belongs to the current Lua VM;
-  do not duplicate the scheduler or add business planning in C++. Already-admitted finite actions must still finish or
-  release input without MCP.
-- Store bridge runtime state in private, world-local Lua closures or globals, never in save-persistent `storage`.
-  Recreate it in a new world rather than persisting or replaying old operations. Keeping scheduling in Lua does not make
-  unsynchronized Lua world mutations safe in multiplayer.
-- Use one bounded FIFO queue for basic operation submission. Execute submissions in delivery order at the appropriate
-  game phase.
-- Represent a basic Lua task as an ID, a callback, and an optional completion response type. After a successful
-  callback, reply immediately if no response type is specified; otherwise enqueue its ID with that type's listener. A
-  failed callback replies with an error and must not occupy a completion slot. Release the executed callback rather than
-  retaining it while waiting for a response.
-- Keep tick dispatch fixed and small. Put operation-specific behavior in task callbacks and completion adapters; reuse
-  the scheduler rather than adding per-tool branches to the tick loop.
-- Return immediately when an operation's result is available. If confirmation requires later ticks, register a bounded
-  one-shot observer in the game; reply after the corresponding synchronized state or game event is observed, then remove
-  that observer. Handle rejection, timeout, and world changes. Completion notifications may arrive out of submission
-  order.
-- Use separate completion listeners when operation types expose different completion events. Each persistent listener
-  may hold a bounded FIFO of pending callbacks and must process every available matching completion in the current tick,
-  including multiple completions in that tick. Keep these completion queues separate from the single submission queue.
-  Use FIFO correlation only after verifying that the observed game events correspond one-to-one with the submitted
-  operations; transport ordering alone does not establish that correspondence.
-- Every basic operation has a definite end. A task may span game phases but must not leave held input dependent on a
-  future MCP message.
-- After MCP exits unexpectedly, fully admitted tasks continue. IPC notifications must never block the game. Do not
-  retain result history or replay tasks automatically; reconnecting MCP inspects current game state.
-- Keep game task execution independent of MCP connections and restarts. MCP assigns task IDs that are not reused across
-  restarts; the game echoes each ID in its completion notification without interpreting it. MCP owns the pending-request
-  lookup and discards unknown IDs. The game does not track MCP connection generations or recover undelivered results.
-- On world unload or replacement, clear all world-bound submission and completion queues, including already-started
-  operations. Lua callbacks disappear with their VM, but native queues require explicit cleanup. Never access a previous
-  world's Lua state or game objects; bind callbacks afresh in the next world. Release any bridge-owned transient input
-  as part of teardown rather than keeping the old task alive.
-- A synchronized action can replace Lua API objects such as automatic logistic sections without changing worlds.
-  Completion observers must re-query replaceable objects by stable identity/type instead of retaining an invalidated
-  wrapper.
-- Keep game-event correlation separate from IPC request lookup: a late game event must not be mistaken for another
-  operation's completion. World lifetime changes must invalidate old observers even when an allocator reuses the same
-  address.
-- Version changes to the resident protocol and native adapter contract. Reject incompatible residents rather than
-  silently advertising tools they cannot execute. A compatible reconnect must keep admitted work independent of the new
-  MCP session.
-- `status` identifies the target before modification, installs/reuses only the process observer, and reports observation
-  and world-binding readiness separately. It must not bind Lua or enable player actions. Unsupported targets return a
-  structured unrecognized result.
-- `attach` requires an existing observer and an active world. Missing prerequisites return actionable MCP errors. Every
-  functional tool checks the current world's Lua readiness and directs the agent to attach when absent.
-- Repeated status/attach calls and MCP crash recovery use the same resident discovery and idempotence checks. Never
-  re-register an existing world callback or clear admitted tasks on reconnect. World/VM replacement invalidates the Lua
-  binding and requires an explicit attach for the new world.
-- Check the process-resident observer and current-world callback independently. A marker's presence alone does not prove
-  initialization completed. Treat pending startup or missing world callbacks as explicit states rather than waiting for
-  gameplay until timeout.
+## Tests
 
-## Debug information and validation
-
-- Read the developer-provided debug information from the target game's actual executable before injection. Resolve
-  functions and locations dynamically. Do not use game address tables, object field offsets, version allowlists, or
-  instruction fingerprints.
-- A debug symbol's C++ name alone does not establish its optimized ABI. Never guess receivers, object layouts, or
-  arguments without verification.
-- Use the installed game's bundled runtime API documentation when current online documentation describes a different
-  release. Normalize documented default values before comparing structured API results.
-- Test changes to native detours, register preservation, relocation, and ABI boundaries in isolated fixtures before
-  applying them to Factorio. Report native fixture results separately from actual game and multiplayer validation.
-- Reuse prior research under `temp`. Explore uncertain approaches in isolated experiments there. Preserve concise
-  conclusions and evidence for negative results; do not integrate failed approaches into production.
-- Validate against the locally installed Steam Factorio with an isolated local server. Do not test remote servers. The
-  product does not launch Factorio.
-- Keep real-game tests within this machine's memory budget: run at most one graphical Factorio client at a time. A local
-  headless server may run alongside it. Run menu and multiplayer-client scenarios sequentially, waiting for the previous
-  client to exit before launching another.
-- Preserve original research and useful evidence. Remove disposable experiments, caches, and empty directories created
-  by this work. Never claim unfinished tools or unpassed tests are ready.
-- Track advertised MCP tool coverage in the acceptance suite, and independently check writable effects on the local
-  server. Tool-count coverage does not prove coverage of every player action or argument combination.
-- Investigate and experiment with uncertain basic-operation paths before omitting them. Expose only verified
-  capabilities, and report genuinely unsupported operations with the evidence and reason; do not advertise placeholders
-  as working tools.
-
-## Game input adapters
-
-- Discover registered control names and effective bindings from the running game. Input sequence execution uses the
-  game's normal in-process SDL event path and preserves binding conflicts, consumption and context checks. Do not
-  maintain control-name-to-function tables, derive function names from control names, override game predicates or
-  maintain gameplay state such as MiningState. Catalog discovery alone is not proof of input execution support.
-- An input sequence consists of ordered steps containing simultaneous keys/buttons and a positive tick duration that
-  defaults to one. Release each step before the next; empty controls wait, and an empty sequence normally returns
-  immediately. Serialize ordinary sequences. Success means finite input completion and release, not gameplay success.
-- A stop-previous request cancels older running and queued input sequences, releases bridge-held inputs, then starts
-  its replacement. An empty replacement is stop-only and waits for cancellation/release. Cancellation must be
-  serviceable while an older tool call is pending. Preserve human-owned input and do not promise to undo game effects
-  or stop autonomous game/mod behavior. Report partial progress and cleanup failures without automatic replay.
-- Admit finite sequences as complete tasks. The resident advances and releases admitted input without intermediate MCP
-  messages, including after MCP loss. MCP retains validation and not-yet-admitted work; keep the resident executor
-  generic and small. Validate input ownership, cancellation, teardown and release on the normal event path.
-- Keep code hooks minimal and fixed, for safe scheduling, observation, IPC and lifetime management. Do not change game
-  decisions by overriding input matching, active-state checks, permissions or cursor getter results. Establish input
-  through verified game function calls and preserve normal synchronized submission. Observe registration once at its
-  actual boundary; nested container helpers can otherwise capture the same callback twice.
-- Capture actual constructor or method receivers. Identify GUI targets through the game's own layout APIs; never store
-  screenshot coordinates or reconstruct closure/object layouts.
-- Similar register layouts do not imply identical semantics. In particular, distinguish a bounding box's maximum
-  coordinates from a rectangle's width and height.
-- A GUI click can read cached game cursor state rather than its supplied pixel coordinates. Read that state through
-  verified game getters and establish required input state through game methods, without replacing getter results.
-  Give transient input game-owned cleanup on success, failure and world teardown; do not replace state confirmation
-  with a fixed sleep.
-- A successful input submission is not a completion. For generic input sequences, confirm finite execution and release;
-  do not require a gameplay effect or a server acceptance verdict. Domain operations that promise synchronized effects
-  still need matching state/event confirmation. Keep authoritative effects and full CRC checks in acceptance tests.
-- Any temporary game input state must have game-owned cleanup on completion, failure, and Lua/world teardown. Do not
-  depend on MCP remaining alive to release it.
-
-## Testing workflow
-
-- Use the SDK's standard Streamable HTTP endpoint for acceptance scripts and interactive experiments. Do not reintroduce
-  a custom stdio JSON-RPC client as the main test path. Retain a small stdio smoke test because stdio is a supported
-  production transport.
-- For ordinary tool changes, reuse the existing graphical Factorio client and local headless server. Build with
-  `./gradlew linkDebugExecutableLinuxX64`, restart only MCP with `--no-stdio --http-port PORT`, initialize a new HTTP
-  session, then call `status` and `attach` again. Do not restart Factorio solely because MCP was rebuilt.
-- Restart Factorio when the injected resident ABI changes, when testing startup/world lifecycle explicitly, or when the
-  process is no longer usable. A compatible resident and current-world hook must survive MCP restarts.
-- Use `curl` with standard MCP initialization, `Mcp-Session-Id` and `MCP-Protocol-Version` headers for exploratory tool
-  calls. Generate request JSON with a serializer or `jq`. The README includes the protocol sequence.
-- `tests/mcp_http.py` supports an externally managed `url` as well as a managed native MCP process. External endpoints
-  are disconnected with HTTP DELETE, never terminated by the helper. Integration and lifecycle suites use HTTP requests.
-- Run `python3 tests/transports.py --injector PATH [--pid EXISTING_FACTORIO_PID]` for transport changes. It checks
-  simultaneous stdio/HTTP sessions, shared game attachment when a PID is supplied, session deletion, stdin EOF, shutdown
-  and reconnecting a fresh MCP to the same game.
-- Run focused operations and authoritative server assertions during development; force a full CRC after new mutation
-  paths. Reserve complete catalog/lifecycle runs for changes that affect those contracts, rather than rerunning them
-  after every edit.
-- Verify changed fixture settings through live game getters before claiming coverage of them. Factorio test INI files
-  written with Python ConfigParser must use `space_around_delimiters=False`; a generated file alone does not prove that
-  a key binding or other option took effect. Distinguish admitted input duration from authoritative active tick count.
-- Keep stdout exclusively for MCP frames when transports run together. Ktor Native installs signal handlers during
-  startup and its default logger writes to stdout; preserve the application's nonblocking signal cancellation and stderr
-  diagnostics.
-- Start Ktor with `wait = false` and await a coroutine completion signal in common code. Native signal handlers must
-  only set signal-safe state; perform server shutdown and resource cleanup from coroutines, never directly from a POSIX
-  signal handler. Preserve a pending shutdown when reinstalling signal handlers.
-- Use `factorio-mcp` consistently as the product, executable base name, MCP server and diagnostic name. Keep the default
-  Kotlin/Native artifact layout and `.kexe` executable suffix. Do not introduce alternative product names.
+- Keep automatic tests in Kotlin/Gradle and native CMake/CTest fixtures. Do not restore an external Python test runner.
+- Use the official SDK's Streamable HTTP endpoint for acceptance and curl for exploration, with standard initialize,
+  session and protocol-version headers. Keep a small stdio smoke test.
+- Real-game acceptance is opt-in and explicitly selects its endpoint and PID. Never terminate an externally managed
+  endpoint or game from the acceptance fixture. Keep temporary saves, scenario copies and logs under `temp/`.
+- Separate native fixture, unit, real-game and multiplayer claims. Passing tool-count coverage does not establish full
+  widget/property/state coverage. Report unverified cases and limitations explicitly.
+- Reuse the running game for test/documentation changes. Restart it after updating MCP or a loaded resident DLL,
+  or when deliberately testing startup and process exit. Residents must survive MCP restarts without changing the
+  installed artifacts.
+- Do not infer a running simulation from world presence, absent tick callbacks or UI appearance. Report unobserved pause
+  state as unknown until a validated source exists.
+- For writable paths, validate authoritative local-server effects and force a full CRC. Read-only-looking Lua APIs
+  can still mutate serialized state; synthetic `LuaInventory.can_insert` and client-only translation requests previously
+  caused desynchronization and must not be reused as passive queries.

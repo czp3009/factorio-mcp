@@ -29,6 +29,6 @@ desktop.ini
 nul
 /logs
 
-# Python integration runner
+# Local Python experiment caches
 __pycache__/
 *.pyc

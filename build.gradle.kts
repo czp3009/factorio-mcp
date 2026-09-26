@@ -1,82 +1,112 @@
-import com.hiczp.factorio.mcp.buildlogic.ConfigureNativeBridge
+import com.hiczp.factorio.mcp.buildlogic.WindowsNativeBuild
+import org.jetbrains.kotlin.gradle.targets.native.tasks.KotlinNativeTest
 import org.jetbrains.kotlin.gradle.utils.NativeCompilerDownloader
 import org.jetbrains.kotlin.konan.target.HostManager
 import org.jetbrains.kotlin.konan.target.KonanTarget
+import java.nio.file.Files
 
-plugins {
-    alias(libs.plugins.kotlinMultiplatform)
-}
+plugins { alias(libs.plugins.kotlinMultiplatform) }
 
 group = "com.hiczp"
-version = "0.0.1"
 
-val nativeSources = layout.projectDirectory.dir("src/linuxX64Main/native")
-// CMake caches contain host paths and cannot be shared between Windows and WSL.
-val nativeOutput = layout.buildDirectory.dir("native/${HostManager.host.name}/linuxX64")
-val nativeBridgeArchive = nativeOutput.map { it.file("libfactorio_bridge.a") }
-val kotlinNativeDataDirectory = providers.gradleProperty("konan.data.dir")
-    .orElse(providers.environmentVariable("KONAN_DATA_DIR"))
-    .orElse(providers.systemProperty("user.home").map { "$it/.konan" })
-val kotlinNativeHome = providers.gradleProperty("kotlin.native.home")
-    .getOrElse(NativeCompilerDownloader(project).compilerDirectory.absolutePath)
-val configureNativeBridge = tasks.register<ConfigureNativeBridge>("configureNativeBridge") {
-    // Binding generation provisions Kotlin/Native's matching compiler and Linux sysroot.
-    dependsOn("cinteropBridgeLinuxX64")
-    nativeHome.set(kotlinNativeHome)
-    konanDataDirectory.set(kotlinNativeDataDirectory)
-    generator.set(if (HostManager.hostIsMingw) "Ninja" else "Unix Makefiles")
-    cmakeSources.set(nativeSources)
-    cmakeFiles.from(fileTree(nativeSources) { include("CMakeLists.txt", "cmake/**") })
-    konanProperties.set(file("$kotlinNativeHome/konan/konan.properties"))
-    outputDirectory.set(nativeOutput)
-}
-val buildNativeBridge = tasks.register<Exec>("buildNativeBridge") {
-    dependsOn(configureNativeBridge)
-    inputs.files(configureNativeBridge).withPropertyName("cmakeConfiguration")
-    inputs.dir(nativeSources)
-    inputs.dir("src/linuxX64Test/native")
-    outputs.files(
-        nativeBridgeArchive,
-        nativeOutput.map { it.file("libfactorio_resident.so") },
-        nativeOutput.map { it.file("resident_hooks_test") },
-        nativeOutput.map { it.file("resident_delivery_test") },
-        nativeOutput.map { it.file("debug_image_test") }, nativeOutput.map { it.file("trace_lifecycle_test") })
-    commandLine("cmake", "--build", nativeOutput.get().asFile, "--parallel")
-}
+version = "0.1.0"
+
+val kotlinNativeHome =
+    providers
+        .gradleProperty("kotlin.native.home")
+        .getOrElse(NativeCompilerDownloader(project).compilerDirectory.absolutePath)
+val konanData =
+    providers
+        .gradleProperty("konan.data.dir")
+        .orElse(providers.environmentVariable("KONAN_DATA_DIR"))
+        .orElse(providers.systemProperty("user.home").map { "$it/.konan" })
+
+val nativeBuild =
+    tasks.register<WindowsNativeBuild>("buildWindowsNative") {
+        onlyIf("This adapter requires a Windows x64 build host") {
+            HostManager.host == KonanTarget.MINGW_X64
+        }
+        dependsOn("cinteropBridgeMingwX64")
+        nativeHome.set(kotlinNativeHome)
+        konanDataDirectory.set(konanData)
+        sourceDirectory.set(layout.projectDirectory.dir("src/mingwX64Main/native"))
+        testDirectory.set(layout.projectDirectory.dir("src/mingwX64Test/native"))
+        outputDirectory.set(layout.buildDirectory.dir("native/${HostManager.host.name}/mingwX64"))
+        localConfiguration.set(
+            layout.projectDirectory.file("local.properties").takeIf { it.asFile.exists() }
+        )
+    }
 
 kotlin {
-    sourceSets.commonMain.dependencies {
-        implementation(libs.mcp.server)
-        implementation(libs.ktor.server.cio)
-        implementation(libs.serialization.json)
-        implementation(libs.io.core)
-        implementation(libs.coroutines.core)
-    }
-    linuxX64 {
-        compilations.getByName("main") {
-            cinterops.create("bridge") {
-                includeDirs(nativeSources.asFile)
-            }
+    mingwX64 {
+        compilations.getByName("main").cinterops.create("bridge") {
+            includeDirs("src/mingwX64Main/native")
         }
-        binaries.executable {
-            entryPoint = "com.hiczp.factorio.mcp.main"
-        }
-        // IDE import generates bindings from headers; only binary linking needs CMake's archive.
+        binaries.executable { entryPoint = "com.hiczp.factorio.mcp.main" }
         binaries.configureEach {
-            linkerOpts(nativeBridgeArchive.get().asFile.absolutePath)
             linkTaskProvider.configure {
-                dependsOn(buildNativeBridge)
-                inputs.file(nativeBridgeArchive)
-                    .withPropertyName("nativeBridgeArchive")
-                    .withPathSensitivity(PathSensitivity.NONE)
+                dependsOn(nativeBuild)
+                val runtime = outputFile.map { it.parentFile.resolve("factorio_bridge.dll") }
+                val sourceDll =
+                    nativeBuild.get().outputDirectory.file("factorio_bridge.dll").get().asFile
+                outputs.file(runtime)
+                inputs.file(sourceDll)
+                doLast {
+                    val destination = runtime.get()
+                    if (
+                        !destination.exists() ||
+                        Files.mismatch(sourceDll.toPath(), destination.toPath()) != -1L
+                    )
+                        sourceDll.copyTo(destination, overwrite = true)
+                }
             }
         }
+    }
+    sourceSets {
+        commonMain.dependencies {
+            implementation(libs.mcp.server)
+            implementation(libs.ktor.server.cio)
+            implementation(libs.serialization.json)
+            implementation(libs.io.core)
+            implementation(libs.coroutines.core)
+        }
+        commonTest.dependencies {
+            implementation(kotlin("test"))
+            implementation(libs.ktor.client.core)
+        }
+        mingwX64Test.dependencies { implementation(libs.ktor.client.winhttp) }
     }
 }
 
-val testNativeBridge = tasks.register<Exec>("testNativeBridge") {
-    dependsOn(buildNativeBridge)
-    onlyIf("Native fixtures must run on Linux x86-64") { HostManager.host == KonanTarget.LINUX_X64 }
-    commandLine("ctest", "--test-dir", nativeOutput.get().asFile, "--output-on-failure")
+val testWindowsNative =
+    tasks.register<Exec>("testWindowsNative") {
+        dependsOn(nativeBuild)
+        onlyIf("Windows native fixtures require a Windows x64 host") {
+            HostManager.host == KonanTarget.MINGW_X64
+        }
+        commandLine(
+            "ctest",
+            "--test-dir",
+            nativeBuild.get().outputDirectory.get().asFile,
+            "--output-on-failure",
+        )
+    }
+
+if (HostManager.host == KonanTarget.MINGW_X64) tasks.named("check") { dependsOn(testWindowsNative) }
+
+tasks.named<KotlinNativeTest>("mingwX64Test") {
+    if (!providers.environmentVariable("FACTORIO_MCP_TEST_EXECUTABLE").orNull.isNullOrBlank()) {
+        dependsOn("linkDebugExecutableMingwX64")
+    }
+    listOf(
+        "FACTORIO_MCP_ACCEPTANCE_URL",
+        "FACTORIO_MCP_TEST_PID",
+        "FACTORIO_MCP_TEST_PDB",
+        "FACTORIO_MCP_TEST_EXECUTABLE",
+        "FACTORIO_MCP_UI_SERVER_LOG",
+        "FACTORIO_MCP_UI_CLIENT_LOG",
+    )
+        .forEach { name ->
+            environment(name, providers.environmentVariable(name).orElse("").get(), true)
+        }
 }
-tasks.named("check") { dependsOn(testNativeBridge) }

@@ -1,3 +1,4 @@
 headers = bridge.h
-package = factorio.bridge
-linkerOpts.linux = -lstdc++ -ldl
+headerFilter = bridge.h dbghelp.h psdk_inc/_dbg* tlhelp32.h
+package = com.hiczp.factorio.mcp.nativebridge
+linkerOpts = -ldbghelp

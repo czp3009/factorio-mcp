@@ -1,0 +1,19 @@
+set(CMAKE_SYSTEM_NAME Windows)
+set(CMAKE_SYSTEM_PROCESSOR AMD64)
+file(MAKE_DIRECTORY "${KONAN_DRIVER_DIR}")
+file(COPY_FILE "${KONAN_LLVM_HOME}/bin/clang.exe" "${KONAN_DRIVER_DIR}/clang-cl.exe" ONLY_IF_DIFFERENT)
+file(COPY_FILE "${KONAN_LLVM_HOME}/bin/lld.exe" "${KONAN_DRIVER_DIR}/lld-link.exe" ONLY_IF_DIFFERENT)
+execute_process(COMMAND "${KONAN_LLVM_HOME}/bin/clang.exe" -print-resource-dir OUTPUT_VARIABLE CLANG_RESOURCES OUTPUT_STRIP_TRAILING_WHITESPACE COMMAND_ERROR_IS_FATAL ANY)
+set(CMAKE_CXX_COMPILER "${KONAN_DRIVER_DIR}/clang-cl.exe")
+set(CMAKE_CXX_FLAGS_INIT "-resource-dir=\"${CLANG_RESOURCES}\"")
+set(CMAKE_CXX_COMPILER_TARGET x86_64-pc-windows-msvc)
+set(CMAKE_ASM_COMPILER "${KONAN_DRIVER_DIR}/clang-cl.exe")
+set(CMAKE_ASM_FLAGS_INIT "--target=x86_64-pc-windows-msvc")
+set(CMAKE_LINKER "${KONAN_DRIVER_DIR}/lld-link.exe")
+set(CMAKE_MSVC_RUNTIME_LIBRARY MultiThreaded)
+set(CMAKE_TRY_COMPILE_PLATFORM_VARIABLES KONAN_LLVM_HOME KONAN_DRIVER_DIR)
+
+# Kotlin ships the unified LLD driver; select its COFF frontend explicitly.
+# This bridge contains no resources and needs no external manifest/resource tool.
+set(CMAKE_EXE_LINKER_FLAGS_INIT "/MANIFEST:NO")
+set(CMAKE_SHARED_LINKER_FLAGS_INIT "/MANIFEST:NO")
