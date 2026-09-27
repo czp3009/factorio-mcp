@@ -24,6 +24,7 @@ Missing, null, unavailable and truncated data are distinct; interpret native val
 
 - `status` takes no arguments and never injects. It reports this MCP server's attachment and, when attached, its PID,
   observed game state and pause status. Unknown pause state is `null`.
+  Attached results also include `input_transfer`: see the cursor-state guidance below for its scope.
 - `attach` takes exactly one of `pid` (positive integer) or `process_name` (executable name, such as `factorio.exe`).
   It rejects ambiguous process names and initial game loading. Repeated attachment to the same process is supported;
   detach before selecting a different live process.
@@ -417,7 +418,39 @@ including while research or another UI covers the world. It returns the viewport
 map bounds and surface index, plus the local player's controller and physical context. UI occlusion is explicitly
 `not_evaluated`; world data may be hidden from the player and is not remembered map-chart content.
 
-To inspect another area without moving the camera:
+The default `detail: "grid"` aggregates cells. `detail: "entities"` returns individual objects with the same
+`attributes`, `read_status`, `details` and `detail_status` as entity queries. It accepts `fields` and
+`include: ["recipe", "fluids", "filters"]`; `entity_limit` then applies to the entire area. Related objects stay
+references. This provides selected configuration information without reproducing the game's ALT overlay or inferring
+what should be drawn. Grid mode rejects `fields`/`include`; entity mode rejects `cell_size`.
+
+Both modes accept `name` and `type`, each a string or up to 64 distinct strings. Native types match mod entities too.
+Entries in one list are OR; name and type conditions combine with AND. No category is expanded automatically:
+`transport-belt`, `underground-belt` and `splitter` are separate native types. For example:
+
+```json
+{
+  "detail": "entities",
+  "type": [
+    "transport-belt",
+    "underground-belt",
+    "splitter",
+    "mining-drill"
+  ],
+  "fields": [
+    "name",
+    "type",
+    "position"
+  ],
+  "include": [
+    "recipe",
+    "filters"
+  ]
+}
+```
+
+The following grid-specific details apply when `detail` is omitted or `grid`. To inspect another area without moving the
+camera:
 
 ```json
 {
@@ -491,7 +524,43 @@ Combine that number with a position or area for entities the game does not index
 game's limited unit-number index; failed lookup is an error because it does not prove the entity is absent. Spatial
 unit-number resolution considers at most 4096 candidates and rejects an incomplete search; narrow the area if needed.
 Spatial selections also accept exact `name` and `type` filters for entities, each as one string or a list of 1–64
-strings. Each string is nonempty, at most 256 characters and contains no null characters. Coordinates must be finite
+distinct strings. Entries within a list are OR, and name/type conditions combine with AND. For example,
+`"type":["transport-belt","mining-drill"]` selects either native type, including mod prototypes. Underground belts
+and splitters have their own native types. To read belts, underground belts, splitters and mining drills in one area:
+
+```json
+{
+  "selection": {
+    "kind": "entities",
+    "area": {
+      "left_top": {
+        "x": 0,
+        "y": 0
+      },
+      "right_bottom": {
+        "x": 32,
+        "y": 32
+      }
+    },
+    "type": [
+      "transport-belt",
+      "underground-belt",
+      "splitter",
+      "mining-drill"
+    ]
+  },
+  "fields": [
+    "name",
+    "type",
+    "position"
+  ],
+  "limit": 128
+}
+```
+
+Filters apply before the result limit. Check truncation and narrow the area when necessary; a bounded response does
+not promise every matching entity in a dense area. Each filter string is nonblank, at most 256 characters and contains
+no null characters. Coordinates must be finite
 and within ±1,000,000 tiles. The top-level `surface` accepts a nonblank name or positive index and defaults to the
 current controller's surface. Results include the observation tick, controller/physical
 positions, truncation and per-property nil/error status. Entity point/area queries use collision geometry; radius
@@ -506,10 +575,189 @@ and prototypes. Entity order is unspecified; tile order is row-major. `candidate
 the
 result is truncated. Use the containing world's identity scope when retaining entity unit numbers across calls.
 
+### Entity configuration and related objects
+
+Entity and character/vehicle selections accept `include` with any distinct subset of `recipe`, `fluids` and `filters`.
+These return separate `details` entries with per-entry nil/error information in `detail_status`:
+
+- `recipe`: configured recipe and quality references. A missing recipe is explicit; it does not imply craftability.
+- `fluids`: native fluid-name to amount dictionary. Use object inspection of `fluidbox` for temperature or connections.
+- `filters`: native slot count, up to 128 indexed filters, mode flags and per-property/per-slot errors. Unsupported
+  filters/modes are not inferred from the entity's name.
+
+```json
+{
+  "selection": {
+    "kind": "entities",
+    "position": {
+      "x": 10,
+      "y": 20
+    }
+  },
+  "fields": [
+    "name",
+    "status",
+    "crafting_progress"
+  ],
+  "include": [
+    "recipe",
+    "fluids",
+    "filters"
+  ]
+}
+```
+
+For deeper reads, use `selection.kind: "inspect"` with a `target`. Targets include `game`, ordinary entity/player/
+character/vehicle/physical_vehicle/force selectors, `surface` with an optional name, `planet`/`recipe`/`technology`
+with a name, or `prototype` with catalog `type` and `name`. Entity targets must resolve exactly one entity. Optional
+`player` selects player references or the force used for a recipe/technology. `game` provides roots such as players,
+surfaces and forces. Inspection requires the selected installation's `doc-html/runtime-api.json`.
+
+`mode` is one of:
+
+- `members`: discover readable attributes and admitted query methods, including shipped API descriptions, parameter
+  and return metadata, subclass restrictions and index/length capabilities. Availability in metadata does not mean
+  a property applies to the current concrete object.
+- `values` (default): read specified `fields`, or a page of all readable attributes. Native errors and nil values
+  remain explicit. At most 64 distinct field names may be selected.
+- `entries`: page a returned table or indexable collection. Each entry has its native `key`, bounded value preview,
+  and any read status. Keys sort by native scalar type/value; array-like objects use one-based indices.
+
+Use `selection.path` to follow up to 12 steps from a freshly resolved target. Each step is exactly
+`{"property":"name"}`, `{"index":1}` (or a string key), or
+`{"method":"get_recipe","arguments":[],"result":2}`. Methods come from a restricted passive-query set; arbitrary
+Lua, mutation methods and insertion-capacity probes are not accepted. `arguments` contains up to eight JSON arguments;
+`result` selects one of up to eight return positions and defaults to 1. Omit trailing optional arguments.
+
+```json
+{
+  "selection": {
+    "kind": "inspect",
+    "target": {
+      "kind": "entities",
+      "unit_number": 123
+    }
+  },
+  "mode": "members",
+  "limit": 32
+}
+```
+
+```json
+{
+  "selection": {
+    "kind": "inspect",
+    "target": {
+      "kind": "entities",
+      "unit_number": 123
+    },
+    "path": [
+      {
+        "method": "get_recipe"
+      }
+    ]
+  },
+  "fields": [
+    "name",
+    "ingredients",
+    "products",
+    "enabled"
+  ]
+}
+```
+
+```json
+{
+  "selection": {
+    "kind": "inspect",
+    "target": {
+      "kind": "entities",
+      "unit_number": 123
+    },
+    "path": [
+      {
+        "property": "fluidbox"
+      }
+    ]
+  },
+  "mode": "entries"
+}
+```
+
+All inspection modes accept `offset` (0–65536) and `limit` (1–256, default 64), and report `total`, `truncated` and
+`next_offset` where applicable. Properties returning native objects remain references: continue the path to inspect
+them. Plain tables have bounded previews (depth 3, 64 entries each, 4096 total values); omitted/partial previews and
+overlong strings are explicit. Collection scans stop at 65536 keys; select an index directly for larger collections.
+This interface exposes supported native data, not arbitrary mod-private state, and does not compute game eligibility.
+
+### Multiplayer players
+
+`selection: {"kind":"players"}` enumerates current-world players, including disconnected players. Optional
+`connected`, `names` and `indices` filters combine with AND; entries within each list are OR. Results sort by player
+index and support `offset` and `limit` (default 64, maximum 128). Names and indices must be distinct; names accept up
+to 64 entries and indices up to 128. `fields` uses the same set as a single player query.
+
+```json
+{
+  "selection": {
+    "kind": "players",
+    "connected": true
+  },
+  "fields": [
+    "index",
+    "name",
+    "position",
+    "surface",
+    "physical_position",
+    "physical_surface",
+    "character"
+  ]
+}
+```
+
+Specify `player` by name or positive API index for `player`, `character`, `vehicle`, `physical_vehicle` and `force`
+selections, and for these inventory owners. Omission still selects the injected client's local player. The shared
+`player` envelope always describes the local observer, even when the selected object belongs to someone else.
+Surface references include their native planet relation or explicit absence; a surface is not assumed to be a planet.
+Direction and health can be read from the selected player's character. Other players' supported inventories are
+direct reads; unavailable controllers/references retain errors or nil rather than substituting the local player.
+
+```json
+{
+  "selection": {
+    "kind": "player",
+    "player": "Alice"
+  },
+  "fields": [
+    "name",
+    "connected",
+    "position",
+    "surface",
+    "physical_position",
+    "physical_surface"
+  ]
+}
+```
+
+```json
+{
+  "selection": {
+    "kind": "inventory",
+    "owner": {
+      "kind": "character",
+      "player": "Alice"
+    },
+    "inventory": "main"
+  },
+  "limit": 32
+}
+```
+
 ### Player context
 
-Use `world_query` with `{"selection":{"kind":"player"}}` for current held-stack identity, held ghost and crafting
-queue. The shared `player` envelope also includes controller type, current `position`/`surface` and
+Use `world_query` with `{"selection":{"kind":"player"}}` for current held-stack identity, held ghost, held blueprint
+record, cursor temporariness, original hand location and crafting queue. The shared `player` envelope also includes
+controller type, current `position`/`surface` and
 `physical_position`/`physical_surface`; retain both pairs when using remote view. These are native API values, not
 MCP predictions about which actions are allowed. Select fewer properties when only one fact is needed:
 
@@ -520,7 +768,10 @@ MCP predictions about which actions are allowed. Select fewer properties when on
   },
   "fields": [
     "cursor_stack",
-    "cursor_ghost"
+    "cursor_ghost",
+    "cursor_record",
+    "cursor_stack_temporary",
+    "hand_location"
   ]
 }
 ```
@@ -531,11 +782,65 @@ describe its blueprint contents. Optional player fields also include `selected`,
 and the native reach/build distances; those distances alone do not determine action validity.
 `physical_controller_type`, `vehicle`, `physical_vehicle` and `driving` are also available as player fields.
 
+`cursor_record` is a separate blueprint-library reference; an empty stack alone does not mean an empty cursor.
+`cursor_stack_temporary` is the native flag for a stack discarded on clearing the cursor. `hand_location` preserves
+the original native inventory enum and one-based slot, not a newly inferred inventory location. Optional
+`blueprint_to_setup` identifies the stack being configured; it is not an import-progress field.
+
+Inspect the held stack directly for condition, label and type-specific properties. Unsupported property reads stay
+in `read_status`; durability or ammunition is not meaningful for every item:
+
+```json
+{
+  "selection": {
+    "kind": "inspect",
+    "target": {
+      "kind": "player"
+    },
+    "path": [
+      {
+        "property": "cursor_stack"
+      }
+    ]
+  },
+  "fields": [
+    "valid_for_read",
+    "name",
+    "count",
+    "quality",
+    "health",
+    "durability",
+    "ammo",
+    "label",
+    "is_blueprint",
+    "is_blueprint_book"
+  ]
+}
+```
+
+Use the same path with `cursor_record` and `mode:"members"` to discover record properties such as
+`is_blueprint_preview`, `type` and snapping settings. A record may initially be a preview; content reads can return
+the game's preview-read error until it becomes available. The admitted `is_blueprint_setup` and
+`get_blueprint_entity_count` methods can inspect a supported blueprint stack or record without expanding its entities.
+For example, append `{"method":"get_blueprint_entity_count"}` after the cursor property path step.
+
+The percentage displayed while importing a blueprint string is a separate client transfer state. `status` returns
+`input_transfer.source:"local_input_segment_queue"`, `available`, `client_present`, `queued_batches`, and
+`front_batch_blueprint_import`. The latter is either `null` or `{segment_index,total_segments}`: the native zero-based
+segment counter and total used by the import overlay. They describe outgoing transfer progress, not server acceptance,
+blueprint parsing completion or a successful imported item. `null` means no matching import in the front batch at that
+observation; it does not rule out later queued work. Without an active multiplayer client, `client_present` is false.
+If debug metadata or the live queue cannot be read, `available:false` includes a reason instead of reporting idle.
+This is a snapshot, so short transfers may finish between observations. Blueprint-library downloads and arbitrary
+mod progress are not covered by these counters; use record properties or UI, with screenshots for otherwise missing
+custom-painted information.
+
 Local `character`, `vehicle` and `physical_vehicle` selections follow the corresponding player references without
 coordinates. They use entity fields, including `health`, `max_health`, `speed`, `selected_gun_index` and
 `driver_is_gunner`. Missing references return `objects: []` and `availability: "nil"`; no character or vehicle is
 invented.
-These selections accept only `kind` and cannot override `surface`. Entity visibility flags use that entity's own
+These selections accept `kind` and optional `player`, and cannot override `surface`. Entity visibility flags use that
+entity's own
 surface.
 
 ```json
@@ -732,7 +1037,8 @@ for labels, ordering, parent and subgroup references. Prototype reads also expos
 ### Force and technology state
 
 `selection: {kind: "force"}` reads the local player's force, including current/previous research, research queue,
-progress and whether research is enabled. Its selection contains only `kind`; use `fields` to choose force properties.
+progress and whether research is enabled. Its selection accepts optional `player`; use `fields` to choose force
+properties.
 It returns one force and does not accept `surface`, `offset` or selection filters.
 Use `technologies` for current-force technology objects with names/search and normal catalog pagination:
 
@@ -768,6 +1074,32 @@ Results report `next_offset` when another page exists, and
 catalogs sort by internal name. Each page is a fresh observation, so live inventory edits can shift contents between
 pages. Catalog discovery scans at most 65536 definitions; larger catalogs require exact-name batches. A loaded world
 and local player are required, including for prototype queries.
+
+## Chat
+
+`chat_read` takes optional `limit` (1–128, default 64) and `after` (a cursor from this attachment). It reads the local
+client's retained console without opening chat UI, including received player messages, notifications and mod output.
+It is not a global server log, channel filter or lossless event subscription.
+
+Each message has an MCP observation `id`, native update `tick`, `storage` (`game_state` or `local`),
+`player_index_raw`, `text`, `raw` and separate truncation flags. `player_index_raw` is the unmodified native unsigned
+index, not the one-based Lua player selector; non-player messages can carry a sentinel. No sender/channel is parsed
+from text. `text` is existing cached display text, which may be empty or stale. `raw` formats the localization
+expression without requesting translation. Each string is bounded to 4095 UTF-8 bytes without splitting a character.
+
+The initial read returns the latest requested observations. Pass `cursor` as the next call's `after`; follow
+`has_more` to drain additional observed records. The adapter captures at most 128 entries from each native storage
+list per read and retains at most 512 observations per attachment. `retained_counts` reports the native list counts;
+`snapshot_truncated` reports the capture bound. `history_lost` reports console replacement or an expired retained
+cursor. `missed_between_reads_possible` is always true: messages can disappear between reads, and the console may
+merge repeated output. Changing cached translations does not create a new message observation. Omit `after` after
+reattaching; cursors are attachment-local. Ordering is observation order, not a claim of total server chronology.
+
+`chat_send` requires `text`: one nonblank line, at most 4096 UTF-8 bytes, with no NUL or slash commands (including
+after leading whitespace). It submits ordinary chat as the local player without opening or overwriting a draft UI.
+The result is `{"dispatch":"completed"}`. It does not guarantee server acceptance, delivery or a corresponding read
+record; game/mod rules still apply. Do not retry after an uncertain result. Both tools require a loaded world/local
+player.
 
 ## Screenshots
 

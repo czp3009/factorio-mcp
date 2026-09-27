@@ -83,6 +83,13 @@ private val symbolPrefixes =
         "?getGameView@Player@@QEBAPEAVGameView@@XZ",
         "?getDisplaySize@GameView@@QEBA?AVPixelSize@@XZ",
         "?getMapPosition@GameView@@QEBA?AVMapPosition@@VPixelPosition@@@Z",
+        "?str_raw@LocalisedString@@",
+        "??0?\$basic_string@DU?\$char_traits@D@std@@V?\$allocator@D@2@@std@@QEAA@QEBD@Z",
+        "?send@GuiContext@@QEBAX\$\$QEAVInputAction@@@Z",
+        "?destroyValue@InputAction@@",
+        "?noData@InputAction@@",
+        "?isCorrectDataTypeForAction@InputAction@@",
+        "??_R0?AV?\$basic_string@DU?\$char_traits@D@std@@V?\$allocator@D@2@@std@@@8",
     )
 
 internal class ResolvedSymbols(
@@ -108,6 +115,8 @@ internal class ResolvedSymbols(
     val sprites: Result<SpriteLayouts>,
     val conditions: Result<QualityConditionLayouts>,
     val switches: Result<SwitchLayouts>,
+    val chat: Result<ChatLayouts>,
+    val inputTransfer: Result<InputTransferLayouts>,
 ) {
     fun write(target: Symbols) {
         memset(target.ptr, 0, sizeOf<Symbols>().toULong())
@@ -131,6 +140,8 @@ internal class ResolvedSymbols(
         sprites.getOrNull()?.write(target.sprites)
         conditions.getOrNull()?.write(target.conditions)
         switches.getOrNull()?.write(target.switches)
+        chat.getOrNull()?.write(target.chat)
+        inputTransfer.getOrNull()?.write(target.inputTransfer)
         if (world.isSuccess && controls.isSuccess && pauseOffsets != null)
             timedInput.getOrNull()?.write(target.timedInput)
         target.processEventsEnd = processEventsEnd
@@ -345,7 +356,9 @@ internal fun resolveSymbols(process: HANDLE, module: ProcessModule): ResolvedSym
                 TimedInputLayouts(types)
             },
             runCatching {
-                for (index in FmSymbol.PlayerGameView.value.toInt() until symbolPrefixes.size) {
+                for (index in
+                FmSymbol.PlayerGameView.value.toInt() until
+                        FmSymbol.LocalisedRaw.value.toInt()) {
                     check(collector.counts[index] == 1) {
                         "Viewport unavailable: missing or ambiguous ${symbolPrefixes[index]}"
                     }
@@ -387,6 +400,15 @@ internal fun resolveSymbols(process: HANDLE, module: ProcessModule): ResolvedSym
                 )
             },
             runCatching { SwitchLayouts(types, collector.switchTypes) },
+            runCatching {
+                for (index in FmSymbol.LocalisedRaw.value.toInt() until symbolPrefixes.size) {
+                    check(collector.counts[index] == 1) {
+                        "Chat unavailable: missing or ambiguous ${symbolPrefixes[index]}"
+                    }
+                }
+                ChatLayouts(types)
+            },
+            runCatching { InputTransferLayouts(types) },
         )
     } finally {
         SymCleanup(process)

@@ -2,12 +2,12 @@
 
 package com.hiczp.factorio.mcp
 
+import kotlin.io.encoding.Base64
+import kotlin.test.*
 import kotlinx.cinterop.toKString
 import kotlinx.coroutines.*
 import kotlinx.serialization.json.*
 import platform.posix.getenv
-import kotlin.io.encoding.Base64
-import kotlin.test.*
 
 /** Opt-in real-game acceptance reuses an explicitly selected process and endpoint. */
 class HttpAcceptanceTest {
@@ -68,6 +68,8 @@ class HttpAcceptanceTest {
                         "input_bindings",
                         "world_query",
                         "world_overview",
+                        "chat_read",
+                        "chat_send",
                         "input",
                     ),
                     names,
@@ -80,6 +82,14 @@ class HttpAcceptanceTest {
                 assertTrue(client.tool("screenshot").getValue("isError").jsonPrimitive.boolean)
                 assertTrue(client.tool("input_bindings").getValue("isError").jsonPrimitive.boolean)
                 assertTrue(client.tool("world_overview").getValue("isError").jsonPrimitive.boolean)
+                assertTrue(client.tool("chat_read").getValue("isError").jsonPrimitive.boolean)
+                assertTrue(
+                    client
+                        .tool("chat_send", buildJsonObject { put("text", "MCP detached probe") })
+                        .getValue("isError")
+                        .jsonPrimitive
+                        .boolean
+                )
                 assertTrue(
                     client
                         .tool("input", buildJsonObject { putJsonArray("operations") {} })

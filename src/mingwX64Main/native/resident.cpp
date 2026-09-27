@@ -7,6 +7,8 @@
 #include "ui_selector.h"
 #include "ui_capture.h"
 #include "world_query.h"
+#include "chat.h"
+#include "input_transfer.h"
 #include "resident_input.h"
 #include <algorithm>
 #include <atomic>
@@ -341,9 +343,13 @@ static void service(void *root, void *gui) {
     result.spriteCount = 0;
     result.registryCount = 0;
     result.worldSize = 0;
+    result.chat.count = 0;
+    result.inputTransfer = {};
     try {
         if (shared->cancel)
             throw std::runtime_error("Tool was cancelled before UI traversal");
+        if (shared->operation == 1 || shared->operation == 2)
+            readInputTransfer(symbols, global, result.inputTransfer);
         if (shared->operation == 7) {
             require(!loading, "Control registry is unavailable during loading");
             collectControls(symbols, *shared);
@@ -356,6 +362,13 @@ static void service(void *root, void *gui) {
             require(symbols.timedInput.supported, "Timed input adapter is unavailable");
             timedInput.admit(symbols, shared->inputName, sizeof(shared->inputName));
             InterlockedExchange(&shared->inputActive, timedInput.active());
+        }
+        if (shared->operation == 10 || shared->operation == 11) {
+            require(!loading && game, "Chat requires a loaded world");
+            if (shared->operation == 10)
+                readChat(symbols, game, result.chat);
+            else
+                sendChat(symbols, game, shared->chat);
         }
         const bool keyAction = shared->operation == 5 && shared->action.kind == 3;
         if (keyAction) {

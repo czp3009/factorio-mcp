@@ -3,11 +3,11 @@ package com.hiczp.factorio.mcp
 import io.modelcontextprotocol.kotlin.sdk.server.Server
 import io.modelcontextprotocol.kotlin.sdk.server.ServerOptions
 import io.modelcontextprotocol.kotlin.sdk.types.*
+import kotlin.io.encoding.Base64
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
 import kotlinx.serialization.json.*
-import kotlin.io.encoding.Base64
 
 internal fun createServer(game: GameSession): Server {
     val server =
@@ -17,7 +17,7 @@ internal fun createServer(game: GameSession): Server {
             instructions =
                 """
                 Attach to an existing, fully loaded Factorio client; this server never launches it.
-                Prefer structured observations: ui_read for UI, world_overview for spatial summaries, and world_query for objects, player state, inventories and catalogs. Narrow selectors, fields and pages to limit context. Use screenshot only when structured data is insufficient, visual verification is needed, or an image is requested; do not capture after every action.
+                Prefer direct structured reads: world_overview for spatial surveys, world_query for native objects and related state, chat_read for retained messages, and ui_read for interface state or information without a supported direct reader. Use inspect member discovery and bounded paths instead of opening individual machine windows. Narrow filters, fields and pages to limit context. Use screenshot only for missing visual information, verification or requested images; do not capture after every action.
                 Prefer ui_action with live selectors for UI, including offscreen controls. Prefer set_text on an available text field over dragging a slider. Use input for world controls or held mouse gestures; discover current bindings with input_bindings instead of assuming default keys or mouse meanings.
                 Interpret native values and hierarchy yourself: missing, null and unavailable are distinct, widget flags are local, and controller context can differ from the physical character. Check truncation before treating results as complete.
                 Action completion confirms dispatch, not a game outcome. Observe effects before dependent actions, especially in multiplayer. Do not blindly repeat a mutation whose result was lost or uncertain.
@@ -71,7 +71,7 @@ internal fun createServer(game: GameSession): Server {
 
     tool(
         "status",
-        "Check this server's attachment, PID, observed game state, ui_ready and pause status. Takes no arguments; never searches for or attaches to a process. A null paused value means unknown, not running. State does not guarantee tool availability; each call checks its own prerequisites. Detected process exit clears the attachment.",
+        "Check this server's attachment, PID, observed game state, ui_ready and pause status. Takes no arguments; never searches for or attaches to a process. A null paused value means unknown, not running. State does not guarantee tool availability; each call checks its own prerequisites. Detected process exit clears the attachment. input_transfer observes the local outgoing queue and the front batch blueprint import segment counters; absence is not import success. Use world_query for held item/ghost/record state.",
     ) {
         game.status()
     }
@@ -205,18 +205,33 @@ internal fun createServer(game: GameSession): Server {
     }
     tool(
         "world_overview",
-        "Survey the current viewport or an explicit map area as a bounded spatial grid; use world_query for exact objects/properties. Requires a loaded world/local player; works while paused, with UI open, and in normal/remote views. Returns viewport pixels/map bounds/surface, controller/physical context, entity groups by prototype/type/quality, resource amounts, a center tile sample per cell and chunk coverage. UI occlusion is not considered. Live reads may include hidden data; they are not remembered chart contents. Check partial/unscanned cells and truncation; tile samples do not describe every tile. Does not move the camera or generate chunks.",
+        "Survey the viewport or a map area, optionally filtered by native entity types or prototype names. Choose grid summaries or individual entities with selected fields and recipe/fluid/filter details; use world_query for deeper inspection. Requires a loaded world/local player; supports pause, open UI and normal/remote views. Returns viewport/controller context and bounded live observations, which may include hidden data. UI occlusion is ignored. Check truncation, unscanned cells and coverage; tile samples are not all tiles. Does not move the camera or generate chunks.",
         worldOverviewSchema(),
     ) { args ->
         game.query(parseWorldOverview(args))
     }
     tool(
         "world_query",
-        "Read precise live objects, player context, inventory slots or catalogs. Requires a loaded world/local player; works while paused and with UI open. Use player to locate yourself without coordinates, and distinguish controller from physical surface/position. character/vehicle/physical_vehicle follow native references; absent references are explicit. Discover inventories before selecting inventory slots; quickbar returns filters/pages, not stock counts. prototypes provides definitions and categories; recipes/technologies provide current-force availability/research, not inferred craftability. Use names/search or recipe product/ingredient filters to narrow catalogs; request only needed fields. Values preserve nil/read-error status, shallow references and untranslated structured localized strings. Live reads can include hidden objects; chunk generation/charting/visibility flags do not reproduce remembered map contents. No camera movement or chunk generation. Check truncation and missing_names; pages are fresh observations. Catalogs sort by internal name, tiles row-major, entities have no guaranteed order.",
+        "Read live objects directly without opening their UI. Includes entity recipe/fluid/filter details, players, inventories and catalogs. Requires a loaded world/local player; works while paused or covered by UI. players lists current-world players; player defaults to self or selects a name/index. Controller and physical positions can differ. Player cursor_stack, cursor_ghost and cursor_record are distinct; inspect the relevant cursor reference for item condition or blueprint properties. Discover inventories before reading slots; quickbar is filters, not stock. Use inspect members to discover native attributes and admitted read methods, values for properties, and path/entries for related objects or collections; bounded references are not complete contents. Prototype definitions and force recipes/technologies preserve native availability, not inferred craftability. Narrow spatial queries by types/names and catalogs by names/search/recipe relations. Missing, nil and read errors remain distinct. Reads may expose hidden data; localized strings stay untranslated. Check truncation; pages are fresh observations, with no stable entity ordering.",
         worldQuerySchema(),
         listOf("selection"),
     ) { args ->
         game.query(parseWorldQuery(args))
+    }
+    tool(
+        "chat_read",
+        "Read chat and notifications retained by the local client's output console without opening UI. Requires a loaded world. text is the existing cached display text and may be empty/stale; raw preserves the localization expression. No sender/channel inference. Optional cursor returns later observations in this attachment; this is not a lossless subscription or server-wide log. Check history_lost, has_more and truncation. Messages unseen and evicted between reads cannot be recovered.",
+        chatReadSchema(),
+    ) { args ->
+        game.readChat(args["after"]?.stringArgument(), args["limit"]?.intArgument() ?: 64)
+    }
+    tool(
+        "chat_send",
+        "Submit one plain message as the local player through normal game input. Requires a loaded world. No console commands or administrator privileges. Returns dispatch:completed, not server acceptance or delivery; game/mod rules still apply. Do not retry after an uncertain result.",
+        chatSendSchema(),
+        listOf("text"),
+    ) { args ->
+        game.sendChat(parseChatMessage(args))
     }
     tool(
         "input",

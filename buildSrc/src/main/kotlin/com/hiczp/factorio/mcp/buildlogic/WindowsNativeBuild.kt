@@ -30,9 +30,9 @@ abstract class WindowsNativeBuild @Inject constructor(private val processes: Exe
     @get:PathSensitive(PathSensitivity.RELATIVE)
     abstract val sourceDirectory: DirectoryProperty
 
-    @get:InputDirectory
+    @get:InputFile
     @get:PathSensitive(PathSensitivity.RELATIVE)
-    abstract val testDirectory: DirectoryProperty
+    abstract val toolchainFile: RegularFileProperty
 
     @get:OutputDirectory
     abstract val outputDirectory: DirectoryProperty
@@ -65,7 +65,7 @@ abstract class WindowsNativeBuild @Inject constructor(private val processes: Exe
                 "-G",
                 "Ninja",
                 "-DCMAKE_BUILD_TYPE=Release",
-                "-DCMAKE_TOOLCHAIN_FILE=${sourceDirectory.file("cmake/KonanWindows.cmake").get().asFile.invariantSeparatorsPath}",
+                "-DCMAKE_TOOLCHAIN_FILE=${toolchainFile.get().asFile.invariantSeparatorsPath}",
                 "-DKONAN_LLVM_HOME=${platform.absoluteLlvmHome}",
                 "-DKONAN_DRIVER_DIR=${directory.resolve("drivers").invariantSeparatorsPath}",
             )

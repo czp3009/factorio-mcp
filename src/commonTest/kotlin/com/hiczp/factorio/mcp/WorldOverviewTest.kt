@@ -1,10 +1,10 @@
 package com.hiczp.factorio.mcp
 
-import kotlinx.serialization.json.*
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
+import kotlinx.serialization.json.*
 
 class WorldOverviewTest {
     private fun parse(text: String) = parseWorldOverview(Json.parseToJsonElement(text).jsonObject)
@@ -32,6 +32,25 @@ class WorldOverviewTest {
                 .jsonObject
         assertEquals(JsonArray(emptyList()), empty["entity_groups"])
         assertEquals(JsonObject(emptyMap()), empty["coverage"])
+    }
+
+    @Test
+    fun entityTypeUnionsPreserveNativeFiltersInBothModes() {
+        for (detail in listOf("grid", "entities")) {
+            val value =
+                parse(
+                    """{"detail":"$detail","type":["transport-belt","mining-drill"],"name":"mod-drill"}"""
+                )
+            val selector = value.arguments.getValue("selection").jsonObject
+            assertEquals(
+                listOf("transport-belt", "mining-drill"),
+                selector.getValue("type").jsonArray.map { it.jsonPrimitive.content },
+            )
+            assertEquals("mod-drill", selector.getValue("name").jsonPrimitive.content)
+        }
+        for (filter in listOf("[]", "[1]", "[\"x\",\"x\"]", "\" \"")) {
+            assertFailsWith<IllegalArgumentException> { parse("""{"type":$filter}""") }
+        }
     }
 
     @Test

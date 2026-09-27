@@ -244,6 +244,7 @@ internal fun GameSnapshot.statusJson(pid: Int): JsonObject = buildJsonObject {
     put("ui_ready", attached)
     put("frame", frame)
     put("paused", paused?.let(::JsonPrimitive) ?: JsonNull)
+    inputTransfer?.let { put("input_transfer", it.toJson()) }
 }
 
 internal fun detachedStatus() = buildJsonObject {

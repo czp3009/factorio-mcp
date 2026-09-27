@@ -54,6 +54,27 @@ script.on_init(function()
   game.forces.player.technologies["steam-power"].researched=true
   game.forces.player.technologies["automation-science-pack"].researched=true
   game.forces.player.technologies["quality-module"].researched=true
+  local surface=game.create_surface("mcp-query-details",{width=64,height=64})
+  surface.request_to_generate_chunks({0,0},1)
+  surface.force_generate_chunk_requests()
+  for _,entity in pairs(surface.find_entities_filtered{area={{-16,-16},{16,16}},force="neutral"}) do entity.destroy() end
+  local tiles={}
+  for x=-16,16 do for y=-16,16 do tiles[#tiles+1]={name="grass-1",position={x,y}} end end
+  surface.set_tiles(tiles)
+  local function create(name,x,y)
+    return assert(surface.create_entity{name=name,position={x,y},force=game.forces.player})
+  end
+  local machine=create("assembling-machine-2",-8,0)
+  machine.set_recipe("iron-gear-wheel","uncommon")
+  local drill=create("electric-mining-drill",0,0)
+  local belt=create("transport-belt",8,0)
+  local inserter=create("inserter",0,8)
+  inserter.use_filters=true
+  inserter.set_filter(1,"iron-plate")
+  local tank=create("storage-tank",8,8)
+  tank.insert_fluid{name="water",amount=1234,temperature=25}
+  record("query_details",nil,{machine=machine.unit_number,drill=drill.unit_number,belt=belt.unit_number,
+    inserter=inserter.unit_number,tank=tank.unit_number,surface=surface.name})
 end)
 
 script.on_event(defines.events.on_player_created,function(event)
@@ -181,6 +202,12 @@ for event,kind in pairs(events) do
     selected_index=kind=="selection" and e.element.selected_index or nil}) end)
 end
 script.on_event(defines.events.on_research_started,function(event) record("research",nil,{name=event.research.name}) end)
+script.on_event(defines.events.on_console_chat,function(event)
+  record("chat",event.player_index and game.get_player(event.player_index),{message=event.message})
+  if string.sub(event.message,1,20)=="MCP chat acceptance " then
+    game.print{"","MCP chat fixture echo: ",event.message}
+  end
+end)
 script.on_event(defines.events.on_train_schedule_changed,function(event)
   record("train_schedule",event.player_index and game.get_player(event.player_index),{id=event.train.id,schedule=event.train.schedule})
 end)

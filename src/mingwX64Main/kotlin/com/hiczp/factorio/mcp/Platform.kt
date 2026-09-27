@@ -6,6 +6,8 @@
 
 package com.hiczp.factorio.mcp
 
+import kotlin.concurrent.atomics.AtomicInt
+import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import kotlinx.cinterop.*
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.newSingleThreadContext
@@ -14,8 +16,6 @@ import kotlinx.io.*
 import platform.posix.fputs
 import platform.posix.stderr
 import platform.windows.*
-import kotlin.concurrent.atomics.AtomicInt
-import kotlin.concurrent.atomics.ExperimentalAtomicApi
 
 @OptIn(ExperimentalAtomicApi::class)
 private val stopping = AtomicInt(0)
@@ -150,6 +150,9 @@ internal actual class GameProcess actual constructor(private val pid: Int) : Gam
 
     actual override suspend fun query(query: WorldQuery): GameSnapshot =
         withContext(dispatcher) { checkNotNull(client).execute(8, 4096, null, query) }
+
+    actual override suspend fun sendChat(text: String): GameSnapshot =
+        withContext(dispatcher) { checkNotNull(client).execute(11, 4096, null, chatText = text) }
 
     actual override suspend fun beginInput(request: InputSequenceRequest): GameInputTask {
         var admitted: GameInputTask? = null

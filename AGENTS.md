@@ -3,7 +3,9 @@
 ## Scope and language
 
 - Keep user-facing conversation in the user's preferred language. Write documentation, comments and docstrings in
-  English.
+  English, except explicitly requested translations. Name translated READMEs `README-{language}.md`, such as
+  `README-zh-cn.md`. Keep `README.md` and its translations aligned when changing user-facing requirements, usage,
+  tools or limitations.
 - When the user emphasizes or repeatedly requests a rule, assess whether it is a lasting convention rather than a
   task-specific instruction. If it is a lasting convention, consider whether it belongs in `AGENTS.md`; add it when
   appropriate, or refine an existing rule to capture the intent precisely without duplication.
@@ -11,6 +13,8 @@
   unfinished designs under ignored `temp/`. Do not restore the old gameplay-specific catalog or Linux implementation.
 - Preserve the default KMP source-set layout for future Windows, Linux and macOS implementations. Put portable tool
   definitions, lifecycle, cancellation, task models, serialization and UI projection in `commonMain`.
+  The intended desktop targets are Windows x64 (`mingwX64`), Linux x64 (`linuxX64`) and macOS ARM64 (`macosArm64`).
+  Do not expand the architecture matrix beyond these targets; only Windows x64 is currently implemented.
 - Put process discovery, developer debug information, injection and platform IPC in the corresponding platform Kotlin
   source set. Use C/C++ only for necessary resident hooks, atomic wire helpers and game C++ ABI adapters.
 - Write README for end users: concise setup, usage, available tools and practical limitations. Keep detailed public
@@ -26,19 +30,29 @@
   requested images, not a routine step after every action. Describe implemented behavior without gameplay inference.
 - Remove empty source directories left by changes. Preserve original research and useful negative results.
 - Do not describe the project as targeting or aligning with a specific Factorio version. Mention tested Factorio
-  versions briefly in README only; preserve version identifiers in historical research and raw test evidence.
+  versions briefly in README and its translations only; preserve version identifiers in historical research and raw test
+  evidence.
 
 ## Build and dependencies
 
+- Reference third-party GitHub Actions by version tags, not commit hashes.
 - Prefer Kotlin standard libraries and kotlinx-io, kotlinx-serialization-json and kotlinx-coroutines. Do not add
   expect/actual wrappers for APIs already provided by portable libraries.
 - Keep native compilation/linking in CMake and reusable Gradle logic in `buildSrc`. Scope platform tasks and native
   output directories by host and target; never attach Windows dependencies to common or other platform compilations.
+  Register platform build/test adapters within their target configuration, and connect host-only tooling only on
+  supported hosts. A skipped task still has dependencies; do not use `onlyIf` as a substitute for isolating its task
+  graph. Keep platform cinterop definitions with that platform's sources and select them explicitly. Derive task names
+  and output scopes from the configured target; shared configuration must not assume DLLs, MSVC, WinHTTP or x64.
+  Do not register unimplemented targets or add placeholder platform code just to advertise future support.
 - Reuse Kotlin/Native's bundled compiler, assembler and linker. The resident requires MSVC-compatible C++ ABI and
   standard-library headers; mention build prerequisites briefly in README and explain setup in `development.md`.
   Do not require the Visual Studio IDE.
 - Each native artifact has one build-system owner. Declare inputs, dependencies and outputs. Do not create custom
   distribution or executable-renaming tasks. Do not overwrite an unchanged resident DLL while it is mapped by Factorio.
+- Treat project files and build outputs as exclusively owned by this project. Do not assume the user is running a
+  particular build variant or add build/test workarounds to preserve externally occupied outputs. Tests should declare
+  dependencies on the project artifacts they need and obtain their paths from the build model.
 - Runtime injection must not depend on Frida, Python, LLVM utilities or an additional hooking library installed by
   users.
 - Use `factorio-mcp` consistently as the product, executable base name, server name and diagnostic prefix.
@@ -62,6 +76,13 @@
 - High-frequency player, inventory and catalog reads may use dedicated selectors or tools when they materially reduce
   calls or context. Prefer extending an existing coherent query contract. Read native references, properties and
   registries without vanilla-name tables, assumed inventory sizes or inferred crafting/research/action eligibility.
+- Design direct structured tools to cover ordinary information reads across the game, not just machines or currently
+  supported world fields. Agents should not have to navigate windows one by one to gather ordinary state, configuration,
+  contents, catalogs or statistics. Missing ordinary reads are query-coverage gaps to address, not a reason to make UI
+  navigation the normal workflow. Prefer coherent, discoverable queries and bounded expansion over a tool per fact.
+  Reserve UI-based inspection primarily for interface state, unusual information or mod-specific content without a
+  supported direct reader. Preserve safe-point execution and raw values; do not infer missing facts or promise access
+  to all mod-private state.
 - Action completion reports dispatch/execution progress and cleanup, never fulfillment of gameplay intent. Verify
   effects in acceptance tests; do not add runtime effect polling, retries or compensating actions to achieve an outcome.
 - Prefer shared UI interfaces for observation and actions, without interpreting inventory, crafting or machine
@@ -121,6 +142,11 @@
 ## Tests
 
 - Keep automatic tests in Kotlin/Gradle and native CMake/CTest fixtures. Do not restore an external Python test runner.
+- Use standard Gradle/KMP tasks (`assemble`, `build`, `check`, `mingwX64Test`) for building and local automated testing,
+  without manual fixture preparation or a running game. Build test dependencies automatically. Keep checks requiring
+  an installed game, external endpoint or operator-prepared scenario outside the default Gradle test run; execute them
+  explicitly from the built test executable after the normal build. Environment variables must not opt Gradle into
+  real-game acceptance.
 - Use the official SDK's Streamable HTTP endpoint for acceptance and curl for exploration, with standard initialize,
   session and protocol-version headers. Keep a small stdio smoke test.
 - Real-game acceptance is opt-in and explicitly selects its endpoint and PID. Never terminate an externally managed

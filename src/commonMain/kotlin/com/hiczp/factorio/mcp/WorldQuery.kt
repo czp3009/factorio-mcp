@@ -4,7 +4,7 @@ import kotlinx.serialization.json.*
 
 internal data class WorldQuery(val arguments: JsonObject, val includeViewport: Boolean = false)
 
-private val entityFields =
+internal val entityFields =
     setOf(
         "name",
         "type",
@@ -38,7 +38,7 @@ private val entityFields =
         "driver_is_gunner",
     )
 private val tileFields = setOf("name", "position", "surface", "hidden_tile", "double_hidden_tile")
-private val playerFields =
+internal val playerFields =
     setOf(
         "index",
         "name",
@@ -52,6 +52,10 @@ private val playerFields =
         "character",
         "cursor_stack",
         "cursor_ghost",
+        "cursor_record",
+        "cursor_stack_temporary",
+        "hand_location",
+        "blueprint_to_setup",
         "crafting_queue",
         "crafting_queue_size",
         "selected",
@@ -62,6 +66,12 @@ private val playerFields =
         "vehicle",
         "physical_vehicle",
         "driving",
+        "connected",
+        "last_online",
+        "online_time",
+        "afk_time",
+        "color",
+        "tag",
     )
 
 private val forceFields =
@@ -77,35 +87,63 @@ private val forceFields =
 
 internal val localEntityKinds = setOf("character", "vehicle", "physical_vehicle")
 
+internal fun validateSurfaceSelector(value: JsonElement) {
+    val surface = value as? JsonPrimitive ?: error("surface must be a name or positive index")
+    require(
+        if (surface.isString)
+            surface.content.isNotBlank() &&
+                    surface.content.length <= 256 &&
+                    '\u0000' !in surface.content
+        else surface.intOrNull?.let { it > 0 } == true
+    ) {
+        "surface must be a name or positive index"
+    }
+}
+
 internal fun parseWorldQuery(args: JsonObject): WorldQuery {
+    if (args["selection"]?.jsonObject?.get("kind")?.stringArgument() == "inspect")
+        return parseObjectInspection(args)
+    if (args["selection"]?.jsonObject?.get("kind")?.stringArgument() == "players")
+        return parsePlayersQuery(args)
     if (args["selection"]?.jsonObject?.get("kind")?.stringArgument() in relatedWorldKinds)
         return parseRelatedWorldQuery(args)
-    require(args.keys.all { it in setOf("selection", "fields", "limit", "surface") }) {
+    require(args.keys.all { it in setOf("selection", "fields", "limit", "surface", "include") }) {
         "Unknown world query argument"
     }
     val selection = args.getValue("selection").jsonObject
     require(
         selection.keys.all {
-            it in setOf("kind", "position", "area", "radius", "unit_number", "name", "type")
+            it in
+                    setOf("kind", "position", "area", "radius", "unit_number", "name", "type", "player")
         }
     ) {
         "Unknown selection field"
     }
     val kind = selection.getValue("kind").stringArgument()
+    args["include"]?.let {
+        require(kind == "entities" || kind in localEntityKinds) {
+            "include requires an entity selection"
+        }
+        validateEntityIncludes(it)
+    }
     require(kind in setOf("entities", "tiles", "player", "force") + localEntityKinds) {
         "Unsupported world selection kind"
     }
     val spatial = listOf("position", "area").count { it in selection }
     if (kind in setOf("player", "force") + localEntityKinds) {
-        require(selection.keys == setOf("kind") && "surface" !in args) {
-            "Local selections take only kind and do not accept surface"
+        require(selection.keys.all { it in setOf("kind", "player") } && "surface" !in args) {
+            "Player reference selections take kind and optional player, without surface"
         }
+        selection["player"]?.let(::validatePlayerSelector)
     } else if (kind == "entities") {
         require(spatial <= 1 && (spatial == 1 || "unit_number" in selection)) {
             "Select position or area, optionally filtered by unit_number; or use a directly indexed unit_number"
         }
     } else {
         require(spatial == 1) { "Specify exactly one of position or area" }
+    }
+    require("player" !in selection || kind in setOf("player", "force") + localEntityKinds) {
+        "player requires a player reference selection"
     }
     if (kind != "entities")
         require(selection.keys.none { it in setOf("radius", "unit_number", "name", "type") }) {
@@ -153,31 +191,8 @@ internal fun parseWorldQuery(args: JsonObject): WorldQuery {
             "Invalid unit_number"
         }
     }
-    for (field in listOf("name", "type")) selection[field]?.let {
-        val values = if (it is JsonArray) it else JsonArray(listOf(it))
-        require(values.size in 1..64) { "$field requires 1..64 names" }
-        values.forEach { value ->
-            require(
-                value.stringArgument().let { text ->
-                    text.isNotEmpty() && text.length <= 256 && '\u0000' !in text
-                }
-            ) {
-                "Invalid $field"
-            }
-        }
-    }
-    args["surface"]?.let {
-        val value = it.jsonPrimitive
-        require(
-            if (value.isString)
-                value.content.isNotBlank() &&
-                        value.content.length <= 256 &&
-                        '\u0000' !in value.content
-            else value.intOrNull?.let { n -> n > 0 } == true
-        ) {
-            "surface must be a name or positive index"
-        }
-    }
+    for (field in listOf("name", "type")) selection[field]?.let { validateEntityFilter(field, it) }
+    args["surface"]?.let(::validateSurfaceSelector)
     val limit = args["limit"]?.intArgument() ?: 128
     require(limit in 1..512) { "limit must be in 1..512" }
     val allowed =
@@ -227,6 +242,9 @@ internal fun parseWorldQuery(args: JsonObject): WorldQuery {
                     "physical_position",
                     "cursor_stack",
                     "cursor_ghost",
+                    "cursor_record",
+                    "cursor_stack_temporary",
+                    "hand_location",
                     "crafting_queue",
                 )
         }
@@ -248,6 +266,7 @@ internal fun parseWorldQuery(args: JsonObject): WorldQuery {
 }
 
 internal fun worldQuerySchema(): JsonObject = buildJsonObject {
+    put("include", entityIncludesSchema())
     putJsonObject("selection") {
         put("type", "object")
         put("additionalProperties", false)
@@ -258,12 +277,44 @@ internal fun worldQuerySchema(): JsonObject = buildJsonObject {
                     add("entities")
                     add("tiles")
                     add("player")
+                    add("players")
+                    add("inspect")
                     add("force")
                     localEntityKinds.forEach { add(it) }
                     relatedWorldKinds.forEach { add(it) }
                 }
             }
             put("position", worldPositionSchema())
+            put("player", playerSelectorSchema())
+            putJsonObject("target") {
+                put("type", "object")
+                put(
+                    "description",
+                    "inspect only: game; entities/player/character/vehicle/physical_vehicle/force selectors; surface with optional name; planet/recipe/technology with name; prototype with type and name. An entity target must match exactly one object. Recipe/technology may specify player for the force.",
+                )
+            }
+            put("path", inspectionPathSchema())
+            putJsonObject("connected") {
+                put("type", "boolean")
+                put(
+                    "description",
+                    "players only: filter online/offline state; omit to include all current-world players.",
+                )
+            }
+            putJsonObject("indices") {
+                put("type", "array")
+                put("minItems", 1)
+                put("maxItems", 128)
+                put("uniqueItems", true)
+                putJsonObject("items") {
+                    put("type", "integer")
+                    put("minimum", 1)
+                }
+                put(
+                    "description",
+                    "players only: exact API indices. Combines with names and connected filters; results sort by player index.",
+                )
+            }
             putJsonObject("area") {
                 put("type", "object")
                 put("additionalProperties", false)
@@ -291,39 +342,45 @@ internal fun worldQuerySchema(): JsonObject = buildJsonObject {
                 )
             }
             for (name in listOf("name", "type")) putJsonObject(name) {
+                entityFilterSchema(name).forEach { (key, value) -> put(key, value) }
                 put(
                     "description",
-                    if (name == "name") "entities only: exact internal prototype name(s)."
+                    if (name == "name")
+                        "entities only: exact internal prototype name(s). Entries are OR; name and type combine with AND."
                     else
-                        "entities: exact native entity type(s). prototypes: one catalog type listed in selection's description.",
+                        "entities: native type(s), e.g. transport-belt, underground-belt, splitter, mining-drill. Entries are OR; name and type combine with AND. prototypes: one catalog type listed in selection's description.",
                 )
-                putJsonArray("oneOf") {
-                    addJsonObject { put("type", "string") }
-                    addJsonObject {
-                        put("type", "array")
-                        put("minItems", 1)
-                        put("maxItems", 64)
-                        putJsonObject("items") { put("type", "string") }
-                    }
-                }
             }
             relatedSelectionProperties().forEach { (name, value) -> put(name, value) }
         }
         put(
             "description",
-            "entities: position/area uses collision geometry; position+radius uses entity centers; unit_number uses the current world's index. tiles: exactly one position or area. Coordinates are world tile units; areas must have positive dimensions up to 128x128. player|character|vehicle|physical_vehicle|force: only kind, no coordinates; absent entity references return availability:nil. inventories discovers an owner's inventory names; inventory reads slots. quickbar reads explicit slots/screen_pages. prototypes requires one type:item|recipe|entity|fluid|technology|quality|item_group|item_subgroup. recipes/technologies read current-force objects. Catalogs accept names/search and recipe relation filters where applicable.",
+            "entities: position/area uses collision geometry; position+radius uses centers; unit_number uses the world's index. tiles: one position or area. Coordinates are tiles, areas at most 128x128. player|character|vehicle|physical_vehicle|force accepts optional player; absent entity references return availability:nil. players enumerates/filter players. inspect requires target and optional path. inventories discovers inventory names; inventory reads slots. quickbar reads slots/screen_pages. prototypes requires type:item|recipe|entity|fluid|technology|quality|item_group|item_subgroup. recipes/technologies read local-force objects. Catalogs accept names/search and recipe relations.",
         )
         putJsonArray("required") { add("kind") }
     }
     putJsonObject("fields") {
         put("type", "array")
         put("minItems", 1)
-        put("maxItems", 32)
+        put("maxItems", 64)
         put("uniqueItems", true)
         putJsonObject("items") { put("type", "string") }
         put(
             "description",
-            "Select a small subset; omission uses kind-specific defaults. quickbar and inventories do not accept fields. Entities and local entity references: ${entityFields.joinToString()}. Tiles: ${tileFields.joinToString()}. Player: ${playerFields.joinToString()}. Force: ${forceFields.joinToString()}. ${relatedFieldsDescription()}",
+            "Omit for defaults; inspect values defaults to all readable attributes and accepts up to 64 names discovered with members; other kinds accept up to 32. quickbar/inventories reject fields. Entities/references: ${entityFields.joinToString()}. Tiles: ${tileFields.joinToString()}. Player/players: ${playerFields.joinToString()}. Force: ${forceFields.joinToString()}. ${relatedFieldsDescription()}",
+        )
+    }
+    putJsonObject("mode") {
+        put("type", "string")
+        putJsonArray("enum") {
+            add("values")
+            add("members")
+            add("entries")
+        }
+        put("default", "values")
+        put(
+            "description",
+            "inspect only. values reads a page of native attributes (all readable names when fields omitted); members discovers attribute/query metadata without reading their values; entries pages a table or indexable object. Related objects remain references; continue via path. Errors, nil and bounded previews are explicit.",
         )
     }
     putJsonObject("surface") {
@@ -342,7 +399,7 @@ internal fun worldQuerySchema(): JsonObject = buildJsonObject {
         put("maximum", 512)
         put(
             "description",
-            "Spatial/local default 128, max 512. Inventory/catalog queries default 64; inventory slots max 512, other related queries max 128. quickbar does not accept limit.",
+            "Spatial/player default 128, max 512. Inventory/catalog/players/inspect default 64; inventory slots max 512, players/catalogs max 128, inspect max 256. quickbar rejects limit.",
         )
     }
     putJsonObject("offset") {
@@ -352,7 +409,7 @@ internal fun worldQuerySchema(): JsonObject = buildJsonObject {
         put("default", 0)
         put(
             "description",
-            "Inventory/catalog queries only (not quickbar): zero-based page offset. Inventory slot indices remain one-based. Each page is a fresh observation.",
+            "Inventory/catalog/players/inspect only: zero-based page offset. Inventory slot indices remain one-based. Each page is a fresh observation.",
         )
     }
 }
@@ -378,13 +435,40 @@ internal fun decodeWorldQuery(text: String): JsonObject {
         )
     val objects =
         array(result.getValue("objects")).map { value ->
-            val objectValue = value.jsonObject
+            val original = value.jsonObject
+            val objectValue =
+                JsonObject(
+                    original.mapValues { (key, item) ->
+                        if (
+                            result["observation"]?.jsonPrimitive?.content == "object_inspection" &&
+                            key in setOf("members", "entries")
+                        )
+                            array(item)
+                        else if (key == "details")
+                            JsonObject(
+                                item.jsonObject.mapValues { (name, detail) ->
+                                    if (name == "filters")
+                                        JsonObject(
+                                            detail.jsonObject.mapValues { (field, data) ->
+                                                if (field == "slots") array(data) else data
+                                            }
+                                        )
+                                    else detail
+                                }
+                            )
+                        else item
+                    }
+                )
             val attributes = objectValue["attributes"]?.jsonObject
             if ("entity_groups" in objectValue)
                 JsonObject(
                     objectValue + ("entity_groups" to array(objectValue.getValue("entity_groups")))
                 )
-            else if (attributes == null) objectValue
+            else if (
+                attributes == null ||
+                result["observation"]?.jsonPrimitive?.content == "object_inspection"
+            )
+                objectValue
             else
                 JsonObject(
                     objectValue +
@@ -400,7 +484,8 @@ internal fun decodeWorldQuery(text: String): JsonObject {
         result +
                 ("objects" to JsonArray(objects)) +
                 result["missing_names"]?.let { mapOf("missing_names" to array(it)) }.orEmpty() +
-                result["active_pages"]?.let { mapOf("active_pages" to array(it)) }.orEmpty()
+                result["active_pages"]?.let { mapOf("active_pages" to array(it)) }.orEmpty() +
+                result["path"]?.let { mapOf("path" to array(it)) }.orEmpty()
     )
 }
 

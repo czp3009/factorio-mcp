@@ -29,17 +29,30 @@ internal val worldQueryLua =
     if args.surface then surface = game.get_surface(args.surface) else surface = player.surface end
     assert(surface and surface.valid, "Requested surface is unavailable")
     local selection, limit = args.selection, args.limit
+    local selected_player=player
+    if selection.player then
+      selected_player=game.get_player(selection.player)
+      assert(selected_player and selected_player.valid, "Selected player is unavailable")
+    end
     local function identity(value)
       local class = value.object_name
       if class == "LuaSurface" or class == "LuaForce" then
-        return {object_name=class, index=value.index, name=value.name}
+        local result={object_name=class, index=value.index, name=value.name}
+        if class=="LuaSurface" then
+          local planet=value.planet
+          result.planet=planet and {object_name=planet.object_name,name=planet.name} or nil
+          result.planet_availability=planet and "present" or "nil"
+        end
+        return result
       elseif class == "LuaQualityPrototype" then
         return {object_name=class, name=value.name, level=value.level}
       elseif class == "LuaEntity" then
         return {object_name=class, name=value.name, type=value.type, unit_number=value.unit_number,
-          position=value.position, surface={index=value.surface.index, name=value.surface.name}}
+          position=value.position, direction=value.direction, surface={index=value.surface.index, name=value.surface.name}}
       elseif class == "LuaTrain" then
         return {object_name=class, id=value.id}
+      elseif class == "LuaRecord" then
+        return {object_name=class, valid=value.valid, type=value.type}
       elseif class == "LuaItemStack" then
         if not value.valid_for_read then return {object_name=class, valid_for_read=false} end
         return {object_name=class, valid_for_read=true, name=value.name, count=value.count,
@@ -48,7 +61,7 @@ internal val worldQueryLua =
         return {object_name=class, name=value.name}
       elseif class == "LuaPlayer" then
         return {object_name=class, index=value.index, name=value.name}
-      elseif class == "LuaTechnology" then
+      elseif class == "LuaTechnology" or class == "LuaRecipe" then
         return {object_name=class, name=value.name, force={index=value.force.index, name=value.force.name}}
       elseif class == "LuaItemPrototype" or class == "LuaRecipePrototype" or class == "LuaEntityPrototype"
           or class == "LuaFluidPrototype" or class == "LuaTechnologyPrototype" then
@@ -93,6 +106,8 @@ internal val worldQueryLua =
       end
       return result
     end
+    $entityDetailsLua
+    $objectInspectionLua
     local function describe(object)
       local result = {object_name=object.object_name, attributes={}, read_status={}}
       for _, field in ipairs(args.fields) do
@@ -107,6 +122,7 @@ internal val worldQueryLua =
       end
       local ok, position = pcall(function() return object.position end)
       if ok and position then result.visibility = visibility(position, object.surface) end
+      entity_details(object,result)
       return result
     end
     local objects, truncated, candidates = {}, false, 0
@@ -132,7 +148,9 @@ internal val worldQueryLua =
       if result.supports_bar then result.bar=inventory.get_bar() end
       return result
     end
-    if selection.kind == "overview" then
+    if args.inspection then
+      $objectInspectionBranchLua
+    elseif selection.kind == "overview" then
       $worldOverviewLua
     elseif selection.kind == "prototypes" or selection.kind == "recipes" or selection.kind == "technologies" then
       local catalog
@@ -179,14 +197,19 @@ internal val worldQueryLua =
         objects[#objects+1]=describe(catalog[names[index]])
       end
     elseif selection.kind == "inventory" or selection.kind == "inventories" then
-      local owner=player
+      local inventory_player=player
+      if selection.owner and selection.owner.player then
+        inventory_player=game.get_player(selection.owner.player)
+        assert(inventory_player and inventory_player.valid, "Inventory player is unavailable")
+      end
+      local owner=inventory_player
       if selection.owner and selection.owner.kind == "entities" then
         local found=entities(selection.owner,2)
         assert(#found==1, #found==0 and "Inventory owner matched no entity" or "Inventory owner is ambiguous")
         owner=found[1]
       elseif selection.owner and selection.owner.kind~="player" then
-        owner=player[selection.owner.kind]
-        assert(owner and owner.valid, "Requested local inventory owner is unavailable")
+        owner=inventory_player[selection.owner.kind]
+        assert(owner and owner.valid, "Requested inventory owner is unavailable")
       end
       extra.owner=identity(owner)
       extra.offset=args.offset
@@ -255,14 +278,36 @@ internal val worldQueryLua =
       extra.index_base=1
       extra.observation="quickbar_filters"
       candidates=#objects
+    elseif selection.kind == "players" then
+      local found={}
+      local scanned=0
+      local function contains(values,value)
+        if not values then return true end
+        for _,candidate in ipairs(values) do if candidate==value then return true end end
+        return false
+      end
+      for _,candidate in pairs(game.players) do
+        scanned=scanned+1
+        assert(scanned<=65536, "Player discovery exceeds bound")
+        if (selection.connected==nil or candidate.connected==selection.connected)
+          and contains(selection.names,candidate.name) and contains(selection.indices,candidate.index) then
+          found[#found+1]=candidate
+        end
+      end
+      table.sort(found,function(a,b) return a.index<b.index end)
+      candidates=#found
+      extra.offset=args.offset
+      truncated=args.offset+limit<#found
+      if truncated then extra.next_offset=args.offset+limit end
+      for index=args.offset+1,math.min(#found,args.offset+limit) do objects[#objects+1]=describe(found[index]) end
     elseif selection.kind == "player" then
-      objects[1] = describe(player)
+      objects[1] = describe(selected_player)
       candidates = 1
     elseif selection.kind == "force" then
-      objects[1] = describe(player.force)
+      objects[1] = describe(selected_player.force)
       candidates = 1
     elseif selection.kind == "character" or selection.kind == "vehicle" or selection.kind == "physical_vehicle" then
-      local entity=player[selection.kind]
+      local entity=selected_player[selection.kind]
       if entity then
         objects[1]=describe(entity)
         candidates=1

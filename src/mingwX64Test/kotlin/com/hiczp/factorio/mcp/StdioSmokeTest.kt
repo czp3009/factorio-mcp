@@ -2,6 +2,8 @@
 
 package com.hiczp.factorio.mcp
 
+import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlinx.cinterop.*
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
@@ -10,16 +12,12 @@ import kotlinx.serialization.json.*
 import platform.posix.getenv
 import platform.posix.memset
 import platform.windows.*
-import kotlin.test.Test
-import kotlin.test.assertEquals
 
 /** Launches only a disposable MCP child; never controls the game process. */
 class StdioSmokeTest {
     @Test
     fun invalidStartupReturnsFailure() = runBlocking {
-        val executable =
-            getenv("FACTORIO_MCP_TEST_EXECUTABLE")?.toKString()?.takeIf { it.isNotBlank() }
-                ?: return@runBlocking
+        val executable = smokeExecutable()
         memScoped {
             val startup = alloc<STARTUPINFOW>()
             memset(startup.ptr, 0, sizeOf<STARTUPINFOW>().toULong())
@@ -59,12 +57,7 @@ class StdioSmokeTest {
 
     @Test
     fun protocolOutputAndStdinEof() = runBlocking {
-        val executable =
-            getenv("FACTORIO_MCP_TEST_EXECUTABLE")?.toKString()?.takeIf { it.isNotBlank() }
-                ?: run {
-                    println("Stdio smoke skipped: set FACTORIO_MCP_TEST_EXECUTABLE")
-                    return@runBlocking
-                }
+        val executable = smokeExecutable()
         println("Running stdio initialization and EOF smoke")
         memScoped {
             val security = alloc<SECURITY_ATTRIBUTES>()
@@ -205,4 +198,11 @@ class StdioSmokeTest {
             }
         }
     }
+
+    private fun smokeExecutable(): String =
+        checkNotNull(
+            getenv("FACTORIO_MCP_TEST_EXECUTABLE")?.toKString()?.takeIf { it.isNotBlank() }
+        ) {
+            "Run mingwX64Test or set FACTORIO_MCP_TEST_EXECUTABLE when running the test binary directly"
+        }
 }

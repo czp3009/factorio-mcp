@@ -4,6 +4,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
@@ -15,6 +16,7 @@ internal class GameSession(private val open: (Int) -> GameConnection = ::GamePro
         var unhooked: Boolean = false,
     ) {
         var observer: Job? = null
+        val chat = ChatHistory()
     }
 
     private val lifecycle = Mutex()
@@ -257,6 +259,26 @@ internal class GameSession(private val open: (Int) -> GameConnection = ::GamePro
             put("ui_frame", snapshot.frame)
             put("state", snapshot.state)
         }
+    }
+
+    suspend fun readChat(after: String?, limit: Int): JsonObject = observe {
+        require(limit in 1..128) { "Chat limit must be 1..128" }
+        val target = attachment ?: error("Call attach before chat_read")
+        val snapshot = useConnection(target) { it.execute(10) }
+        val result = target.chat.read(checkNotNull(snapshot.chat), after, limit)
+        JsonObject(
+            result +
+                    mapOf(
+                        "ui_frame" to JsonPrimitive(snapshot.frame),
+                        "state" to JsonPrimitive(snapshot.state),
+                    )
+        )
+    }
+
+    suspend fun sendChat(text: String): JsonObject = observe {
+        val target = attachment ?: error("Call attach before chat_send")
+        useConnection(target) { it.sendChat(text) }
+        buildJsonObject { put("dispatch", "completed") }
     }
 
     suspend fun bindings(ids: Set<String>?, search: String?, offset: Int, limit: Int): JsonObject =

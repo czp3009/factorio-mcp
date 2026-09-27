@@ -9,6 +9,17 @@ internal val worldOverviewLua =
     local width,height=right-left,bottom-top
     assert(width>0 and height>0 and width<=4096 and height<=4096,
       "Overview exceeds 4096 tiles per side; select an explicit bounded area")
+    if args.detail=="entities" then
+      extra.area=area
+      extra.viewport=viewport
+      extra.render_mode=player.render_mode
+      extra.observation="live_world_entities"
+      extra.entity_assignment="collision_in_area"
+      local found=surface.find_entities_filtered{area=area,name=selection.name,type=selection.type,limit=limit+1}
+      candidates=#found
+      truncated=#found>limit
+      for index=1,math.min(#found,limit) do objects[#objects+1]=describe(found[index]) end
+    else
     local cell=args.cell_size or math.max(32,math.ceil(width/16),math.ceil(height/16))
     local columns,rows=math.ceil(width/cell),math.ceil(height/cell)
     assert(columns*rows<=256, "Overview exceeds 256 cells; increase cell_size or narrow the area")
@@ -49,7 +60,7 @@ internal val worldOverviewLua =
           record.truncated=true
         else
           local maximum=math.min(limit,remaining_candidates-1)
-          local found=surface.find_entities_filtered{area=bounds,limit=maximum+1}
+          local found=surface.find_entities_filtered{area=bounds,name=selection.name,type=selection.type,limit=maximum+1}
           record.candidates_observed=#found
           candidates=candidates+#found
           remaining_candidates=math.max(0,remaining_candidates-#found)
@@ -79,6 +90,7 @@ internal val worldOverviewLua =
         truncated=truncated or record.truncated
         objects[#objects+1]=record
       end
+    end
     end
     """
         .trimIndent()

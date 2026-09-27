@@ -1,10 +1,10 @@
 package com.hiczp.factorio.mcp
 
-import kotlinx.serialization.json.*
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
+import kotlinx.serialization.json.*
 
 class WorldQueryTest {
     private fun query(value: String) =
@@ -30,6 +30,39 @@ class WorldQueryTest {
             -0.1,
             tile["selection"]!!.jsonObject["position"]!!.jsonObject["x"]!!.jsonPrimitive.double,
         )
+    }
+
+    @Test
+    fun spatialSelectionsPreserveCombinedNativeFilters() {
+        for (location in
+        listOf(
+            "\"area\":{\"left_top\":{\"x\":0,\"y\":0},\"right_bottom\":{\"x\":32,\"y\":32}}",
+            "\"position\":{\"x\":0,\"y\":0},\"radius\":32",
+        )) {
+            val value =
+                query(
+                    """{"selection":{"kind":"entities",$location,"type":["transport-belt","mining-drill"],"name":["mod-belt","mod-drill"]}}"""
+                )
+                    .getValue("selection")
+                    .jsonObject
+            assertEquals(
+                listOf("transport-belt", "mining-drill"),
+                value.getValue("type").jsonArray.map { it.jsonPrimitive.content },
+            )
+            assertEquals(
+                listOf("mod-belt", "mod-drill"),
+                value.getValue("name").jsonArray.map { it.jsonPrimitive.content },
+            )
+        }
+        for (key in listOf("name", "type")) {
+            for (filter in listOf("[]", "[1]", "[\"x\",\"x\"]", "\" \"", "null")) {
+                assertFailsWith<IllegalArgumentException> {
+                    query(
+                        """{"selection":{"kind":"entities","position":{"x":0,"y":0},"$key":$filter}}"""
+                    )
+                }
+            }
+        }
     }
 
     @Test

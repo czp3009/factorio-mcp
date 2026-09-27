@@ -18,21 +18,79 @@ Use forward slashes in Java properties files. Each supplied value replaces the c
 include the existing command search paths when overriding `native.PATH`.
 
 ```powershell
-.\gradlew.bat linkDebugExecutableMingwX64
+.\gradlew.bat build
 ```
 
-The executable and DLL are in `build/bin/mingwX64/debugExecutable/`. Keep them together. The release executable task
-is `linkReleaseExecutableMingwX64`, with output under `build/bin/mingwX64/releaseExecutable/`.
+`build` produces the binaries and runs local automated tests; `assemble` only builds, and `check` only runs verification
+and builds its dependencies. No Factorio installation or running game is needed for these commands.
+The executable and DLL are in `build/bin/mingwX64/debugExecutable/` and `build/bin/mingwX64/releaseExecutable/`.
+Keep each executable with its adjacent DLL. To build one variant, use `linkDebugExecutableMingwX64` or
+`linkReleaseExecutableMingwX64`.
+
+| Command                      | Purpose                                                                |
+|------------------------------|------------------------------------------------------------------------|
+| `.\gradlew.bat assemble`     | Build binaries without running tests.                                  |
+| `.\gradlew.bat build`        | Build product binaries and run all local automated tests.              |
+| `.\gradlew.bat check`        | Run all local automated tests, building their dependencies.            |
+| `.\gradlew.bat mingwX64Test` | Run common and Windows Kotlin tests, including stdio and Lua fixtures. |
+| `.\gradlew.bat clean build`  | Rebuild and test from a clean output directory.                        |
 
 Stop MCP before rebuilding its executable. Close any game that has loaded a DLL you intend to replace, and restart
 Factorio after updating MCP before attaching again. Build tasks do not stop processes. Test/documentation-only changes
 can reuse the running game and installed artifacts.
 
-CMake owns native compilation and fixtures; `WindowsNativeBuild` invokes it from Gradle. Native output is scoped by
-host and target under `build/native/`. Ninja checks compiler-discovered dependencies, including SDK headers outside
+CMake owns native compilation and fixtures; `WindowsNativeBuild` invokes it from Gradle. Product output is scoped by
+host and target under `build/native/`, with fixtures under `build/native-tests/`. Product builds do not compile test
+fixtures. Ninja checks compiler-discovered dependencies, including SDK headers outside
 the repository, on every native build. Unchanged native output does not overwrite an identical mapped runtime DLL.
-Use a fresh native build directory when changing the compiler or SDK installation. Only the Windows target is currently
-configured; retain the normal KMP source-set layout when adding other desktop platforms.
+Use a fresh native build directory when changing the compiler or SDK installation.
+
+### Platform boundaries
+
+The intended targets are Windows x64 (`mingwX64`), Linux x64 (`linuxX64`) and macOS ARM64 (`macosArm64`).
+Only `mingwX64` is implemented. Its cinterop definition lives in `src/mingwX64Main/cinterop/bridge.def` and is selected
+explicitly. Windows SDK configuration, DLL copying, WinHTTP and native fixtures belong to that target. Host-only
+CMake/CTest tasks are registered on Windows x64, with task names derived from the target (`buildMingwX64Native`,
+`buildMingwX64NativeFixtures`, `testMingwX64Native`) and separate host/target output directories. Other hosts do not
+acquire these task dependencies merely by configuring the project. `WindowsNativeBuild`, `KonanWindows.cmake` and
+the `native.INCLUDE`/`native.LIB`/`native.PATH` settings are specifically for this Windows adapter.
+
+When implementing `linuxX64` or `macosArm64`, keep the standard KMP source sets, add the target's own
+cinterop/toolchain/runtime
+handling, and connect only the tests supported on the current host to `check`. Keep shared dependencies portable;
+do not reuse Windows DLL names, SDK settings or architecture constants in shared configuration. No placeholder targets
+or platform implementations are needed before those ports exist.
+
+## GitHub releases
+
+Run **Actions → Release → Run workflow** and select the branch or tag to build. The workflow file must exist on the
+default branch for GitHub to offer this manual trigger. Set `version` in `build.gradle.kts` before publishing; the
+workflow reads the evaluated Gradle project version, creates tag `v<version>` at the selected commit, and publishes
+`factorio-mcp-<version>-<platform>.zip` as a Release attachment. An existing tag causes publication to fail instead
+of replacing an existing release. Concurrent release runs are serialized.
+
+`.github/release-platforms.json` controls the build matrix. Only Windows x64 is enabled. Once `linuxX64` or
+`macosArm64` is implemented and tested, enable its row and supply any new platform-specific CI prerequisites.
+Each enabled runner executes the standard `gradlew build`, including local automated tests, and stages files from
+`build/bin/<target>/releaseExecutable/`. The Windows runner initializes its installed MSVC/Windows SDK environment;
+compilation still uses Kotlin/Native's toolchain. No Factorio installation or manual acceptance environment is needed.
+
+The publication job starts only after every enabled platform succeeds. It makes one ZIP per platform and uploads
+them together using the workflow's `GITHUB_TOKEN`; only this job has `contents: write`. Repository policies must
+allow Release and tag creation. Test reports remain available as Actions artifacts for seven days, including when
+tests fail. Intermediate TAR files preserve executable permissions across jobs before final ZIP packaging.
+
+Two separate caches keep repeat builds from downloading the toolchain and dependencies again:
+
+- Gradle's user-home `caches` and `wrapper` directories are keyed by runner OS/architecture, wrapper version and
+  build/dependency configuration. Restore prefixes reuse downloads when build configuration changes. Metadata and
+  compilation jobs have separate keys so a metadata-only cache cannot prevent saving the full build's dependencies.
+- Kotlin/Native's `~/.konan` directory holds compiler distributions and native dependencies, including the bundled
+  LLVM toolchain. Its keys separate OS/architecture and Kotlin version; restore prefixes never cross those boundaries.
+
+Project `build/`, project `.gradle/` and test results are not restored as dependency caches. Cache misses download
+dependencies normally. No custom token or configuration-cache encryption secret is required. GitHub may evict old
+caches according to repository limits; this affects build time, not which checks run.
 
 ## Maintenance map
 
@@ -74,6 +132,11 @@ on success/error, and pass query arguments as data to fixed bounded readers. Do 
 administrator commands. Inventory reads must not allocate synthetic items or test insertion capacity. Prototype
 queries preserve structured untranslated strings rather than issuing client-only translation requests.
 
+Object inspection loads the selected installation's `doc-html/runtime-api.json` lazily to discover native API
+members and validate inspection requests. `RuntimeApiFile.kt` locates it relative to the selected executable;
+users do not configure a separate path. Actual values come from the live game. A missing file prevents inspection
+queries, while other query selectors remain available.
+
 ### Performance
 
 UI output limits do not avoid the complete native tree walk. Selector lookup indexes the observed tree, deduplicates
@@ -90,16 +153,22 @@ process-liveness polling to hide a stalled renderer.
 
 ### Local fixtures
 
-With the real-game opt-in variables unset:
+Run all local automated tests with the standard verification task:
 
 ```powershell
-.\gradlew.bat mingwX64Test testWindowsNative
+.\gradlew.bat check
 ```
 
-The Kotlin suite runs common and Windows tests. Native fixtures are separate CMake/CTest targets; Gradle's Windows
-`check` also depends on `testWindowsNative`. Reports are under `build/reports/tests/mingwX64Test/` and
-`build/native/mingw_x64/mingwX64/Testing/Temporary/`. Passing opt-in tests that returned early is not real-game
-evidence.
+The Kotlin suite runs common and Windows tests, including stdio and Lua fixtures. `mingwX64Test` runs just this suite;
+`check` also runs the CMake/CTest fixtures through `testMingwX64Native`. Reports are under
+`build/reports/tests/mingwX64Test/` and `build/native-tests/mingw_x64/mingwX64/Testing/Temporary/`.
+Gradle excludes `*AcceptanceTest` and `OfflineQueryMetadataTest` regardless of environment variables. Run these
+external checks explicitly from the built test executable as described below.
+
+To run a single Kotlin test class, use
+`.\gradlew.bat mingwX64Test --tests 'com.hiczp.factorio.mcp.StdioSmokeTest'`.
+Use `--rerun-tasks` when deliberately repeating unchanged automated tests. A successful Gradle run establishes local
+fixture coverage only; the external checks below are separate, subsequent steps for a developer or agent.
 
 | Fixture group                  | Checks                                                                                                                                                         |
 |--------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------|
@@ -109,22 +178,59 @@ evidence.
 | Native UI adapters             | Adjusted receivers, metadata-driven fields/virtual positions, unknown/raw values, null objects, UTF-8 bounds, flags, sprites, quality conditions and switches. |
 | Selectors and capture          | Complete bounded search, overlapping paths, positional selection, widget destruction, transferred capture and release.                                         |
 | Resident input and world       | Adjacent ticks, pause/unload/requester exit, replacement/cancellation, Lua stack restoration, bounded output and viewport conversion.                          |
+| Cursor and transfer reads      | Native cursor representations, hand-location values, unavailable versus idle transfer state, metadata-driven deque traversal and segment bounds.               |
 | Rendering                      | WARP Direct3D backbuffer capture and PNG encoding without a Factorio process.                                                                                  |
 
-To exercise the file-only PDB reader against an installed game, set `FACTORIO_MCP_TEST_PDB` to the matching
-`factorio.pdb` path and run `mingwX64Test`. It does not launch or inject the game. Synthetic ABI fixtures and file-only
-metadata tests do not establish that calling those functions in a real client is safe.
+`QueryLuaFixtureTest` executes the actual fixed reader in a separate Lua runtime with synthetic objects. CMake fetches
+the pinned official Lua source, verifies its SHA-256 and builds the fixture with the same toolchain automatically.
+The first test build needs network access; subsequent builds reuse the downloaded source. The fixture is never
+shipped or loaded by product code.
 
-### HTTP and stdio acceptance
+Native chat fixtures check retained-list traversal, output bounds, normal submission routing and destructor cleanup
+after exceptions. Common tests check observation cursors, duplicate messages, cached-text updates and invalid chat
+arguments. These and Lua/mock tests do not establish authoritative multiplayer effects or CRC safety. Enable
+`ExpandedQueryAcceptanceTest` against the disposable local scenario to check representative inspection/player/detail
+reads and synchronized chat, including authoritative events and subsequent full CRC checkpoints.
 
-Build the executable, start Factorio normally, and start a disposable MCP endpoint as described in README.
+`mingwX64Test` builds the project's debug executable and supplies its path to the stdio smoke tests automatically.
+These tests run without a Factorio client. For direct execution of the native test binary, set
+`FACTORIO_MCP_TEST_EXECUTABLE` to an already built executable; `--ktest_filter` can select individual tests.
+For direct Lua fixture tests, also set `FACTORIO_MCP_TEST_LUA_DLL` to
+`build/native-tests/mingw_x64/mingwX64/lua/query_lua_fixture.dll`. Gradle supplies both paths automatically.
+
+### Installed-game metadata checks
+
+After `build`, set `FACTORIO_MCP_TEST_PDB` to the installed game's matching `factorio.pdb` and
+`FACTORIO_MCP_TEST_RUNTIME_API` to its `doc-html/runtime-api.json`. Leave `FACTORIO_MCP_TEST_PID` unset for file-only
+work, then run:
+
+```powershell
+$env:FACTORIO_MCP_TEST_PDB = 'C:/path/to/Factorio/bin/x64/factorio.pdb'
+$env:FACTORIO_MCP_TEST_RUNTIME_API = 'C:/path/to/Factorio/doc-html/runtime-api.json'
+.\build\bin\mingwX64\debugTest\test.exe '--ktest_filter=*DebugMetadataAcceptanceTest.virtualInterfaceMetadataResolvesFromAnExplicitPdb:*OfflineQueryMetadataTest.*'
+```
+
+These checks resolve installed metadata without launching or injecting a game. They do not establish live ABI safety.
+For the additional live-process metadata check, set `FACTORIO_MCP_TEST_PID` and select
+`*DebugMetadataAcceptanceTest.inputMetadataResolvesFromTheLoadedTarget` instead. Check activation/output as well as
+test counts; external checks without their required environment can return early.
+
+### HTTP acceptance
+
+After `build`, start Factorio normally and start a disposable MCP endpoint as described in README.
+Restart Factorio before attaching an updated resident.
+For example, in a separate terminal:
+
+```powershell
+.\build\bin\mingwX64\debugExecutable\factorio-mcp.exe --no-stdio --http-port 3000
+```
+
 Select the already initialized game's PID explicitly:
 
 ```powershell
 $env:FACTORIO_MCP_ACCEPTANCE_URL = 'http://127.0.0.1:3000/mcp'
 $env:FACTORIO_MCP_TEST_PID = '12345'
-$env:FACTORIO_MCP_TEST_EXECUTABLE = (Resolve-Path build/bin/mingwX64/debugExecutable/factorio-mcp.exe).Path
-.\gradlew.bat mingwX64Test --rerun
+.\build\bin\mingwX64\debugTest\test.exe '--ktest_filter=*HttpAcceptanceTest.*'
 ```
 
 The HTTP tests initialize normal MCP sessions, check advertised tools and preconditions, exercise
@@ -132,8 +238,8 @@ reads/capture/bindings,
 and cycle sessions and repeated detach/attach. They can detach the shared attachment. They never launch or terminate
 the supplied endpoint or game. Windows test clients use Ktor's WinHTTP engine; common test code uses the portable API.
 
-`FACTORIO_MCP_TEST_EXECUTABLE` separately enables stdio initialization/EOF and invalid-startup-argument tests that own
-only their MCP child process. `FACTORIO_MCP_TEST_PID` also enables installed-process metadata checks. Tests impose
+The stdio initialization/EOF and invalid-startup-argument tests own only their MCP child process.
+`FACTORIO_MCP_TEST_PID` also enables installed-process metadata checks. Tests impose
 watchdogs; product tools do not have execution deadlines.
 
 ### Local multiplayer acceptance
@@ -141,7 +247,9 @@ watchdogs; product tools do not have execution deadlines.
 Use one graphical client and a disposable local server, never a remote server or an ordinary user save. Enable the
 official DLC on both peers: the scenario references quality and Space Age items. The train UI test currently expects
 Simplified Chinese native menu labels. Keep default keyboard/mouse bindings for the full fixture suite and leave
-rendering active. Product selectors use observed text and bindings; these are test-environment assumptions.
+rendering active. Release external keyboard modifiers before starting; the UI fixture checks native modifier state
+without clearing input owned by someone else. Product selectors use observed text and bindings; these are
+test-environment assumptions.
 
 1. Create a test server write directory such as `temp/ui-acceptance`, and copy
    `src/mingwX64Test/resources/ui-actions` to `temp/ui-acceptance/scenarios/ui-actions`.
@@ -160,37 +268,51 @@ rendering active. Product selectors use observed text and bindings; these are te
     --server-settings "$PWD/temp/ui-acceptance/server-settings.json"
 ```
 
-Keep the scenario window open, set both log paths in addition to the endpoint/PID, and rerun the suite:
+Keep the scenario window open, set both log paths in addition to the endpoint/PID, and run the acceptance suite:
 
 ```powershell
 $env:FACTORIO_MCP_UI_SERVER_LOG = "$PWD/temp/ui-acceptance/factorio-current.log"
 $env:FACTORIO_MCP_UI_CLIENT_LOG = "$env:APPDATA/Factorio/factorio-current.log"
-.\gradlew.bat mingwX64Test --rerun
+.\build\bin\mingwX64\debugTest\test.exe '--ktest_filter=*AcceptanceTest.*'
 ```
 
 These tests mutate the disposable scenario: controls, inventory interactions, player/controller state, blueprint
 placement and train schedules. Start a fresh scenario for a full rerun; some cases intentionally leave built ghosts.
 A focused rerun can reuse the current scenario only when its expected initial state has been restored.
 
-| Acceptance class                                              | Scope                                                                                                                                |
-|---------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------|
-| `UiFlowAcceptanceTest`                                        | Native/scenario controls, text restrictions, modifiers, offscreen options, item/quality properties, resource budgets and recreation. |
-| `WorldQueryAcceptanceTest`, `RelatedWorldQueryAcceptanceTest` | Spatial identity, surface errors, empty/quality-separated inventories, filters, catalogs and force recipes.                          |
-| `PlayerContextAcceptanceTest`                                 | Character/vehicle references, remote/spectator transitions, weapons, quickbar, technologies and recipe relations.                    |
-| `WorldOverviewAcceptanceTest`                                 | Native viewport, grouped observations, explicit areas, terrain coverage and work bounds.                                             |
-| `InputAcceptanceTest`, `WheelInputAcceptanceTest`             | Stable-latency movement effects, replacement/cancellation/detach, concurrent observation, mouse targeting and wheel impulses.        |
-| `MouseMotionAcceptanceTest`, `BlueprintMotionAcceptanceTest`  | Held mouse motion, GUI capture release, cancellation of future points and a row of blueprint ghosts.                                 |
-| `TrainUiAcceptanceTest`                                       | Nested schedule selection, number entry, switch states, authoritative schedule/mode changes and restoration of the initial context.  |
+| Acceptance class                                              | Scope                                                                                                                                                |
+|---------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `UiFlowAcceptanceTest`                                        | Native/scenario controls, text restrictions, modifiers, offscreen options, item/quality properties, resource budgets and recreation.                 |
+| `WorldQueryAcceptanceTest`, `RelatedWorldQueryAcceptanceTest` | Spatial identity, surface errors, empty/quality-separated inventories, filters, catalogs and force recipes.                                          |
+| `PlayerContextAcceptanceTest`                                 | Character/vehicle references, remote/spectator transitions, weapons, quickbar, technologies and recipe relations.                                    |
+| `WorldOverviewAcceptanceTest`                                 | Native viewport, grouped observations, explicit areas, terrain coverage and work bounds.                                                             |
+| `ExpandedQueryAcceptanceTest`                                 | Combined native type/name filters, recipe/quality/fluid/filter details, metadata inspection, player selection and synchronized chat with later CRCs. |
+| `InputAcceptanceTest`, `WheelInputAcceptanceTest`             | Stable-latency movement effects, replacement/cancellation/detach, concurrent observation, mouse targeting and wheel impulses.                        |
+| `MouseMotionAcceptanceTest`, `BlueprintMotionAcceptanceTest`  | Held mouse motion, GUI capture release, cancellation of future points and a row of blueprint ghosts.                                                 |
+| `TrainUiAcceptanceTest`                                       | Nested schedule selection, number entry, switch states, authoritative schedule/mode changes and restoration of the initial context.                  |
 
 The scenario logs authoritative events and requests full CRCs every 300 ticks. Compare client/server observations
 before dependent actions and await later CRC checkpoints. Dispatch success, screenshot appearance and full-CRC
 agreement are separate assertions. While input remains held, compare the confirmed common log prefix rather than
 waiting for a continuously growing server tail. Preserve failed runs and their logs under `temp/` before resetting.
+Direct test execution reports to the terminal and returns a nonzero exit code on failure; capture output under
+`temp/` when retaining acceptance evidence. Stop only the endpoint/server processes you started for the test after
+finishing. No Gradle command launches Factorio or prepares a multiplayer scenario.
 
 ### Manual lifecycle and mixed flows
 
 Use standard HTTP tools for exploratory flows; retain requests, replies and screenshots under `temp/`. Exercise menus,
 load/save, pause, world replacement and mixed UI/world reads separately from fixture coverage.
+Initialize an MCP session, retain its session ID and protocol-version headers, then use `tools/call` through the
+endpoint above. Prefer structured queries and widget actions; use `screenshot` when a result needs visual verification.
+An agent follows the same setup, commands and checks as a human operator.
+
+For cursor-state acceptance, compare physical stacks, cursor ghosts, blueprint-library records and hand locations
+against native UI interactions and authoritative scenario logs. Import a sufficiently large disposable blueprint
+through the normal import dialog on a local multiplayer client. Observe `status.input_transfer` during the transfer,
+compare its counters with screenshots of the cursor percentage, then independently verify the imported blueprint's
+entity count on both peers and await later full CRC checkpoints. Queue disappearance alone is not an import-success
+assertion. Clipboard setup, if needed for a large fixture, belongs to the test operator and must restore previous data.
 
 For input cleanup, start a long request from one session, pause single-player or leave a local multiplayer world from
 another, and check the original caller's terminal result before resuming. Confirm that movement does not resume and

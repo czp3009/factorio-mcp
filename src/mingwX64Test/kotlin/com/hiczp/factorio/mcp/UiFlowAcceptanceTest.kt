@@ -2,6 +2,7 @@
 
 package com.hiczp.factorio.mcp
 
+import kotlin.test.*
 import kotlinx.cinterop.toKString
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
@@ -12,7 +13,6 @@ import kotlinx.io.files.SystemFileSystem
 import kotlinx.io.readString
 import kotlinx.serialization.json.*
 import platform.posix.getenv
-import kotlin.test.*
 
 /** Requires the UI acceptance scenario on an isolated local server and its non-admin client. */
 class UiFlowAcceptanceTest {
@@ -38,6 +38,7 @@ class UiFlowAcceptanceTest {
             try {
                 client.initialize()
                 client.tool("attach", buildJsonObject { put("pid", pid) }).toolValue()
+                assertGuiModifiersReleased(pid.toUInt())
                 val initialCount = records(read(serverLog)).size
                 suspend fun click(text: String, type: String? = null, modified: Boolean = false) {
                     client
@@ -304,6 +305,7 @@ class UiFlowAcceptanceTest {
                 assertEquals(80, selectedDropdown["options_total"]!!.jsonPrimitive.int)
                 assertTrue(selectedDropdown["options_truncated"]!!.jsonPrimitive.boolean)
                 assertEquals(64, selectedDropdown["options"]!!.jsonArray.size)
+                assertGuiModifiersReleased(pid.toUInt())
                 client
                     .tool(
                         "ui_action",
@@ -315,6 +317,7 @@ class UiFlowAcceptanceTest {
                         },
                     )
                     .toolValue()
+                assertGuiModifiersReleased(pid.toUInt())
                 client
                     .tool(
                         "ui_action",

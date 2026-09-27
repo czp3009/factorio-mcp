@@ -1,0 +1,20 @@
+[
+  {
+    "id": "windows-x64",
+    "runner": "windows-2025",
+    "target": "mingwX64",
+    "enabled": true
+  },
+  {
+    "id": "linux-x64",
+    "runner": "ubuntu-24.04",
+    "target": "linuxX64",
+    "enabled": false
+  },
+  {
+    "id": "macos-arm64",
+    "runner": "macos-15",
+    "target": "macosArm64",
+    "enabled": false
+  }
+]

@@ -151,6 +151,17 @@ internal class DebugTypes(private val process: HANDLE, private val base: ULong) 
 
     fun aggregateSize(owner: String): ULong = length(type(owner))
 
+    fun memberTypeName(owner: String, field: String): String =
+        checkNotNull(name(member(owner, field).type)) { "Unnamed member type: $owner::$field" }
+
+    fun byteArrayMember(owner: String, field: String, minimum: UInt): UInt {
+        val value = member(owner, field)
+        check(uint(value.type, IMAGEHLP_SYMBOL_TYPE_INFO.TI_GET_SYMTAG) == 15u)
+        val element = uint(value.type, IMAGEHLP_SYMBOL_TYPE_INFO.TI_GET_TYPEID)
+        check(length(element) == 1uL && length(value.type) >= minimum)
+        return value.offset
+    }
+
     fun validateStaticMember(owner: String, member: String, expected: String) {
         val field = children(type(owner)).single { name(it) == member }
         check(
@@ -194,6 +205,23 @@ internal class DebugTypes(private val process: HANDLE, private val base: ULong) 
         check(name(current) == target && length(current) == bytes) {
             "Unexpected PDB field path: $owner::${names.joinToString("::")}"
         }
+        check(offset <= UInt.MAX_VALUE.toULong() && offset + bytes <= aggregateSize(owner))
+        return offset.toUInt()
+    }
+
+    fun scalarPath(owner: String, vararg names: String, target: UInt, bytes: ULong): UInt {
+        var current = type(owner)
+        var offset = 0uL
+        names.forEach {
+            val field = member(current, it)
+            offset += field.offset
+            current = field.type
+        }
+        check(
+            uint(current, IMAGEHLP_SYMBOL_TYPE_INFO.TI_GET_SYMTAG) == 16u &&
+                    uint(current, IMAGEHLP_SYMBOL_TYPE_INFO.TI_GET_BASETYPE) == target &&
+                    length(current) == bytes
+        )
         check(offset <= UInt.MAX_VALUE.toULong() && offset + bytes <= aggregateSize(owner))
         return offset.toUInt()
     }

@@ -154,7 +154,7 @@ internal fun parseRelatedWorldQuery(args: JsonObject): WorldQuery {
     if (inventory) {
         val owner = selection["owner"]?.jsonObject ?: buildJsonObject { put("kind", "player") }
         require(owner["kind"]?.stringArgument() in setOf("player", "entities") + localEntityKinds) {
-            "Inventory owner must select the local player, a local entity reference or exactly one spatial entity"
+            "Inventory owner must select a player, a player entity reference or exactly one spatial entity"
         }
         // Reuse the spatial contract without allowing recursive related-object selections.
         parseWorldQuery(
@@ -286,7 +286,7 @@ internal fun relatedSelectionProperties() = buildJsonObject {
         put("type", "object")
         put(
             "description",
-            "For inventory/inventories only. Defaults to {kind:'player'} (current controller). Use {kind:'character'} for the attached character, including in remote view; vehicle/physical_vehicle follow the corresponding native player references. Missing local entities are errors. Otherwise use an entities selection by unit_number or bounded position/area and filters; it must resolve exactly one entity.",
+            "inventory/inventories only. Defaults to {kind:'player'}. player/character/vehicle/physical_vehicle owners accept optional player name/index; character follows the physical character even in remote view. Missing references are errors. Otherwise use an entities selector resolving exactly one entity.",
         )
     }
     putJsonObject("inventory") {
@@ -304,7 +304,7 @@ internal fun relatedSelectionProperties() = buildJsonObject {
         putJsonObject("items") { put("type", "string") }
         put(
             "description",
-            "Exact names for prototypes or force recipes/technologies. Missing names are reported separately.",
+            "Exact names for prototypes or force recipes/technologies (missing names reported), or players (matches only).",
         )
     }
     putJsonObject("search") {

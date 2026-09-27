@@ -3,9 +3,45 @@ package com.hiczp.factorio.mcp
 import kotlinx.serialization.json.*
 
 internal fun parseWorldOverview(args: JsonObject): WorldQuery {
-    require(args.keys.all { it in setOf("area", "surface", "cell_size", "entity_limit") }) {
+    require(
+        args.keys.all {
+            it in
+                    setOf(
+                        "area",
+                        "surface",
+                        "cell_size",
+                        "entity_limit",
+                        "detail",
+                        "fields",
+                        "include",
+                        "name",
+                        "type",
+                    )
+        }
+    ) {
         "Unknown world overview argument"
     }
+    val detail = args["detail"]?.stringArgument() ?: "grid"
+    require(detail in setOf("grid", "entities")) { "detail must be grid or entities" }
+    require(detail == "entities" || args.keys.none { it in setOf("fields", "include") }) {
+        "fields/include require detail:entities; grid aggregation does not merge entity configuration"
+    }
+    require(detail == "grid" || "cell_size" !in args) { "cell_size is only valid for grid detail" }
+    val fields =
+        args["fields"]?.jsonArray?.map { it.stringArgument() }
+            ?: if (detail == "entities")
+                listOf("name", "type", "position", "unit_number", "direction", "quality")
+            else emptyList()
+    require(
+        detail != "entities" ||
+                fields.size in 1..32 &&
+                fields.distinct().size == fields.size &&
+                fields.all { it in entityFields }
+    ) {
+        "Unsupported entity fields"
+    }
+    args["include"]?.let(::validateEntityIncludes)
+    for (key in listOf("name", "type")) args[key]?.let { validateEntityFilter(key, it) }
     require("surface" !in args || "area" in args) { "surface requires an explicit area" }
     args["area"]?.let {
         val area = it.jsonObject
@@ -31,38 +67,58 @@ internal fun parseWorldOverview(args: JsonObject): WorldQuery {
             "Overview area must have positive dimensions no larger than 4096 tiles per side"
         }
     }
-    args["surface"]?.let {
-        val value = it.jsonPrimitive
-        require(
-            if (value.isString)
-                value.content.isNotBlank() &&
-                        value.content.length <= 256 &&
-                        '\u0000' !in value.content
-            else value.intOrNull?.let { index -> index > 0 } == true
-        ) {
-            "Invalid surface"
-        }
-    }
+    args["surface"]?.let(::validateSurfaceSelector)
     val cell = args["cell_size"]?.intArgument()
     require(cell == null || cell in 1..4096) { "cell_size must be in 1..4096 tiles" }
     val limit = args["entity_limit"]?.intArgument() ?: 64
-    require(limit in 1..512) { "entity_limit must be in 1..512 per cell" }
+    require(limit in 1..512) { "entity_limit must be in 1..512" }
     return WorldQuery(
         buildJsonObject {
             putJsonObject("selection") {
                 put("kind", "overview")
                 args["area"]?.let { put("area", it) }
+                for (key in listOf("name", "type")) args[key]?.let { put(key, it) }
             }
             args["surface"]?.let { put("surface", it) }
             cell?.let { put("cell_size", it) }
             put("limit", limit)
-            putJsonArray("fields") {}
+            put("detail", detail)
+            args["include"]?.let { put("include", it) }
+            putJsonArray("fields") { fields.forEach { add(it) } }
         },
         includeViewport = true,
     )
 }
 
 internal fun worldOverviewSchema() = buildJsonObject {
+    for (key in listOf("name", "type")) put(key, entityFilterSchema(key))
+    putJsonObject("detail") {
+        put("type", "string")
+        put("default", "grid")
+        putJsonArray("enum") {
+            add("grid")
+            add("entities")
+        }
+        put(
+            "description",
+            "grid aggregates counts per cell. entities returns individual identities/positions and requested fields/details; entity_limit then applies to the whole area.",
+        )
+    }
+    put("include", entityIncludesSchema())
+    putJsonObject("fields") {
+        put("type", "array")
+        put("minItems", 1)
+        put("maxItems", 32)
+        put("uniqueItems", true)
+        putJsonObject("items") {
+            put("type", "string")
+            putJsonArray("enum") { entityFields.forEach { add(it) } }
+        }
+        put(
+            "description",
+            "detail:entities only; same raw entity fields as world_query. Omit for identity, position, direction and quality.",
+        )
+    }
     put(
         "area",
         JsonObject(
@@ -102,7 +158,7 @@ internal fun worldOverviewSchema() = buildJsonObject {
         put("default", 64)
         put(
             "description",
-            "Collision candidates per cell; total work is bounded to 4096 candidates. Truncated or unscanned cells are explicit.",
+            "Maximum entity candidates per grid cell (4096 total work bound), or per whole area with detail:entities. Lookahead detects truncation; incomplete reads are explicit.",
         )
     }
 }

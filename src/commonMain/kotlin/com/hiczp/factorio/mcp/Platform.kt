@@ -148,6 +148,8 @@ internal data class GameSnapshot(
     val sprites: List<WidgetSprite> = emptyList(),
     val qualityConditionUnavailableReason: String? = null,
     val switchUnavailableReason: String? = null,
+    val chat: ChatSnapshot? = null,
+    val inputTransfer: InputTransferSnapshot? = null,
 )
 
 /** Native commands finish at a frontend safe point; cancellation is cooperative. */
@@ -158,6 +160,9 @@ internal interface GameConnection {
 
     suspend fun query(query: WorldQuery): GameSnapshot =
         error("World queries are unavailable on this adapter")
+
+    suspend fun sendChat(text: String): GameSnapshot =
+        error("Chat submission is unavailable on this adapter")
 
     suspend fun beginInput(request: InputSequenceRequest): GameInputTask =
         error("Timed input is unavailable on this adapter")
@@ -174,6 +179,8 @@ internal expect class GameProcess(pid: Int) : GameConnection {
     override suspend fun isAlive(): Boolean
 
     override suspend fun query(query: WorldQuery): GameSnapshot
+
+    override suspend fun sendChat(text: String): GameSnapshot
 
     override suspend fun beginInput(request: InputSequenceRequest): GameInputTask
 

@@ -15,12 +15,36 @@ extern "C" {
 #define FM_MAX_INPUT_BUTTONS 8
 #define FM_MAX_INPUT_MOTION 64
 #define FM_INPUT_NAME_SIZE 128
-#define FM_MAX_LUA_SOURCE 32768
-#define FM_MAX_QUERY_ARGUMENTS 16384
+#define FM_MAX_LUA_SOURCE 131072
+#define FM_MAX_QUERY_ARGUMENTS 262144
 #define FM_MAX_WORLD_JSON (1024 * 1024)
 #define FM_MAX_PATH 16
 #define FM_MAX_CONTROLS 1024
 #define FM_MAX_IMAGE (16 * 1024 * 1024)
+#define FM_MAX_CHAT 256
+
+typedef struct FmInputTransfer {
+    uint32_t available, clientPresent, importPresent, segmentIndex, totalSegments;
+    uint64_t queuedBatches;
+    char reason[256];
+} FmInputTransfer;
+
+typedef struct FmChatRecord {
+    uint64_t identity, tick;
+    uint32_t stream, playerIndex, truncated;
+    char text[4096], raw[4096];
+} FmChatRecord;
+
+typedef struct FmChatSnapshot {
+    uint64_t consoleIdentity, totals[2];
+    uint32_t count;
+    FmChatRecord records[FM_MAX_CHAT];
+} FmChatSnapshot;
+
+typedef struct FmChatRequest {
+    uint32_t size;
+    char text[4097];
+} FmChatRequest;
 
 typedef struct FmStep {
     int32_t child, position, enabled, hasText;
@@ -107,6 +131,8 @@ typedef struct FmResult {
     unsigned char image[FM_MAX_IMAGE];
     uint32_t worldSize;
     char worldJson[FM_MAX_WORLD_JSON];
+    FmChatSnapshot chat;
+    FmInputTransfer inputTransfer;
 } FmResult;
 
 typedef enum FmSymbol {
@@ -184,6 +210,13 @@ typedef enum FmSymbol {
     PlayerGameView,
     ViewDisplaySize,
     ViewMapPosition,
+    LocalisedRaw,
+    ChatStringConstructor,
+    GuiSend,
+    ActionDestroy,
+    ActionNoData,
+    ActionDataType,
+    StringTypeInfo,
     SymbolCount
 } FmSymbol;
 
@@ -306,6 +339,19 @@ typedef struct FmInputTask {
     FmInputOperation operations[FM_MAX_INPUT_STEPS];
 } FmInputTask;
 
+typedef struct ChatLayout {
+    uint32_t supported, console, lists[2], head, count, next, previous, value;
+    uint32_t tick, playerIndex, text, cached, stringSize;
+    uint32_t sendSupported, contextSize, contextPlayer, actionSize, actionType, actionPlayer, actionBuffer;
+    uint32_t writeToConsole;
+} ChatLayout;
+
+typedef struct InputTransferLayout {
+    uint32_t supported, client, synchronizer, listener, queue;
+    uint32_t map, mapSize, first, count, blockSize, vectorSize, vectorBegin, vectorEnd;
+    uint32_t segmentSize, actionType, segmentIndex, totalSegments, importAction;
+} InputTransferLayout;
+
 typedef struct Symbols {
     uint64_t address[SymbolCount];
     uint64_t prepareEnd, mainEnd;
@@ -326,6 +372,8 @@ typedef struct Symbols {
     WorldLayout world;
     TimedInputLayout timedInput;
     ViewportLayout viewport;
+    ChatLayout chat;
+    InputTransferLayout inputTransfer;
 } Symbols;
 
 typedef struct Shared {
@@ -335,6 +383,7 @@ typedef struct Shared {
     volatile LONG64 frame;
     FmResult result;
     FmWorldQuery worldQuery;
+    FmChatRequest chat;
     char inputName[FM_INPUT_NAME_SIZE];
     volatile LONG inputActive, inputCancel;
 } Shared;

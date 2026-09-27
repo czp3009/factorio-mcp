@@ -1,8 +1,18 @@
 # factorio-mcp
 
+[English](README.md) | [简体中文](README-zh-cn.md)
+
 An MCP server that lets an AI agent read world data, send finite input sequences, and inspect and operate the UI of
-a running Factorio client, including menus and mod windows. Currently supports **Windows x64**, with stdio and
-Streamable HTTP transports.
+a running Factorio client, including menus and mod windows. **No mod installation, RCON or in-game administrator
+privileges are required.** Its generic interface can support any mod in principle and can be used with a client
+connected to a multiplayer server.
+
+**To operate the client, factorio-mcp injects code into the Factorio process. This may be considered cheating in
+some contexts. If you are uncomfortable with this, do not use factorio-mcp.**
+
+Currently supports **Windows x64**, with stdio and Streamable HTTP transports.
+
+![I'm not even touching it](images/im-not-even-touching-it.png)
 
 Tested with Factorio 2.0.77, including the official DLC.
 
@@ -11,8 +21,8 @@ Tested with Factorio 2.0.77, including the official DLC.
 - Factorio with its matching developer PDB alongside the executable.
 - `factorio-mcp.exe` and `factorio_bridge.dll` in the same directory.
 
-No mod installation or in-game administrator privileges are required. Start Factorio yourself and wait for initial
-loading to finish. MCP does not manage game processes; UI actions can still activate normal menu commands such as Quit.
+Start Factorio yourself and wait for initial loading to finish. MCP does not manage game processes; UI actions can
+still activate normal menu commands such as Quit.
 
 Building from source requires a compatible JDK, CMake, Ninja, MSVC C++ build components and the Windows SDK.
 The Visual Studio IDE is unnecessary. See [development instructions](development.md#build).
@@ -46,18 +56,20 @@ calling detach alone is insufficient.
 
 ## Tools
 
-| Tool             | Purpose                                                                           |
-|------------------|-----------------------------------------------------------------------------------|
-| `status`         | Check the attachment, process ID and game state.                                  |
-| `attach`         | Connect to an existing client by PID or process name.                             |
-| `detach`         | Disconnect and cancel pending tools without closing the game.                     |
-| `ui_read`        | Read UI structure, text, flags and supported control values.                      |
-| `ui_action`      | Click a widget, replace text or press a key.                                      |
-| `screenshot`     | Get a PNG of the rendered game and UI.                                            |
-| `input_bindings` | Discover native/mod controls and their current bindings.                          |
-| `input`          | Execute finite keyboard/mouse combinations, including held mouse motion.          |
-| `world_query`    | Read player/world objects, inventories, quickbar, catalogs, recipes and research. |
-| `world_overview` | Summarize the viewport or a bounded map area at a chosen grid scale.              |
+| Tool             | Purpose                                                                          |
+|------------------|----------------------------------------------------------------------------------|
+| `status`         | Check attachment, game state and available blueprint import transfer progress.   |
+| `attach`         | Connect to an existing client by PID or process name.                            |
+| `detach`         | Disconnect and cancel pending tools without closing the game.                    |
+| `ui_read`        | Read UI structure, text, flags and supported control values.                     |
+| `ui_action`      | Click a widget, replace text or press a key.                                     |
+| `screenshot`     | Get a PNG of the rendered game and UI.                                           |
+| `input_bindings` | Discover native/mod controls and their current bindings.                         |
+| `input`          | Execute finite keyboard/mouse combinations, including held mouse motion.         |
+| `world_query`    | Inspect world objects and related properties, players, inventories and catalogs. |
+| `world_overview` | Survey an area as a grid or filtered entities with selected details.             |
+| `chat_read`      | Read retained local chat and notifications, with observation cursors.            |
+| `chat_send`      | Submit a plain chat message as the local player.                                 |
 
 See [tools.md](tools.md) for arguments, examples, output semantics and cancellation.
 
@@ -80,3 +92,5 @@ visual verification is needed, or an image is requested, rather than after every
   closure is not guaranteed.
 - Some states or properties may be unavailable. Game updates can require an MCP update; tested interfaces do not
   establish coverage of every mod or custom renderer.
+- Chat reads cover messages retained by the local client, not a complete server log. Object inspection exposes
+  supported readable properties and passive methods; it does not expose arbitrary Lua or all mod-private state.

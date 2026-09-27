@@ -111,10 +111,13 @@ internal class WindowsProcess(private val pid: UInt) {
     private val residentPath: String
     private val residentImage: PeImage
     private val symbols: ResolvedSymbols
+    private var runtimeApi: RuntimeApi? = null
+    private var executablePath: String = ""
 
     init {
         try {
             val image = processModule(pid) ?: error("Target image is absent")
+            executablePath = image.path
             check(image.path.substringAfterLast('\\').equals("factorio.exe", true)) {
                 "Target is not Factorio"
             }
@@ -321,9 +324,14 @@ internal class WindowsProcess(private val pid: UInt) {
         action: UiAction?,
         query: WorldQuery? = null,
         inputName: String? = null,
+        chatText: String? = null,
     ): GameSnapshot {
         if (operation == 7) symbols.controls.getOrThrow()
         if (operation == 8) symbols.world.getOrThrow()
+        if (operation == 10 || operation == 11) {
+            symbols.chat.getOrThrow()
+            symbols.world.getOrThrow()
+        }
         if (operation == 9) {
             symbols.timedInput.getOrThrow()
             symbols.world.getOrThrow()
@@ -389,10 +397,23 @@ internal class WindowsProcess(private val pid: UInt) {
                     else -> emptyList()
                 },
             )
+            if (chatText != null) {
+                val bytes = chatText.encodeToByteArray()
+                require(bytes.size in 1..4096)
+                state.pointed.chat.size = bytes.size.toUInt()
+                bytes.forEachIndexed { index, byte -> state.pointed.chat.text[index] = byte }
+                state.pointed.chat.text[bytes.size] = 0
+            }
             if (query != null) {
                 state.pointed.worldQuery.includeViewport = if (query.includeViewport) 1u else 0u
                 val source = worldQueryLua.encodeToByteArray()
-                val arguments = query.arguments.toString().encodeToByteArray()
+                val prepared =
+                    if ("inspection" in query.arguments) {
+                        val api =
+                            runtimeApi ?: readRuntimeApi(executablePath).also { runtimeApi = it }
+                        api.prepare(query)
+                    } else query
+                val arguments = prepared.arguments.toString().encodeToByteArray()
                 require(
                     source.size < FM_MAX_LUA_SOURCE && arguments.size < FM_MAX_QUERY_ARGUMENTS
                 ) {
@@ -652,7 +673,10 @@ internal class WindowsProcess(private val pid: UInt) {
                     check(result.worldSize in 1u until FM_MAX_WORLD_JSON.toUInt()) {
                         "Invalid world query result size"
                     }
-                    result.worldJson.readBytes(result.worldSize.toInt()).decodeToString()
+                    val text = result.worldJson.readBytes(result.worldSize.toInt()).decodeToString()
+                    if (query != null && "inspection" in query.arguments) {
+                        checkNotNull(runtimeApi).annotate(decodeWorldQuery(text)).toString()
+                    } else text
                 } else null,
                 slotIdentityUnavailableReason = symbols.slots.exceptionOrNull()?.message,
                 numberUnavailableReason = symbols.numbers.exceptionOrNull()?.message,
@@ -662,6 +686,45 @@ internal class WindowsProcess(private val pid: UInt) {
                 spriteUnavailableReason = symbols.sprites.exceptionOrNull()?.message,
                 qualityConditionUnavailableReason = symbols.conditions.exceptionOrNull()?.message,
                 switchUnavailableReason = symbols.switches.exceptionOrNull()?.message,
+                inputTransfer =
+                    if (operation == 1 || operation == 2) {
+                        val transfer = result.inputTransfer
+                        InputTransferSnapshot(
+                            transfer.available != 0u,
+                            transfer.clientPresent != 0u,
+                            transfer.queuedBatches.toLong(),
+                            if (transfer.importPresent != 0u) transfer.segmentIndex.toLong()
+                            else null,
+                            if (transfer.importPresent != 0u) transfer.totalSegments.toLong()
+                            else null,
+                            symbols.inputTransfer.exceptionOrNull()?.message
+                                ?: transfer.reason.toKString().takeIf { it.isNotEmpty() },
+                        )
+                    } else null,
+                chat =
+                    if (operation == 10) {
+                        check(result.chat.count <= FM_MAX_CHAT.toUInt()) {
+                            "Invalid chat result count"
+                        }
+                        ChatSnapshot(
+                            result.chat.consoleIdentity,
+                            List(2) { result.chat.totals[it] },
+                            List(result.chat.count.toInt()) { index ->
+                                val record = result.chat.records[index]
+                                check(record.stream < 2u)
+                                ChatRecord(
+                                    record.identity,
+                                    record.tick,
+                                    record.stream.toInt(),
+                                    record.playerIndex.toInt(),
+                                    record.text.toKString(),
+                                    record.raw.toKString(),
+                                    record.truncated and 1u != 0u,
+                                    record.truncated and 2u != 0u,
+                                )
+                            },
+                        )
+                    } else null,
                 sprites =
                     (0 until result.spriteCount.toInt()).map { index ->
                         val sprite = result.sprites[index]
