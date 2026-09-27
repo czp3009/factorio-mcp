@@ -5,11 +5,15 @@ mcp = "0.15.0"
 ktor = "3.5.1"
 io = "0.9.1"
 coroutines = "1.11.0"
+kotlin-native-npm-publishing = "0.0.5"
+kotlinpoet = "2.4.0"
 
 [plugins]
 kotlinMultiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
+kotlinNativeNpmPublishing = { id = "com.hiczp.kotlin-native-npm-publishing", version.ref = "kotlin-native-npm-publishing" }
 
 [libraries]
+kotlinpoet = { module = "com.squareup:kotlinpoet", version.ref = "kotlinpoet" }
 kotlin-native-utils = { module = "org.jetbrains.kotlin:kotlin-native-utils", version.ref = "kotlin" }
 ktor-server-cio = { module = "io.ktor:ktor-server-cio", version.ref = "ktor" }
 ktor-client-core = { module = "io.ktor:ktor-client-core", version.ref = "ktor" }

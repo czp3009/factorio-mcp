@@ -3,16 +3,16 @@ package com.hiczp.factorio.mcp
 import io.modelcontextprotocol.kotlin.sdk.server.Server
 import io.modelcontextprotocol.kotlin.sdk.server.ServerOptions
 import io.modelcontextprotocol.kotlin.sdk.types.*
-import kotlin.io.encoding.Base64
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
 import kotlinx.serialization.json.*
+import kotlin.io.encoding.Base64
 
 internal fun createServer(game: GameSession): Server {
     val server =
         Server(
-            Implementation("factorio-mcp", "0.1.0"),
+            Implementation("factorio-mcp", BuildVersion.VERSION),
             ServerOptions(capabilities = ServerCapabilities(tools = ServerCapabilities.Tools())),
             instructions =
                 """

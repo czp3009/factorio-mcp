@@ -16,43 +16,91 @@ Currently supports **Windows x64**, with stdio and Streamable HTTP transports.
 
 Tested with Factorio 2.0.77, including the official DLC.
 
-## Requirements
+## Installation
 
-- Factorio with its matching developer PDB alongside the executable.
-- `factorio-mcp.exe` and `factorio_bridge.dll` in the same directory.
+Choose either a downloaded executable or npx. Both options below use **stdio**. Add the JSON to your MCP client's
+configuration, adjusting the format if required by the client.
 
-Start Factorio yourself and wait for initial loading to finish. MCP does not manage game processes; UI actions can
-still activate normal menu commands such as Quit.
+### Download from GitHub Releases
 
-Building from source requires a compatible JDK, CMake, Ninja, MSVC C++ build components and the Windows SDK.
-The Visual Studio IDE is unnecessary. See [development instructions](development.md#build).
+Download the ZIP for your operating system and architecture from the
+[latest GitHub Release](https://github.com/czp3009/factorio-mcp/releases/latest), then extract the entire archive to a
+directory
+of your choice. Keep the executable and its accompanying dynamic libraries in the same directory.
 
-## Connect
+Add the following to your MCP client's configuration, replacing `command` with the absolute path to the executable
+in that extracted directory, including its actual filename:
 
-For a stdio MCP client, configure the full path to `factorio-mcp.exe` as the command and `--no-http` as its argument.
-The client starts MCP for you.
-
-For Streamable HTTP, run:
-
-```powershell
-.\factorio-mcp.exe --no-stdio --http-port 3000
+```json
+{
+  "mcpServers": {
+    "factorio-mcp": {
+      "command": "/absolute/path/to/factorio-mcp/<executable>",
+      "args": [
+        "--no-http"
+      ]
+    }
+  }
+}
 ```
 
-Connect your MCP client to `http://127.0.0.1:3000/mcp`. HTTP listens on localhost only.
+### Use npx
 
-Both transports are enabled by default. Supported options are `--no-stdio`, `--no-http` and `--http-port PORT`.
-The default port is 3000; port 0 selects a free port and reports the endpoint on stderr. At least one transport
-must remain enabled. Diagnostic output uses stderr; stdout is reserved for stdio MCP messages.
+Install Node.js 24+ with npm, then use this configuration instead:
 
-Ask the agent to call `attach` with `process_name: "factorio.exe"`, then use `ui_read` to inspect the current UI.
-If multiple Factorio processes are running, specify a `pid`. All clients of the same MCP server share one attachment;
-`detach` cancels pending tools from every client. Closing an HTTP session does not detach the game.
+```json
+{
+  "mcpServers": {
+    "factorio-mcp": {
+      "command": "npx",
+      "args": [
+        "--yes",
+        "@czp3009/factorio-mcp@latest",
+        "--no-http"
+      ]
+    }
+  }
+}
+```
 
-Call `detach` when finished. After restarting MCP, call `attach` again. If Factorio exits, MCP stays running and clears
-the old attachment when it detects the exit; explicitly attach again after starting a new game process.
+### Streamable HTTP
 
-After updating factorio-mcp or moving its files, **restart Factorio before attaching again**. Restarting MCP or
-calling detach alone is insufficient.
+First, manually start factorio-mcp using either the executable extracted from GitHub Releases:
+
+```text
+"/absolute/path/to/factorio-mcp/<executable>" --no-stdio --http-port 3000
+```
+
+Or npx:
+
+```text
+npx --yes @czp3009/factorio-mcp@latest --no-stdio --http-port 3000
+```
+
+Replace the executable path with your actual path. In PowerShell, prefix a quoted executable path with `&`.
+Both commands disable stdio. Keep the service running, then configure your agent to connect:
+
+```json
+{
+  "mcpServers": {
+    "factorio-mcp": {
+      "type": "http",
+      "url": "http://127.0.0.1:3000/mcp"
+    }
+  }
+}
+```
+
+HTTP listens only on localhost. If you change the port, update both the startup command and the connection URL.
+
+## Requirements
+
+Start Factorio and wait for initial loading to finish before use.
+
+After updating factorio-mcp or moving its files, **restart Factorio before using MCP again**.
+
+For source builds, a compatible JDK, CMake, Ninja and the platform C++ build tools and SDK are required.
+See [development instructions](https://github.com/czp3009/factorio-mcp/blob/master/development.md#build).
 
 ## Tools
 
@@ -73,11 +121,10 @@ calling detach alone is insufficient.
 
 See [tools.md](tools.md) for arguments, examples, output semantics and cancellation.
 
-Prefer structured UI/world queries and direct widget actions. Use screenshots when structured data is insufficient,
-visual verification is needed, or an image is requested, rather than after every action.
-
 ## Practical limits
 
+- Clients connected to the same MCP process share its game attachment; `detach` cancels their pending tools.
+  Closing an HTTP session does not detach the game. UI actions can activate normal menu commands, including Quit.
 - Action completion means input was dispatched, not that a gameplay objective succeeded. Observe the result before
   a dependent action, especially in multiplayer.
 - UI and world reads are bounded and report incomplete data. UI properties are supported selectively; custom-painted

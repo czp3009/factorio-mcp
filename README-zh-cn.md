@@ -14,41 +14,88 @@ factorio-mcp。**
 
 已在 Factorio 2.0.77（包含官方 DLC）中测试。
 
-## 使用要求
+## 安装
 
-- Factorio 及与其匹配的开发者 PDB 文件，PDB 需放在游戏可执行文件旁。
-- 将 `factorio-mcp.exe` 和 `factorio_bridge.dll` 放在同一目录。
+可以选择下载可执行文件，或通过 npx 使用。以下两种方式均使用 **stdio**。
+将 JSON 添加到 MCP 客户端的配置中，格式可按客户端要求调整。
 
-请自行启动 Factorio，并等待初始加载完成。MCP 不管理游戏进程，但 UI 操作仍可触发游戏菜单中的正常功能，例如退出游戏。
+### 从 GitHub Releases 下载
 
-从源码构建需要兼容的 JDK、CMake、Ninja、MSVC C++ 构建组件和 Windows SDK，无需安装 Visual Studio IDE。
-详见[开发文档](development.md#build)（英文）。
+从 [GitHub 最新 Release](https://github.com/czp3009/factorio-mcp/releases/latest) 下载对应操作系统和架构的 ZIP，
+将整个压缩包解压到你选择的目录。保持可执行文件及其附带的动态链接库在同一目录。
 
-## 连接
+在 MCP 客户端中添加以下配置，将 `command` 替换为上述解压目录中可执行文件的绝对路径，包含实际文件名：
 
-使用 stdio 时，在 MCP 客户端中将 `factorio-mcp.exe` 的完整路径设为启动命令，并添加参数 `--no-http`。
-MCP 客户端会负责启动程序。
-
-使用 Streamable HTTP 时，运行：
-
-```powershell
-.\factorio-mcp.exe --no-stdio --http-port 3000
+```json
+{
+  "mcpServers": {
+    "factorio-mcp": {
+      "command": "/absolute/path/to/factorio-mcp/<executable>",
+      "args": [
+        "--no-http"
+      ]
+    }
+  }
+}
 ```
 
-将 MCP 客户端连接到 `http://127.0.0.1:3000/mcp`。HTTP 仅监听本机地址。
+### 通过 npx 使用
 
-默认同时启用两种传输方式。支持的选项为 `--no-stdio`、`--no-http` 和 `--http-port PORT`。
-默认端口为 3000；设为 0 时会选择空闲端口，并将实际端点输出到 stderr。至少需要保留一种传输方式。
-诊断信息输出到 stderr，stdout 仅用于 stdio MCP 消息。
+安装包含 npm 的 Node.js 24+，然后改用以下配置：
 
-让 agent 调用 `attach`，传入 `process_name: "factorio.exe"`，随后使用 `ui_read` 查看当前 UI。
-如果有多个 Factorio 进程，请指定 `pid`。连接到同一个 MCP 服务的所有客户端共享一次游戏连接；
-`detach` 会取消所有客户端尚未结束的工具调用。关闭 HTTP 会话不会解除与游戏的连接。
+```json
+{
+  "mcpServers": {
+    "factorio-mcp": {
+      "command": "npx",
+      "args": [
+        "--yes",
+        "@czp3009/factorio-mcp@latest",
+        "--no-http"
+      ]
+    }
+  }
+}
+```
 
-使用完毕后调用 `detach`。重启 MCP 后，需要再次调用 `attach`。如果 Factorio 退出，MCP 会继续运行，
-并在检测到退出时清理原有连接；重新启动游戏后，需要显式调用 `attach`。
+### Streamable HTTP
 
-更新 factorio-mcp 或移动其文件后， **必须先重启 Factorio，再重新 attach**。仅重启 MCP 或调用 detach 不够。
+先手动启动 factorio-mcp。可以运行从 GitHub Releases 下载并解压的可执行文件：
+
+```text
+"/absolute/path/to/factorio-mcp/<executable>" --no-stdio --http-port 3000
+```
+
+也可以通过 npx 启动：
+
+```text
+npx --yes @czp3009/factorio-mcp@latest --no-stdio --http-port 3000
+```
+
+请将可执行文件路径替换为实际路径。如果使用 PowerShell，需在带引号的可执行文件路径前加 `&`。
+两种启动方式均关闭 stdio。保持服务运行，再通过以下配置让 agent 连接：
+
+```json
+{
+  "mcpServers": {
+    "factorio-mcp": {
+      "type": "http",
+      "url": "http://127.0.0.1:3000/mcp"
+    }
+  }
+}
+```
+
+HTTP 仅监听本机地址。如果修改端口，请同步修改启动命令和连接 URL。
+
+## 使用要求
+
+使用前请启动 Factorio，并等待初始加载完成。
+
+更新 factorio-mcp 或移动其文件后， **必须先重启 Factorio，再使用 MCP**。
+
+从源码构建需要兼容的 JDK、CMake、Ninja，以及平台对应的 C++ 构建工具和 SDK。
+详见[开发文档](https://github.com/czp3009/factorio-mcp/blob/master/development.md#build)（英文）。
 
 ## 工具
 
@@ -69,10 +116,10 @@ MCP 客户端会负责启动程序。
 
 参数、示例、返回值含义及取消规则见 [tools.md](tools.md)（英文）。
 
-优先使用结构化 UI／世界查询和直接控件操作。仅在结构化信息不足、需要视觉验证或明确需要图片时使用截图，无需每次操作后都截图。
-
 ## 实际限制
 
+- 连接到同一个 MCP 进程的客户端共享游戏连接；`detach` 会取消这些客户端尚未结束的工具调用。
+  关闭 HTTP 会话不会解除与游戏的连接。UI 操作可触发正常菜单功能，包括退出游戏。
 - 操作完成表示输入已发出，不代表游戏目标已经实现。执行依赖其结果的后续操作前，应先观察实际状态，多人游戏中尤其如此。
 - UI 和世界查询有读取上限，会报告数据不完整的情况。UI 属性仅支持部分类型，自行绘制的像素不会被还原为结构化控件。
   世界查询可能包含隐藏对象，不会重建地图中记忆的历史内容；可见性标志不考虑 UI 遮挡。

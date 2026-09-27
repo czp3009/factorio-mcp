@@ -61,13 +61,38 @@ handling, and connect only the tests supported on the current host to `check`. K
 do not reuse Windows DLL names, SDK settings or architecture constants in shared configuration. No placeholder targets
 or platform implementations are needed before those ports exist.
 
-## GitHub releases
+## Publishing
 
-Run **Actions → Release → Run workflow** and select the branch or tag to build. The workflow file must exist on the
-default branch for GitHub to offer this manual trigger. Set `version` in `build.gradle.kts` before publishing; the
-workflow reads the evaluated Gradle project version, creates tag `v<version>` at the selected commit, and publishes
+Three manual Actions entry points share `.github/workflows/publish.yml`:
+
+- **publish-github** (`publish-github.yml`): build, test and upload ZIPs to a GitHub Release.
+- **publish-npm** (`publish-npm.yml`): build, test and publish all enabled platform packages, then the launcher
+  package. No package selection is required; a platform publication failure prevents launcher publication.
+- **publish-all** (`publish-all.yml`): build and test once, then publish both destinations.
+
+These are the only manual entry points. The shared `publish.yml` workflow is called internally.
+
+Select the branch or tag using **Run workflow**. The entry-point files must exist on the default branch for GitHub
+to offer their manual triggers. Set `ProjectInfo.VERSION` in
+[`ProjectInfo.kt`](buildSrc/src/main/kotlin/com/hiczp/factorio/mcp/buildlogic/ProjectInfo.kt) before publishing.
+`build.gradle.kts` uses that constant as the project version; npm packages and the generated MCP handshake version
+derive from it. External scripts and the publishing workflow read the version with:
+
+```powershell
+.\gradlew.bat --quiet printVersion
+```
+
+On Linux/macOS, use `./gradlew --quiet printVersion`. The task prints only the version with `--quiet`, always runs
+when requested, and does not build native binaries. GitHub publication creates tag `v<version>` at the selected commit
+and publishes
 `factorio-mcp-<version>-<platform>.zip` as a Release attachment. An existing tag causes publication to fail instead
-of replacing an existing release. Concurrent release runs are serialized.
+of replacing an existing release. All three entry points share a concurrency group. GitHub may replace an older
+pending run when another is queued; an in-progress run is not cancelled.
+
+The cacheable `generateBuildVersion` task in `buildSrc` uses KotlinPoet to generate the runtime
+`BuildVersion.VERSION` constant in an internal object. Its version input and generated source directory are declared
+to Gradle. `commonMain` consumes the task's output provider, so compilation depends on generation automatically.
+Generated code stays under `build/generated/`; KotlinPoet is a build dependency only.
 
 `.github/release-platforms.json` controls the build matrix. Only Windows x64 is enabled. Once `linuxX64` or
 `macosArm64` is implemented and tested, enable its row and supply any new platform-specific CI prerequisites.
@@ -75,12 +100,40 @@ Each enabled runner executes the standard `gradlew build`, including local autom
 `build/bin/<target>/releaseExecutable/`. The Windows runner initializes its installed MSVC/Windows SDK environment;
 compilation still uses Kotlin/Native's toolchain. No Factorio installation or manual acceptance environment is needed.
 
-The publication job starts only after every enabled platform succeeds. It makes one ZIP per platform and uploads
-them together using the workflow's `GITHUB_TOKEN`; only this job has `contents: write`. Repository policies must
-allow Release and tag creation. Test reports remain available as Actions artifacts for seven days, including when
+Enabled platforms build in parallel. Each runner invokes Gradle once with `build` and, when requested, its npm
+package generation task. Gradle executes shared dependencies only once in that task graph. Both publication
+formats use the same release binaries; uploaded artifacts carry the tested binaries and npm tarballs to later
+jobs without compiling again. Gradle's build cache reuses eligible task outputs across runs, while local up-to-date
+checks avoid repeated work within a workspace. Artifact handoff does not depend on a cache hit.
+
+After all builds and tests succeed, GitHub and npm publication can run concurrently. The npm job downloads its
+tarballs once and publishes platform packages sequentially, followed by the launcher. A platform failure prevents
+launcher publication. This keeps the small upload steps in one job rather than adding runners and artifact
+handoffs just to parallelize them. Publication steps do not rerun Gradle or tests; whole build directories and
+project-local Gradle state are not transferred between jobs.
+
+Publication starts only after every enabled platform succeeds. GitHub publication makes one ZIP per platform and
+uploads them together using the workflow's `GITHUB_TOKEN`; only this job has `contents: write` in the shared pipeline.
+The entry points permit that job's elevated permission; metadata, build and npm jobs retain read-only tokens.
+Repository policies must allow Release and tag creation. Test reports remain available as Actions artifacts for seven
+days, including when
 tests fail. Intermediate TAR files preserve executable permissions across jobs before final ZIP packaging.
 Each TAR filename includes its platform; downloads merge into one directory so packaging uses the same paths for
 one or multiple enabled platforms.
+
+For npm, configure the repository's `NPM_TOKEN` Actions secret with publish access to both
+`@czp3009/factorio-mcp` and `@czp3009/factorio-mcp-mingw_x64`. Use credentials that support unattended publication
+under your npm account's security policy. `setup-node` supplies a temporary npm configuration; the token is exposed
+only to the publish step. No npm credentials are needed for GitHub-only releases. The plugin generates npm packages
+during the build; `npm pack` archives are handed to the npm job, which uploads every platform package before
+the launcher. Windows packages include `bin/factorio-mcp.exe` and the adjacent `bin/factorio_bridge.dll`.
+The DLL copy is configured in `stage.platforms.mingwX64`, so it does not apply to other platform packages.
+Only implemented Gradle executable targets appear in the launcher's optional dependencies. Do not register future
+targets until they are implemented, enabled in the matrix and ready to publish.
+
+Publication is not atomic across packages or destinations. Existing npm versions are not overwritten, and a later
+failure does not undo packages or a GitHub Release already published. Inspect the logs before retrying; use a new
+Gradle version for changed artifacts. No public publication occurs during ordinary `build` or `check`.
 
 Two separate caches keep repeat builds from downloading the toolchain and dependencies again:
 
@@ -91,8 +144,56 @@ Two separate caches keep repeat builds from downloading the toolchain and depend
   LLVM toolchain. Its keys separate OS/architecture and Kotlin version; restore prefixes never cross those boundaries.
 
 Project `build/`, project `.gradle/` and test results are not restored as dependency caches. Cache misses download
-dependencies normally. No custom token or configuration-cache encryption secret is required. GitHub may evict old
+dependencies normally. Caching requires no custom token or configuration-cache encryption secret. GitHub may evict old
 caches according to repository limits; this affects build time, not which checks run.
+
+### Local npm verification
+
+Node.js 24+ and npm are needed only for npm packaging/publication and npm-based launches. The
+`com.hiczp.kotlin-native-npm-publishing` Gradle plugin owns package staging and local publishing tasks.
+The Gradle version also generates the version reported in the MCP handshake.
+
+After the normal `build`, generate and inspect packages without publishing:
+
+```powershell
+.\gradlew.bat generateKotlinNativeNpmPackages
+npm pack ./build/kotlinNativeNpmPublishing/main --dry-run
+npm pack ./build/kotlinNativeNpmPublishing/platforms/mingw_x64 --dry-run
+```
+
+For an actual local publication, use a disposable registry bound to localhost, such as Verdaccio. Install its
+dependencies with `npm install --prefix temp/npm-publishing/registry verdaccio@6`; keep its explicit configuration,
+storage and credentials under `temp/npm-publishing/`. Do not change global npm configuration or install global
+packages. In a dedicated shell, point npm at temporary configuration/cache paths before installing the registry:
+
+```powershell
+$scratch = New-Item -ItemType Directory -Force temp/npm-publishing
+$env:NPM_CONFIG_USERCONFIG = "$($scratch.FullName)/user.npmrc"
+$env:NPM_CONFIG_GLOBALCONFIG = "$($scratch.FullName)/global.npmrc"
+$env:NPM_CONFIG_CACHE = "$($scratch.FullName)/cache"
+```
+
+Create those two configuration files, configure the temporary user file for your local registry and its test
+credentials, and leave the temporary global file empty. Use an explicit public `--registry` when installing
+Verdaccio itself. Start Verdaccio with `--config` pointing at the temporary configuration. Once it is listening,
+publish through the plugin, substituting your local registry URL:
+
+```powershell
+.\gradlew.bat publishKotlinNativeNpm '-PnpmRegistry=http://127.0.0.1:4873/'
+```
+
+The aggregate task publishes the host platform before the launcher. For individual packages, use
+`publishKotlinNativeNpmMingwX64Package` and `publishKotlinNativeNpmMainPackage` in that order.
+`-PnpmOtp=...` is available for interactive registries that require an OTP. Credentials remain npm configuration,
+not Gradle properties. Ordinary builds neither start a registry nor publish packages.
+
+From an empty consumer directory under `temp/`, use `npm install @czp3009/factorio-mcp@latest`, then
+`npm exec -- factorio-mcp --no-http`. Also test `npx --yes @czp3009/factorio-mcp@latest --no-http` from a separate
+empty directory. Keep the temporary npm environment active so both use the local registry. Send MCP `initialize`,
+`notifications/initialized` and a `status` call; expect a detached server without needing Factorio. Close stdin and
+check clean exit. Verify the installed EXE and adjacent DLL match the release build, the launcher declares only
+implemented platforms, and stdout contains only protocol messages. Stop the test registry and close the dedicated
+shell afterward. Recreate its disposable storage or use a new version before republishing changed artifacts.
 
 ## Maintenance map
 

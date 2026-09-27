@@ -4,4 +4,5 @@ plugins {
 
 dependencies {
     implementation(libs.kotlin.native.utils)
+    implementation(libs.kotlinpoet)
 }

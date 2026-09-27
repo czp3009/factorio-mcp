@@ -1,13 +1,23 @@
-name: Release
+name: Publishing pipeline
 
 on:
-  workflow_dispatch:
+  workflow_call:
+    inputs:
+      github-release:
+        type: boolean
+        default: false
+      npm:
+        type: boolean
+        default: false
+    secrets:
+      NPM_TOKEN:
+        required: false
 
 permissions:
   contents: read
 
 concurrency:
-  group: release
+  group: publishing
   cancel-in-progress: false
 
 jobs:
@@ -43,8 +53,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          properties="$(./gradlew --no-daemon --console=plain -q properties --property version)"
-          version="$(printf '%s\n' "$properties" | sed -n 's/^version: //p')"
+          version="$(./gradlew --no-daemon --console=plain -q printVersion)"
           if [[ "$version" == unspecified || ! "$version" =~ ^[0-9A-Za-z][0-9A-Za-z._+-]*$ ]]; then
             echo "Invalid Gradle release version: $version" >&2
             exit 1
@@ -53,6 +62,29 @@ jobs:
           matrix="$(jq -c '{include: map(select(.enabled))}' .github/release-platforms.json)"
           jq -e '.include | length > 0' <<< "$matrix" > /dev/null
           printf 'version=%s\nkotlin-version=%s\nmatrix=%s\n' "$version" "$kotlin_version" "$matrix" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v7.0.0
+        if: inputs.npm
+        with:
+          node-version: '24'
+          package-manager-cache: false
+
+      - name: Package npm launcher
+        if: inputs.npm
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./gradlew --no-daemon --console=plain generateKotlinNativeNpmMainPackage
+          mkdir -p build/npm
+          npm pack ./build/kotlinNativeNpmPublishing/main --pack-destination build/npm
+
+      - uses: actions/upload-artifact@v7.0.1
+        if: inputs.npm
+        with:
+          name: npm-main
+          path: build/npm/*.tgz
+          if-no-files-found: error
+          retention-days: 7
 
   build:
     name: Build and test (${{ matrix.id }})
@@ -92,21 +124,40 @@ jobs:
       - name: Build and test on Windows
         if: runner.os == 'Windows'
         shell: pwsh
+        env:
+          GENERATE_NPM: ${{ inputs.npm }}
+          TARGET: ${{ matrix.target }}
         run: |
           $ErrorActionPreference = 'Stop'
           $vswhere = "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe"
           $installation = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
           if ($LASTEXITCODE -ne 0 -or -not $installation) { throw 'MSVC build tools were not found' }
           & "$installation/Common7/Tools/Launch-VsDevShell.ps1" -Arch amd64 -HostArch amd64 -SkipAutomaticLocation
-          ./gradlew.bat --no-daemon --console=plain build
+          $tasks = @('build')
+          if ($env:GENERATE_NPM -eq 'true') {
+            $target = $env:TARGET.Substring(0, 1).ToUpperInvariant() + $env:TARGET.Substring(1)
+            $tasks += "generateKotlinNativeNpm${target}Package"
+          }
+          ./gradlew.bat --no-daemon --console=plain @tasks
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build and test on Linux or macOS
         if: runner.os != 'Windows'
         shell: bash
-        run: ./gradlew --no-daemon --console=plain build
+        env:
+          GENERATE_NPM: ${{ inputs.npm }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          tasks=(build)
+          if [[ "$GENERATE_NPM" == true ]]; then
+            target="$(printf '%s' "${TARGET:0:1}" | tr '[:lower:]' '[:upper:]')${TARGET:1}"
+            tasks+=("generateKotlinNativeNpm${target}Package")
+          fi
+          ./gradlew --no-daemon --console=plain "${tasks[@]}"
 
       - name: Collect release binaries
+        if: inputs.github-release
         shell: bash
         env:
           RELEASE_DIRECTORY: build/bin/${{ matrix.target }}/releaseExecutable
@@ -124,10 +175,35 @@ jobs:
           tar -cf "build/release-handoff/runtime-$PLATFORM.tar" -C "$RELEASE_DIRECTORY" .
 
       - name: Upload release binaries
+        if: inputs.github-release
         uses: actions/upload-artifact@v7.0.1
         with:
           name: runtime-${{ matrix.id }}
           path: build/release-handoff/runtime-${{ matrix.id }}.tar
+          if-no-files-found: error
+          retention-days: 7
+
+      - uses: actions/setup-node@v7.0.0
+        if: inputs.npm
+        with:
+          node-version: '24'
+          package-manager-cache: false
+
+      - name: Package native npm runtime
+        if: inputs.npm
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/npm
+          for directory in build/kotlinNativeNpmPublishing/platforms/*; do
+            npm pack "./$directory" --pack-destination build/npm
+          done
+
+      - uses: actions/upload-artifact@v7.0.1
+        if: inputs.npm
+        with:
+          name: npm-${{ matrix.id }}
+          path: build/npm/*.tgz
           if-no-files-found: error
           retention-days: 7
 
@@ -143,8 +219,55 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-  publish:
-    name: Package and publish
+  publish-npm:
+    name: Publish npm packages
+    if: inputs.npm
+    needs: [ prepare, build ]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - uses: actions/download-artifact@v8.0.1
+        with:
+          pattern: npm-*
+          path: packages
+          merge-multiple: true
+
+      - name: Publish platform packages, then the launcher
+        shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$NODE_AUTH_TOKEN" ]]; then
+            echo 'Configure the NPM_TOKEN repository secret before publishing npm packages.' >&2
+            exit 1
+          fi
+          shopt -s nullglob
+          # Read package metadata, not artifact filenames, to distinguish the launcher.
+          main=()
+          platforms=()
+          for archive in ./packages/*.tgz; do
+            metadata="$(tar -xOf "$archive" package/package.json)"
+            if jq -e '.kotlinNativeNpmPublishing.platformPackages' <<< "$metadata" > /dev/null; then
+              main+=("$archive")
+            else
+              platforms+=("$archive")
+            fi
+          done
+          test "${#main[@]}" -eq 1
+          test "${#platforms[@]}" -gt 0
+          for archive in "${platforms[@]}" "${main[@]}"; do
+            npm publish "$archive" --access public
+          done
+
+  publish-release:
+    name: Publish GitHub Release
+    if: inputs.github-release
     needs: [ prepare, build ]
     runs-on: ubuntu-24.04
     permissions:

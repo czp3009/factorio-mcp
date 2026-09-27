@@ -24,6 +24,9 @@
   duplicate them in tracked documentation. Keep agent-facing `tools/list` descriptions aligned with the implemented
   contract as well. Preserve historical evidence with its original scope; use an explicit current index instead of
   rewriting old results as if they came from the latest code.
+- Keep README instructions focused on user actions and configuration. Omit automatic package/platform selection,
+  client-managed MCP startup and other mechanisms that require no user action. Keep agent operating guidance in
+  server instructions and tool documentation rather than repeating it in installation instructions.
 - Keep MCP server instructions, tool descriptions and argument help concise and agent-oriented: explain tool choice,
   prerequisites and result limits, with parameter rules in schemas rather than duplicated pseudo-schemas. Prefer
   structured observations and direct widget actions; screenshots are for missing visual information, verification or
@@ -35,6 +38,9 @@
 
 ## Build and dependencies
 
+- Keep the project version in `ProjectInfo.VERSION` only. Use `latest` in installation examples and Gradle's
+  `printVersion` task in automation; do not duplicate the current release number in documentation or code.
+  Dependency/protocol versions and historical test evidence retain their own explicit version identifiers.
 - Reference third-party GitHub Actions by version tags, not commit hashes.
 - Prefer Kotlin standard libraries and kotlinx-io, kotlinx-serialization-json and kotlinx-coroutines. Do not add
   expect/actual wrappers for APIs already provided by portable libraries.

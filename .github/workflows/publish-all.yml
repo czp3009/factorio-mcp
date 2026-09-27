@@ -1,0 +1,16 @@
+name: publish-all
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    uses: ./.github/workflows/publish.yml
+    with:
+      github-release: true
+      npm: true
+    secrets:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}

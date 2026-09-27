@@ -1,15 +1,35 @@
+import com.hiczp.factorio.mcp.buildlogic.GenerateBuildVersion
+import com.hiczp.factorio.mcp.buildlogic.PrintVersion
+import com.hiczp.factorio.mcp.buildlogic.ProjectInfo
 import com.hiczp.factorio.mcp.buildlogic.WindowsNativeBuild
-import java.nio.file.Files
+import org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget
 import org.jetbrains.kotlin.gradle.plugin.mpp.NativeBuildType
 import org.jetbrains.kotlin.gradle.targets.native.tasks.KotlinNativeTest
 import org.jetbrains.kotlin.gradle.utils.NativeCompilerDownloader
 import org.jetbrains.kotlin.konan.target.HostManager
+import java.nio.file.Files
 
-plugins { alias(libs.plugins.kotlinMultiplatform) }
+plugins {
+    alias(libs.plugins.kotlinMultiplatform)
+    alias(libs.plugins.kotlinNativeNpmPublishing)
+}
 
 group = "com.hiczp"
 
-version = "0.1.0"
+version = ProjectInfo.VERSION
+
+tasks.register<PrintVersion>("printVersion") {
+    group = "help"
+    description = "Prints the project version; use --quiet for machine-readable output."
+    releaseVersion.set(project.version.toString())
+}
+
+val generateBuildVersion = tasks.register<GenerateBuildVersion>("generateBuildVersion") {
+    group = "build"
+    description = "Generates the runtime version type with KotlinPoet."
+    releaseVersion.set(project.version.toString())
+    outputDirectory.set(layout.buildDirectory.dir("generated/build-version/kotlin"))
+}
 
 val kotlinNativeHome =
     providers
@@ -114,6 +134,7 @@ kotlin {
         }
     }
     sourceSets {
+        commonMain { kotlin.srcDir(generateBuildVersion.flatMap { it.outputDirectory }) }
         commonMain.dependencies {
             implementation(libs.mcp.server)
             implementation(libs.ktor.server.cio)
@@ -126,5 +147,37 @@ kotlin {
             implementation(libs.ktor.client.core)
         }
         mingwX64Test.dependencies { implementation(libs.ktor.client.winhttp) }
+    }
+}
+
+kotlinNativeNpmPublishing {
+    packageName.set("@czp3009/factorio-mcp")
+    description.set("MCP server for observing and interacting with a running Factorio client.")
+    repository.set("https://github.com/czp3009/factorio-mcp")
+    homepage.set("https://github.com/czp3009/factorio-mcp")
+    keywords.addAll("factorio", "mcp", "kotlin-native")
+    access.set("public")
+    registry.set(providers.gradleProperty("npmRegistry"))
+    otp.set(providers.gradleProperty("npmOtp"))
+    stage {
+        main {
+            readme()
+            copy(layout.projectDirectory.file("README-zh-cn.md"))
+            copy(layout.projectDirectory.file("tools.md"))
+            copy(layout.projectDirectory.dir("images"))
+        }
+        platforms {
+            mingwX64 {
+                val release =
+                    kotlin.targets.getByName<KotlinNativeTarget>("mingwX64")
+                        .binaries.getExecutable(NativeBuildType.RELEASE)
+                copy(
+                    release.linkTaskProvider
+                        .flatMap { it.outputFile }
+                        .map { it.parentFile.resolve("factorio_bridge.dll") },
+                    "bin/factorio_bridge.dll",
+                )
+            }
+        }
     }
 }
