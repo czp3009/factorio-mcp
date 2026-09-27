@@ -79,6 +79,8 @@ The publication job starts only after every enabled platform succeeds. It makes 
 them together using the workflow's `GITHUB_TOKEN`; only this job has `contents: write`. Repository policies must
 allow Release and tag creation. Test reports remain available as Actions artifacts for seven days, including when
 tests fail. Intermediate TAR files preserve executable permissions across jobs before final ZIP packaging.
+Each TAR filename includes its platform; downloads merge into one directory so packaging uses the same paths for
+one or multiple enabled platforms.
 
 Two separate caches keep repeat builds from downloading the toolchain and dependencies again:
 
