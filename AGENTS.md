@@ -6,6 +6,8 @@
   English, except explicitly requested translations. Name translated READMEs `README-{language}.md`, such as
   `README-zh-cn.md`. Keep `README.md` and its translations aligned when changing user-facing requirements, usage,
   tools or limitations.
+- Use half-width (ASCII) punctuation and symbols when writing Chinese, including user-facing conversation,
+  documentation, comments and docstrings.
 - When the user emphasizes or repeatedly requests a rule, assess whether it is a lasting convention rather than a
   task-specific instruction. If it is a lasting convention, consider whether it belongs in `AGENTS.md`; add it when
   appropriate, or refine an existing rule to capture the intent precisely without duplication.
