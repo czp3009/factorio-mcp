@@ -10,7 +10,7 @@ factorio-mcp。**
 
 目前支持 **Windows x64**，提供 stdio 和 Streamable HTTP 两种传输方式。
 
-![电脑自己在动](images/电脑自己在动.png)
+![电脑自己在动](images/电脑自己在动.jpg)
 
 已在 Factorio 2.0.77（包含官方 DLC）中测试。
 

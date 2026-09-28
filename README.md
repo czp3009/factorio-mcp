@@ -12,7 +12,7 @@ some contexts. If you are uncomfortable with this, do not use factorio-mcp.**
 
 Currently, it supports **Windows x64**, with stdio and Streamable HTTP transports.
 
-![I'm not even touching it](images/im-not-even-touching-it.png)
+![I'm not even touching it](images/im-not-even-touching-it.jpg)
 
 Tested with Factorio 2.0.77, including the official DLC.
 
