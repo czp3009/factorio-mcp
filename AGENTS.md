@@ -27,6 +27,9 @@
 - Keep README instructions focused on user actions and configuration. Omit automatic package/platform selection,
   client-managed MCP startup and other mechanisms that require no user action. Keep agent operating guidance in
   server instructions and tool documentation rather than repeating it in installation instructions.
+- For platform-specific user-facing configuration and command examples, show Linux paths and shell syntax first,
+  followed by Windows/PowerShell differences. Do not label or duplicate platform-independent examples by operating
+  system. This example ordering does not imply support for unimplemented platforms.
 - Keep MCP server instructions, tool descriptions and argument help concise and agent-oriented: explain tool choice,
   prerequisites and result limits, with parameter rules in schemas rather than duplicated pseudo-schemas. Prefer
   structured observations and direct widget actions; screenshots are for missing visual information, verification or

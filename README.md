@@ -10,7 +10,7 @@ connected to a multiplayer server.
 **To operate the client, factorio-mcp injects code into the Factorio process. This may be considered cheating in
 some contexts. If you are uncomfortable with this, do not use factorio-mcp.**
 
-Currently supports **Windows x64**, with stdio and Streamable HTTP transports.
+Currently, it supports **Windows x64**, with stdio and Streamable HTTP transports.
 
 ![I'm not even touching it](images/im-not-even-touching-it.png)
 
@@ -18,15 +18,18 @@ Tested with Factorio 2.0.77, including the official DLC.
 
 ## Installation
 
-Choose either a downloaded executable or npx. Both options below use **stdio**. Add the JSON to your MCP client's
-configuration, adjusting the format if required by the client.
+Choose **stdio** or **Streamable HTTP** below. Each supports downloading from GitHub Releases or using npm (via npx).
+Adjust the JSON configuration format to your MCP client's requirements.
 
-### Download from GitHub Releases
+### stdio
+
+Choose one of the following configurations for your MCP client.
+
+#### Download from GitHub Releases
 
 Download the ZIP for your operating system and architecture from the
 [latest GitHub Release](https://github.com/czp3009/factorio-mcp/releases/latest), then extract the entire archive to a
-directory
-of your choice. Keep the executable and its accompanying dynamic libraries in the same directory.
+directory of your choice. Keep the executable and its accompanying dynamic libraries in the same directory.
 
 Add the following to your MCP client's configuration, replacing `command` with the absolute path to the executable
 in that extracted directory, including its actual filename:
@@ -35,7 +38,7 @@ in that extracted directory, including its actual filename:
 {
   "mcpServers": {
     "factorio-mcp": {
-      "command": "/absolute/path/to/factorio-mcp/<executable>",
+      "command": "/absolute/path/to/factorio-mcp/factorio-mcp",
       "args": [
         "--no-http"
       ]
@@ -44,7 +47,10 @@ in that extracted directory, including its actual filename:
 }
 ```
 
-### Use npx
+On Windows, use the `.exe` path, for example `"command": "C:/path/to/factorio-mcp/factorio-mcp.exe"`.
+Forward slashes avoid backslash escaping in JSON.
+
+#### Use npm (via npx)
 
 Install Node.js 24+ with npm, then use this configuration instead:
 
@@ -63,22 +69,42 @@ Install Node.js 24+ with npm, then use this configuration instead:
 }
 ```
 
+On Windows, if your MCP client requires a shell to run npx, set `"command": "cmd"` and use
+`"args": ["/c", "npx", "--yes", "@czp3009/factorio-mcp@latest", "--no-http"]`.
+
 ### Streamable HTTP
 
-First, manually start factorio-mcp using either the executable extracted from GitHub Releases:
+Choose one of the following ways to start the HTTP service, then configure your MCP client to connect to it.
 
-```text
-"/absolute/path/to/factorio-mcp/<executable>" --no-stdio --http-port 3000
+#### Download from GitHub Releases
+
+Download the ZIP for your operating system and architecture from the
+[latest GitHub Release](https://github.com/czp3009/factorio-mcp/releases/latest), then extract the entire archive to a
+directory of your choice. Keep the executable and its accompanying dynamic libraries in the same directory.
+
+Replace the path with the absolute path to the extracted executable:
+
+```bash
+"/absolute/path/to/factorio-mcp/factorio-mcp" --no-stdio --http-port 3000
 ```
 
-Or npx:
+On Windows (PowerShell), use the `.exe` path and prefix it with `&`:
+
+```powershell
+& "C:\path\to\factorio-mcp\factorio-mcp.exe" --no-stdio --http-port 3000
+```
+
+#### Use npm (via npx)
+
+Install Node.js 24+ with npm, then run:
 
 ```text
 npx --yes @czp3009/factorio-mcp@latest --no-stdio --http-port 3000
 ```
 
-Replace the executable path with your actual path. In PowerShell, prefix a quoted executable path with `&`.
-Both commands disable stdio. Keep the service running, then configure your agent to connect:
+#### Configure the MCP client
+
+Keep the HTTP service running and add the following to your MCP client's configuration:
 
 ```json
 {

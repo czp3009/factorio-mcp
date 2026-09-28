@@ -16,10 +16,14 @@ factorio-mcp。**
 
 ## 安装
 
-可以选择下载可执行文件，或通过 npx 使用。以下两种方式均使用 **stdio**。
-将 JSON 添加到 MCP 客户端的配置中，格式可按客户端要求调整。
+选择下方的 **stdio** 或 **Streamable HTTP** 用法。两者都支持从 GitHub Releases 下载，或通过 npm（npx）使用。
+JSON 配置格式可按 MCP 客户端要求调整。
 
-### 从 GitHub Releases 下载
+### stdio
+
+选择以下一种配置，添加到 MCP 客户端中。
+
+#### 从 GitHub Releases 下载
 
 从 [GitHub 最新 Release](https://github.com/czp3009/factorio-mcp/releases/latest) 下载对应操作系统和架构的 ZIP，
 将整个压缩包解压到你选择的目录。保持可执行文件及其附带的动态链接库在同一目录。
@@ -30,7 +34,7 @@ factorio-mcp。**
 {
   "mcpServers": {
     "factorio-mcp": {
-      "command": "/absolute/path/to/factorio-mcp/<executable>",
+      "command": "/absolute/path/to/factorio-mcp/factorio-mcp",
       "args": [
         "--no-http"
       ]
@@ -39,7 +43,10 @@ factorio-mcp。**
 }
 ```
 
-### 通过 npx 使用
+Windows 下请使用 `.exe` 路径，例如 `"command": "C:/path/to/factorio-mcp/factorio-mcp.exe"`。
+JSON 中使用正斜杠可避免反斜杠转义。
+
+#### 通过 npm（npx）使用
 
 安装包含 npm 的 Node.js 24+，然后改用以下配置：
 
@@ -58,22 +65,41 @@ factorio-mcp。**
 }
 ```
 
+Windows 下，如果 MCP 客户端需要通过 shell 运行 npx，请设置 `"command": "cmd"`，并使用
+`"args": ["/c", "npx", "--yes", "@czp3009/factorio-mcp@latest", "--no-http"]`。
+
 ### Streamable HTTP
 
-先手动启动 factorio-mcp。可以运行从 GitHub Releases 下载并解压的可执行文件：
+选择以下一种方式启动 HTTP 服务，再配置 MCP 客户端连接。
 
-```text
-"/absolute/path/to/factorio-mcp/<executable>" --no-stdio --http-port 3000
+#### 从 GitHub Releases 下载
+
+从 [GitHub 最新 Release](https://github.com/czp3009/factorio-mcp/releases/latest) 下载对应操作系统和架构的 ZIP，
+将整个压缩包解压到你选择的目录。保持可执行文件及其附带的动态链接库在同一目录。
+
+将路径替换为解压后可执行文件的绝对路径：
+
+```bash
+"/absolute/path/to/factorio-mcp/factorio-mcp" --no-stdio --http-port 3000
 ```
 
-也可以通过 npx 启动：
+Windows（PowerShell）下请使用 `.exe` 路径，并在前面加上 `&`：
+
+```powershell
+& "C:\path\to\factorio-mcp\factorio-mcp.exe" --no-stdio --http-port 3000
+```
+
+#### 通过 npm（npx）使用
+
+安装包含 npm 的 Node.js 24+，然后运行：
 
 ```text
 npx --yes @czp3009/factorio-mcp@latest --no-stdio --http-port 3000
 ```
 
-请将可执行文件路径替换为实际路径。如果使用 PowerShell，需在带引号的可执行文件路径前加 `&`。
-两种启动方式均关闭 stdio。保持服务运行，再通过以下配置让 agent 连接：
+#### 配置 MCP 客户端
+
+保持 HTTP 服务运行，并在 MCP 客户端中添加以下配置：
 
 ```json
 {
