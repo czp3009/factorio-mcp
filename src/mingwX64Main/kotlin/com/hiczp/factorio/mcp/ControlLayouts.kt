@@ -36,8 +36,6 @@ internal class ControlLayouts(types: DebugTypes) {
         listOf(
             "keyboardAndMouseInput1",
             "keyboardAndMouseInput2",
-            "gameControllerInput1",
-            "gameControllerInput2",
         )
             .map { types.namedMember("ControlInput", it, config, types.aggregateSize(config)) }
     private val key = types.path(config, "key", target = string, bytes = stringSize)
@@ -72,26 +70,11 @@ internal class ControlLayouts(types: DebugTypes) {
         types.enumValues("ControlInputValue::MouseWheel").entries.associate {
             it.value to it.key.removePrefix("MouseWheel").lowercase()
         }
-    private val usages =
-        types.enumValues("ControlUsageType").entries.associate { it.value to it.key }
-    private val controllerButtons =
-        types.enumValues("SDL_GameControllerButton").entries.associate {
-            it.value to it.key.removePrefix("SDL_CONTROLLER_BUTTON_")
-        }
-    private val controllerAxes =
-        types.enumValues("SDL_GameControllerAxis").entries.associate {
-            it.value to it.key.removePrefix("SDL_CONTROLLER_AXIS_")
-        }
-    private val controllerSticks =
-        types.enumValues("ControllerStick").entries.associate { it.value to it.key }
 
     init {
         listOf(
             "mouseButton" to "ControlInputValue::MouseButton",
             "mouseWheel" to "ControlInputValue::MouseWheel",
-            "controllerButton" to "SDL_GameControllerButton",
-            "controllerAxis" to "SDL_GameControllerAxis",
-            "controllerStick" to "ControllerStick",
         )
             .forEach { (member, name) ->
                 check(types.namedMember("ControlInputValue", member, name, 4uL) == code) {
@@ -128,7 +111,7 @@ internal class ControlLayouts(types: DebugTypes) {
                 .toMap()
 
         fun bindings(effective: Boolean) =
-            (0..3).map { index ->
+            slots.indices.map { index ->
                 val binding = if (effective) source.effective[index] else source.bindings[index]
                 val type = bindingTypes[binding.type.toInt()] ?: "Unknown(${binding.type})"
                 val code = binding.code.toInt()
@@ -137,17 +120,12 @@ internal class ControlLayouts(types: DebugTypes) {
                     listOf(
                         "keyboard_mouse_primary",
                         "keyboard_mouse_secondary",
-                        "controller_primary",
-                        "controller_secondary",
                     )[index],
                     type,
                     when (type) {
                         "Keyboard" -> keys[code]
                         "MouseButton" -> mouseCodes[code]
                         "MouseWheel" -> wheels[code]
-                        "ControllerButton" -> controllerButtons[code]
-                        "ControllerAxis" -> controllerAxes[code]
-                        "ControllerStick" -> controllerSticks[code]
                         else -> null
                     },
                     code,
@@ -161,8 +139,6 @@ internal class ControlLayouts(types: DebugTypes) {
             }
         return ControlSnapshot(
             source.id.toKString(),
-            source.label.toKString(),
-            source.description.toKString(),
             source.linked.toKString().takeIf { it.isNotEmpty() },
             source.bindingOwner.toKString(),
             source.custom != 0,
@@ -170,10 +146,9 @@ internal class ControlLayouts(types: DebugTypes) {
             if (source.custom != 0) source.spectating != 0 else null,
             if (source.custom != 0) source.cutscene != 0 else null,
             source.gui != 0,
-            usages[source.usage] ?: "Unknown(${source.usage})",
+            source.usage,
             bindings(false),
             bindings(true),
-            source.truncated != 0,
         )
     }
 }

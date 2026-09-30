@@ -1,0 +1,4 @@
+package = com.hiczp.factorio.mcp.testbridge
+headers = fixture_process.h ipc_fixture.h
+headerFilter = fixture_process.h ipc_fixture.h
+noStringConversion = fm_fixture_spawn

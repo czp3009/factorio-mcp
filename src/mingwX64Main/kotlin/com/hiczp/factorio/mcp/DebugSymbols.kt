@@ -45,8 +45,6 @@ private val symbolPrefixes =
         "?forceReleaseControlWithLock@Gui@agui@@",
         "?getControlInputList@ControlInput@@",
         "?loadingCustomInputs@ControlInput@@",
-        "?getLocalisedNameResult@ControlInput@@",
-        "?getLocalisedDescriptionResult@ControlInput@@",
         "??1?\$basic_string@DU?\$char_traits@D@std@@V?\$allocator@D@2@@std@@",
         "?LEFT@MouseButton@ControlInputValue@@",
         "?RIGHT@MouseButton@ControlInputValue@@",

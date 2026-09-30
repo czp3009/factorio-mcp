@@ -21,208 +21,16 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  prepare:
-    name: Read version and platforms
-    runs-on: ubuntu-24.04
-    outputs:
-      version: ${{ steps.metadata.outputs.version }}
-      kotlin-version: ${{ steps.metadata.outputs.kotlin-version }}
-      matrix: ${{ steps.metadata.outputs.matrix }}
-    steps:
-      - uses: actions/checkout@v7.0.1
-        with:
-          persist-credentials: false
-
-      - uses: actions/setup-java@v6.0.1
-        with:
-          distribution: temurin
-          java-version: '25'
-
-      - name: Cache Gradle dependencies and wrapper
-        uses: actions/cache@v6.1.0
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: gradle-${{ runner.os }}-${{ runner.arch }}-metadata-${{ hashFiles('gradle/wrapper/gradle-wrapper.properties') }}-${{ hashFiles('**/*.gradle.kts', 'gradle/*.toml', 'gradle.properties', 'buildSrc/src/**') }}
-          restore-keys: |
-            gradle-${{ runner.os }}-${{ runner.arch }}-metadata-${{ hashFiles('gradle/wrapper/gradle-wrapper.properties') }}-
-
-      - name: Read Gradle version and enabled matrix
-        id: metadata
-        shell: bash
-        run: |
-          set -euo pipefail
-          version="$(./gradlew --no-daemon --console=plain -q printVersion)"
-          if [[ "$version" == unspecified || ! "$version" =~ ^[0-9A-Za-z][0-9A-Za-z._+-]*$ ]]; then
-            echo "Invalid Gradle release version: $version" >&2
-            exit 1
-          fi
-          kotlin_version="$(python3 -c 'import tomllib; print(tomllib.load(open("gradle/libs.versions.toml", "rb"))["versions"]["kotlin"])')"
-          matrix="$(jq -c '{include: map(select(.enabled))}' .github/release-platforms.json)"
-          jq -e '.include | length > 0' <<< "$matrix" > /dev/null
-          printf 'version=%s\nkotlin-version=%s\nmatrix=%s\n' "$version" "$kotlin_version" "$matrix" >> "$GITHUB_OUTPUT"
-
-      - uses: actions/setup-node@v7.0.0
-        if: inputs.npm
-        with:
-          node-version: '24'
-          package-manager-cache: false
-
-      - name: Package npm launcher
-        if: inputs.npm
-        shell: bash
-        run: |
-          set -euo pipefail
-          ./gradlew --no-daemon --console=plain generateKotlinNativeNpmMainPackage
-          mkdir -p build/npm
-          npm pack ./build/kotlinNativeNpmPublishing/main --pack-destination build/npm
-
-      - uses: actions/upload-artifact@v7.0.1
-        if: inputs.npm
-        with:
-          name: npm-main
-          path: build/npm/*.tgz
-          if-no-files-found: error
-          retention-days: 7
-
   build:
-    name: Build and test (${{ matrix.id }})
-    needs: prepare
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
-    runs-on: ${{ matrix.runner }}
-    steps:
-      - uses: actions/checkout@v7.0.1
-        with:
-          persist-credentials: false
-
-      - uses: actions/setup-java@v6.0.1
-        with:
-          distribution: temurin
-          java-version: '25'
-
-      - name: Cache Gradle dependencies and wrapper
-        uses: actions/cache@v6.1.0
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: gradle-${{ runner.os }}-${{ runner.arch }}-build-${{ hashFiles('gradle/wrapper/gradle-wrapper.properties') }}-${{ hashFiles('**/*.gradle.kts', 'gradle/*.toml', 'gradle.properties', 'buildSrc/src/**') }}
-          restore-keys: |
-            gradle-${{ runner.os }}-${{ runner.arch }}-build-${{ hashFiles('gradle/wrapper/gradle-wrapper.properties') }}-
-
-      - name: Cache Kotlin Native compiler and dependencies
-        uses: actions/cache@v6.1.0
-        with:
-          path: ~/.konan
-          key: konan-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.kotlin-version }}-${{ hashFiles('gradle.properties', 'gradle/wrapper/gradle-wrapper.properties') }}
-          restore-keys: |
-            konan-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.kotlin-version }}-
-
-      - name: Build and test on Windows
-        if: runner.os == 'Windows'
-        shell: pwsh
-        env:
-          GENERATE_NPM: ${{ inputs.npm }}
-          TARGET: ${{ matrix.target }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $vswhere = "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe"
-          $installation = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-          if ($LASTEXITCODE -ne 0 -or -not $installation) { throw 'MSVC build tools were not found' }
-          & "$installation/Common7/Tools/Launch-VsDevShell.ps1" -Arch amd64 -HostArch amd64 -SkipAutomaticLocation
-          $tasks = @('build')
-          if ($env:GENERATE_NPM -eq 'true') {
-            $target = $env:TARGET.Substring(0, 1).ToUpperInvariant() + $env:TARGET.Substring(1)
-            $tasks += "generateKotlinNativeNpm${target}Package"
-          }
-          ./gradlew.bat --no-daemon --console=plain @tasks
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      - name: Build and test on Linux or macOS
-        if: runner.os != 'Windows'
-        shell: bash
-        env:
-          GENERATE_NPM: ${{ inputs.npm }}
-          TARGET: ${{ matrix.target }}
-        run: |
-          set -euo pipefail
-          tasks=(build)
-          if [[ "$GENERATE_NPM" == true ]]; then
-            target="$(printf '%s' "${TARGET:0:1}" | tr '[:lower:]' '[:upper:]')${TARGET:1}"
-            tasks+=("generateKotlinNativeNpm${target}Package")
-          fi
-          ./gradlew --no-daemon --console=plain "${tasks[@]}"
-
-      - name: Collect release binaries
-        if: inputs.github-release
-        shell: bash
-        env:
-          RELEASE_DIRECTORY: build/bin/${{ matrix.target }}/releaseExecutable
-          PLATFORM: ${{ matrix.id }}
-        run: |
-          set -euo pipefail
-          test -d "$RELEASE_DIRECTORY"
-          test -n "$(find "$RELEASE_DIRECTORY" -type f -print -quit)"
-          if [[ "$PLATFORM" == windows-x64 ]]; then
-            test -s "$RELEASE_DIRECTORY/factorio-mcp.exe"
-            test -s "$RELEASE_DIRECTORY/factorio_bridge.dll"
-          fi
-          # Preserve executable permissions across the artifact handoff for Unix targets.
-          mkdir -p build/release-handoff
-          tar -cf "build/release-handoff/runtime-$PLATFORM.tar" -C "$RELEASE_DIRECTORY" .
-
-      - name: Upload release binaries
-        if: inputs.github-release
-        uses: actions/upload-artifact@v7.0.1
-        with:
-          name: runtime-${{ matrix.id }}
-          path: build/release-handoff/runtime-${{ matrix.id }}.tar
-          if-no-files-found: error
-          retention-days: 7
-
-      - uses: actions/setup-node@v7.0.0
-        if: inputs.npm
-        with:
-          node-version: '24'
-          package-manager-cache: false
-
-      - name: Package native npm runtime
-        if: inputs.npm
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p build/npm
-          for directory in build/kotlinNativeNpmPublishing/platforms/*; do
-            npm pack "./$directory" --pack-destination build/npm
-          done
-
-      - uses: actions/upload-artifact@v7.0.1
-        if: inputs.npm
-        with:
-          name: npm-${{ matrix.id }}
-          path: build/npm/*.tgz
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Upload test reports
-        if: always()
-        uses: actions/upload-artifact@v7.0.1
-        with:
-          name: tests-${{ matrix.id }}
-          path: |
-            build/reports/tests/
-            build/test-results/
-            build/native-tests/**/Testing/Temporary/
-          if-no-files-found: ignore
-          retention-days: 7
+    uses: ./.github/workflows/build.yml
+    with:
+      github-release: ${{ inputs.github-release }}
+      npm: ${{ inputs.npm }}
 
   publish-npm:
     name: Publish npm packages
     if: inputs.npm
-    needs: [ prepare, build ]
+    needs: build
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/setup-node@v7.0.0
@@ -241,6 +49,7 @@ jobs:
         shell: bash
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          BUILD_VERSION: ${{ needs.build.outputs.version }}
         run: |
           set -euo pipefail
           if [[ -z "$NODE_AUTH_TOKEN" ]]; then
@@ -261,6 +70,33 @@ jobs:
           done
           test "${#main[@]}" -eq 1
           test "${#platforms[@]}" -gt 0
+          launcher="$(tar -xOf "${main[0]}" package/package.json)"
+          expected="$(jq -ce '.kotlinNativeNpmPublishing.platformPackages | to_entries | sort_by(.value)' <<< "$launcher")"
+          version="$(jq -er '.version' <<< "$launcher")"
+          test "$version" = "$BUILD_VERSION"
+          # Validate the complete set before publishing any package. Duplicate, stale or missing runtime
+          # artifacts must not result in a launcher that installs only on a subset of the declared platforms.
+          jq -e --argjson expected "$expected" --arg version "$version" '
+            .optionalDependencies == ($expected | map({key: .value, value: $version}) | from_entries)
+          ' <<< "$launcher" > /dev/null
+          actual=()
+          for archive in "${platforms[@]}"; do
+            metadata="$(tar -xOf "$archive" package/package.json)"
+            name="$(jq -er '.name' <<< "$metadata")"
+            platform="$(jq -er --arg name "$name" '.[] | select(.value == $name) | .key' <<< "$expected")"
+            os="${platform%-*}"
+            cpu="${platform##*-}"
+            jq -e --arg version "$version" --arg os "$os" --arg cpu "$cpu" '
+              .version == $version and .os == [$os] and .cpu == [$cpu]
+            ' <<< "$metadata" > /dev/null
+            actual+=("$name")
+          done
+          actual_names="$(printf '%s\n' "${actual[@]}" | jq -Rsc 'split("\n")[:-1] | sort')"
+          expected_names="$(jq -c 'map(.value) | sort' <<< "$expected")"
+          if [[ "$actual_names" != "$expected_names" ]]; then
+            echo "Runtime package set does not match the launcher dependencies." >&2
+            exit 1
+          fi
           for archive in "${platforms[@]}" "${main[@]}"; do
             npm publish "$archive" --access public
           done
@@ -268,13 +104,13 @@ jobs:
   publish-release:
     name: Publish GitHub Release
     if: inputs.github-release
-    needs: [ prepare, build ]
+    needs: build
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     env:
-      VERSION: ${{ needs.prepare.outputs.version }}
-      BUILD_MATRIX: ${{ needs.prepare.outputs.matrix }}
+      VERSION: ${{ needs.build.outputs.version }}
+      BUILD_MATRIX: ${{ needs.build.outputs.matrix }}
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
     steps:

@@ -38,7 +38,6 @@ struct Registry {
 bool loading{};
 unsigned destroyed{};
 uint32_t mouseCodes[] = {41, 75, 9, 16, 23};
-std::string caption = "fixture";
 
 void *list() {
     return &registry;
@@ -50,10 +49,6 @@ size_t length(const std::string *value) {
 
 const char *data(const std::string *value) {
     return value->data();
-}
-
-void *label(void *, void *storage) {
-    return new (storage) std::string(caption);
 }
 
 void *modifiers(void *, void *storage) {
@@ -75,7 +70,7 @@ int main() {
     auto &layout = symbols.controls;
     layout.first = offsetof(Registry, first);
     layout.last = offsetof(Registry, last);
-    for (unsigned i = 0; i < 4; ++i)
+    for (unsigned i = 0; i < 2; ++i)
         layout.slots[i] = offsetof(Control, slots) + i * sizeof(Config);
     layout.key = offsetof(Config, key);
     layout.value = offsetof(Config, value);
@@ -94,8 +89,6 @@ int main() {
     bind(symbols, ControlsLoading, &loading);
     bind(symbols, StringData, data);
     bind(symbols, StringSize, length);
-    bind(symbols, ControlName, label);
-    bind(symbols, ControlDescription, label);
     bind(symbols, StringDestroy, destroy);
     bind(symbols, BindingModifiers, modifiers);
     const FmSymbol buttons[] = {MouseLeft, MouseRight, MouseMiddle, Mouse4, Mouse5};
@@ -103,6 +96,7 @@ int main() {
         bind(symbols, buttons[i], &mouseCodes[i]);
     Control native{}, mod{};
     native.slots[0] = {"build", {1, 99, 4}};
+    native.slots[2] = {"controller-only", {4, 13, 1}};
     mod.slots[0].key = "linked-mod";
     mod.linked = &native;
     Prototype prototype{false, true, false};
@@ -112,15 +106,13 @@ int main() {
     auto shared = std::make_unique<Shared>();
     collectControls(symbols, *shared);
     const auto &result = shared->result;
-    assert(result.registryCount == 2 && result.controlCount == 2 && destroyed == 16);
+    assert(result.registryCount == 2 && result.controlCount == 2 && destroyed == 6);
     const auto &row = result.controls[1];
     assert(std::string(row.id) == "linked-mod" && std::string(row.bindingOwner) == "build");
     assert(row.custom && !row.enabled && row.spectating && !row.cutscene);
     assert(row.bindings[0].type == 0 && row.effective[0].code == 99 && row.effective[0].modifiers == 4);
     assert(row.mouseCodes[1] == 75);
-    caption.assign(4096, 'x');
-    collectControls(symbols, *shared);
-    assert(result.controls[0].truncated && destroyed == 32);
+    assert(std::string(row.effective[0].modifierExpression) == "CONTROL + ");
     auto rejected = [&] {
         try {
             collectControls(symbols, *shared);
@@ -141,7 +133,6 @@ int main() {
     shared->cancel = 1;
     assert(rejected());
     shared->cancel = 0;
-    caption = "fixture";
     std::vector<Control> chain(FM_MAX_CONTROLS + 1);
     std::vector<Control *> linkedEntries;
     for (size_t i = 0; i < chain.size(); ++i) {

@@ -1,7 +1,7 @@
 package com.hiczp.factorio.mcp
 
-import kotlin.random.Random
 import kotlinx.serialization.json.*
+import kotlin.random.Random
 
 internal data class ChatRecord(
     val identity: ULong,
@@ -22,7 +22,10 @@ internal data class ChatSnapshot(
 
 internal fun parseChatMessage(args: JsonObject): String {
     require(args.keys == setOf("text")) { "chat_send requires only text" }
-    val text = args.getValue("text").stringArgument()
+    return validateChatMessage(args.getValue("text").stringArgument())
+}
+
+internal fun validateChatMessage(text: String): String {
     require(
         text.isNotBlank() &&
                 text.encodeToByteArray().size <= 4096 &&

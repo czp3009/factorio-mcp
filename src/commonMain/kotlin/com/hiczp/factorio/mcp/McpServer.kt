@@ -156,7 +156,7 @@ internal fun createServer(game: GameSession): Server {
     }
     tool(
         "input_bindings",
-        "Discover native and mod control IDs, labels, descriptions and current keyboard/mouse/controller bindings; available in menus and paused worlds. Use bindings to construct input controls or ui_action press_key; control IDs themselves are not accepted as input. For linked controls use effective_bindings from binding_owner; otherwise use bindings. Include required modifiers. has_binding is not action eligibility; controller execution is unsupported. Results sort by ID; pages are fresh observations. Check snapshot_complete, next_offset and missing_ids/unobserved_ids before concluding a control is absent. Sends no input.",
+        "Discover native and mod control IDs and current primary/secondary keyboard/mouse bindings; available in menus and paused worlds. Use bindings to construct input controls or ui_action press_key; control IDs themselves are not accepted as input. For linked controls use effective_bindings from binding_owner; otherwise use bindings. Include required modifiers. has_binding counts known keyboard/mouse types, not action eligibility. Controller slots and controller input are unsupported. Results sort by ID; pages are fresh observations. Check snapshot_complete, next_offset and missing_ids/unobserved_ids before concluding a control is absent. Sends no input.",
         buildJsonObject {
             putJsonObject("ids") {
                 put("type", "array")
@@ -169,7 +169,7 @@ internal fun createServer(game: GameSession): Server {
             }
             putJsonObject("search") {
                 put("type", "string")
-                put("description", "Case-insensitive substring of ID, label or description.")
+                put("description", "Case-insensitive substring of the control ID.")
             }
             putJsonObject("offset") {
                 put("type", "integer")
@@ -243,11 +243,11 @@ internal fun createServer(game: GameSession): Server {
     }
     register(
         "screenshot",
-        "Capture a PNG of the next rendered game+UI frame for information unavailable through structured tools, visual verification or an explicitly requested image. Prefer ui_read/world_overview/world_query; avoid routine screenshots after actions. Works in menus and paused worlds without focusing the game. Requires DirectX and active rendering; minimized/suspended rendering can leave this call pending and block other queued tools until cancellation. Excludes desktop and OS/Steam overlays. Returns image plus dimensions, state and frame metadata; frequent captures can reduce performance.",
+        "Capture a PNG of the next rendered game+UI frame for information unavailable through structured tools, visual verification or an explicitly requested image. Prefer ui_read/world_overview/world_query; avoid routine screenshots after actions. Works in menus and paused worlds without focusing the game. Requires DirectX on Windows or OpenGL on Linux, with active rendering; minimized/suspended rendering can leave this call pending and block other queued tools until cancellation. Excludes desktop and OS/Steam overlays. Returns image plus dimensions, state and frame metadata; frequent captures can reduce performance.",
     ) {
         val snapshot = game.screenshot()
         val metadata = buildJsonObject {
-            put("source", "factorio_directx_frame")
+            put("source", "factorio_rendered_frame")
             put("scope", "game_and_ui")
             put("state", snapshot.state)
             put("ui_frame", snapshot.frame)

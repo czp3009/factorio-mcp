@@ -19,6 +19,8 @@ they are not directly accepted by `input` or `ui_action`.
 Actions report dispatch, not fulfillment of gameplay intent. Observe effects before dependent actions, especially in
 multiplayer; prefer a focused structured query. Do not blindly replay a mutation with an uncertain or lost result.
 Missing, null, unavailable and truncated data are distinct; interpret native values in their returned context.
+Human-readable text retains the game's language; localization expressions remain untranslated. Use stable IDs and
+structured values for programmatic operations, and preserve opaque values when passing them back.
 
 ## Attachment and process state
 
@@ -61,11 +63,14 @@ explains why. Hidden widgets may retain stale property values. Visibility does n
 Bounds describe widget geometry, including offscreen content; they do not establish visibility, clipping or whether
 another window covers the widget. `enabled` is the widget's own state; actions also check its ancestors and the active
 modal UI.
+When available, `flagged_for_destruction` reports the widget's own native destruction flag.
 Defaults are `bounds: false` and `max_nodes: 4096` (allowed range 1–4096). Native containers are preserved without
 inferred roles or automatic layout pruning. Output is postorder: children precede parents. Parent IDs
 refer to the same snapshot; a missing parent can mean a root, a selected subtree root or an omitted truncated ancestor.
 The current snapshot limit is 4096 widgets. Selector reads and actions reject incomplete searches instead of choosing
 a potentially ambiguous target. Truncated text and type names are marked separately.
+An omitted `text` means an observed empty string. An unsupported text accessor instead reports `text: null`, with
+`text_unavailable_reason` when available; it must not be treated as an empty string.
 
 An abridged illustrative snapshot shape is:
 
@@ -113,6 +118,7 @@ Supported controls also expose `properties`: `check_state` for checkboxes/radio 
 `selected_index` for dropdowns, and slider `value`, `minimum`, `maximum` and `step`. Dropdown indices are zero-based;
 null means no selection. Missing properties are not false or empty values. When property decoding is unavailable,
 the snapshot includes a reason and retains the basic tree.
+`check_state` preserves an enum value without an available name as `unknown_<value>`; this is not a boolean.
 
 Progress widgets expose `properties.progress` with their raw `value`, native enum name `direction`, and `has_text`
 flag. Values are not clamped or converted to a completion percentage. Unknown directions use `unknown_<number>`;
@@ -265,15 +271,26 @@ In multiplayer, observe the changed UI before issuing a dependent action: a resp
 ## Input bindings
 
 Use `input_bindings` with `ids`, such as `["build", "confirm-gui"]`, or `search` to find controls. Results include mod
-controls and linked binding sources, with `offset`/`limit` pagination (64 entries by default). Empty binding slots are
-omitted; linked controls also report their effective bindings. Snapshots contain up to 1024 controls and report whether
+controls and linked binding sources for the primary and secondary keyboard/mouse slots, with `offset`/`limit`
+pagination (64 entries by default). Empty binding slots are omitted; linked controls also report their effective
+bindings. Snapshots contain up to 1024 controls and report whether
 discovery was complete. Registration and a configured binding do not imply that an
-action is permitted in the current game state. This tool only reads bindings and does not send input.
+action is permitted in the current game state. Control IDs and structured bindings are independent of the display
+language; this tool does not return localized control names or descriptions. It only reads bindings and does not send
+input.
 `offset` defaults to 0 (range 0–1024); `limit` accepts 1–1024. `ids` accepts at most 1024 exact control IDs; `search`
-matches IDs, labels and descriptions. Every page is a new sorted snapshot, so binding changes between pages may change
+matches control IDs case-insensitively. Every page is a new sorted snapshot, so binding changes between pages may change
 the results. Inspect truncation before assuming a control is absent.
 
-`bindings` contains the control's own slots; linked controls also return `effective_bindings` and `binding_owner`.
+`has_binding` counts bindings of type `Keyboard`, `MouseButton` or `MouseWheel`, not controller availability. `input`
+accepts keyboard and mouse only. Dedicated controller slots are not collected. Unexpected native types in the
+keyboard/mouse slots remain observations and do not count toward `has_binding`.
+
+`bindings` contains the control's own keyboard/mouse slots; linked controls also return `effective_bindings` and
+`binding_owner`. `native_usage` is the game's raw usage enum integer, not a portable action category; its values may
+vary between game builds. Binding `native_code` and `native_modifier_bits` likewise preserve native values. Use the
+verified binding type, name and modifier names for input. Unknown types are reported as `Unknown(n)` and unknown
+codes omit `name`; neither authorizes sending an unsupported input.
 Use the effective binding's type, name and modifiers when constructing input, retaining the original control ID for
 discovery. `ids` and `search` can be combined and both filters must match. Missing requested IDs appear in
 `missing_ids` only for a complete snapshot; incomplete discovery uses `unobserved_ids` instead.
@@ -690,6 +707,27 @@ them. Plain tables have bounded previews (depth 3, 64 entries each, 4096 total v
 overlong strings are explicit. Collection scans stop at 65536 keys; select an index directly for larger collections.
 This interface exposes supported native data, not arbitrary mod-private state, and does not compute game eligibility.
 
+For script GUI elements exposed to the selected Lua context, prefer this inspection path for their API properties.
+For example, a named radio button inside a named screen frame can be read with:
+
+```json
+{
+  "selection": {
+    "kind": "inspect",
+    "target": {"kind": "player"},
+    "path": [
+      {"property": "gui"},
+      {"property": "screen"},
+      {"index": "frame_name"},
+      {"index": "radio_name"}
+    ]
+  },
+  "fields": ["name", "type", "state"]
+}
+```
+
+These roots expose script GUI elements, not the complete native interface tree. Use `ui_read` for that tree.
+
 ### Multiplayer players
 
 `selection: {"kind":"players"}` enumerates current-world players, including disconnected players. Optional
@@ -1104,8 +1142,9 @@ player.
 ## Screenshots
 
 `screenshot` takes no arguments and returns PNG image content plus its width, height, UI frame and observed game state.
-It captures Factorio's DirectX output, including UI and world, without activating the window. It excludes desktop and
-Steam overlays. OpenGL is unsupported. Capture can wait for rendering to resume when minimized or suspended.
+It captures Factorio's DirectX output on Windows or OpenGL output in the Linux adapter, including UI and world,
+without activating the window. It excludes desktop and Steam overlays. The source field is `factorio_rendered_frame` on
+both platforms. Capture can wait for rendering to resume when minimized or suspended.
 Capture supports at most 8192 pixels per side, 16,777,216 pixels in total and a 16 MiB encoded PNG; exceeding these
 bounds returns an error.
 

@@ -7,6 +7,23 @@ class InputSequenceTest {
     private fun parse(text: String) = parseInputSequence(Json.parseToJsonElement(text).jsonObject)
 
     @Test
+    fun controllerDevicesAreRejectedBeforeAdmission() {
+        for (device in listOf("controller", "gamepad", "joystick")) {
+            val request = buildJsonObject {
+                put("stop_previous", true)
+                putJsonArray("operations") {
+                    add(buildJsonObject {
+                        putJsonArray("controls") {
+                            add(buildJsonObject { put("device", device) })
+                        }
+                    })
+                }
+            }
+            assertFailsWith<IllegalStateException> { parseInputSequence(request) }
+        }
+    }
+
+    @Test
     fun motionUsesOperationTicksWithoutOpeningTheChord() {
         val request =
             parse(

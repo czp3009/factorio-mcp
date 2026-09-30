@@ -73,14 +73,14 @@ internal fun GameSnapshot.uiJson(bounds: Boolean, filtered: Boolean = false): Js
                         val parent = parents[index]
                         if (parent >= 0 && selected[parent]) put("parent", parent)
                         put("type", node.type.removePrefix("class "))
-                        if (node.text.isNotEmpty()) put("text", node.text)
+                        widgetText(node)
                         put("enabled", node.enabled)
+                        node.flaggedForDestruction?.let { put("flagged_for_destruction", it) }
                         node.visible?.let { put("visible", it) }
                         node.renderEnabled?.let { put("render_enabled", it) }
                         node.hiddenBySearch?.let { put("hidden_by_search", it) }
                         node.properties?.let { put("properties", it.json()) }
                         if (filtered) put("matched", node.selected)
-                        if (node.truncated) put("text_truncated", true)
                         if (node.typeTruncated) put("type_truncated", true)
                         if (bounds)
                             putJsonObject("bounds") {

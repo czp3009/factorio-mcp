@@ -1,6 +1,7 @@
 package com.hiczp.factorio.mcp
 
 import io.ktor.client.*
+import io.ktor.client.engine.cio.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
@@ -12,7 +13,14 @@ import kotlinx.serialization.json.*
 
 /** Test requests use the SDK's standard Streamable HTTP endpoint. */
 internal class McpHttpClient(private val url: String) {
-    private val client = HttpClient()
+    init {
+        require(Url(url).protocol == URLProtocol.HTTP) { "Acceptance tests require an HTTP endpoint" }
+    }
+
+    private val client = HttpClient(CIO) {
+        // The test's coroutine watchdog owns its deadline, including long attachment metadata reads.
+        engine { requestTimeout = 0 }
+    }
     private var session: String? = null
     private var sequence = 0
 

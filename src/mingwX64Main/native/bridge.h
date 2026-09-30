@@ -110,9 +110,9 @@ typedef struct FmBinding {
 } FmBinding;
 
 typedef struct FmControl {
-    int32_t custom, enabled, spectating, cutscene, gui, usage, truncated;
-    char id[256], linked[256], bindingOwner[256], label[1024], description[2048];
-    FmBinding bindings[4], effective[4];
+    int32_t custom, enabled, spectating, cutscene, gui, usage;
+    char id[256], linked[256], bindingOwner[256];
+    FmBinding bindings[2], effective[2];
     uint32_t mouseCodes[5];
 } FmControl;
 
@@ -172,8 +172,6 @@ typedef enum FmSymbol {
     ReleaseMouseCapture,
     ControlList,
     ControlsLoading,
-    ControlName,
-    ControlDescription,
     StringDestroy,
     MouseLeft,
     MouseRight,
@@ -230,7 +228,7 @@ typedef struct EventLayout {
 } EventLayout;
 
 typedef struct ControlLayout {
-    uint32_t first, last, slots[4], key, value, linked, custom, gui, usage;
+    uint32_t first, last, slots[2], key, value, linked, custom, gui, usage;
     uint32_t type, code, modifiers;
     uint32_t enabled, spectating, cutscene, stringSize, mouseValue;
 } ControlLayout;

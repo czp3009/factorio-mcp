@@ -1,0 +1,10 @@
+cmake_minimum_required(VERSION 3.24)
+
+add_library(factorio_input_sequence STATIC input_sequence.cpp)
+set_target_properties(factorio_input_sequence PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_compile_features(factorio_input_sequence PUBLIC cxx_std_20)
+target_include_directories(factorio_input_sequence PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+if(MSVC)
+    target_compile_definitions(factorio_input_sequence PUBLIC _ITERATOR_DEBUG_LEVEL=0)
+    target_compile_options(factorio_input_sequence PRIVATE /EHsc)
+endif()

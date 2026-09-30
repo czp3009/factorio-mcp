@@ -31,11 +31,11 @@ bool copyString(const Symbols &symbols, const void *source, char *output, size_t
     return count < length;
 }
 
-bool localized(const Symbols &symbols, FmSymbol method, void *control, char *output, size_t capacity) {
+bool modifierExpression(const Symbols &symbols, void *value, char *output, size_t capacity) {
     // Verified Win64 member return ABI: receiver in RCX, uninitialized string storage in RDX.
     alignas(16) unsigned char storage[256];
     require(symbols.controls.stringSize <= sizeof(storage), "Unsupported game string size");
-    function<void *(*)(void *, void *)>(symbols, method)(control, storage);
+    function<void *(*)(void *, void *)>(symbols, BindingModifiers)(value, storage);
 
     struct Destroy {
         const Symbols &symbols;
@@ -90,13 +90,13 @@ void collectControls(const Symbols &symbols, Shared &shared) {
                    true);
     };
     auto bindings = [&](void *control, FmBinding *output) {
-        for (unsigned slot = 0; slot < 4; ++slot) {
+        for (unsigned slot = 0; slot < 2; ++slot) {
             auto *value = static_cast<unsigned char *>(control) + layout.slots[slot] + layout.value;
             output[slot].type = read<uint8_t>(value, layout.type);
             output[slot].code = read<uint32_t>(value, layout.code);
             output[slot].modifiers = read<uint8_t>(value, layout.modifiers);
-            require(!localized(symbols, BindingModifiers, value, output[slot].modifierExpression,
-                               sizeof(output[slot].modifierExpression)),
+            require(!modifierExpression(symbols, value, output[slot].modifierExpression,
+                                        sizeof(output[slot].modifierExpression)),
                     "Binding modifier expression exceeds bound");
         }
     };
@@ -110,8 +110,6 @@ void collectControls(const Symbols &symbols, Shared &shared) {
         auto &row = result.controls[i];
         memset(&row, 0, sizeof(row));
         key(control, row.id, sizeof(row.id));
-        row.truncated |= localized(symbols, ControlName, control, row.label, sizeof(row.label));
-        row.truncated |= localized(symbols, ControlDescription, control, row.description, sizeof(row.description));
         row.gui = read<bool>(control, layout.gui);
         row.usage = read<int>(control, layout.usage);
         void *prototype = read<void *>(control, layout.custom);

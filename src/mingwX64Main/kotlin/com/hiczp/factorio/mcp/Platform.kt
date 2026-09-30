@@ -6,8 +6,6 @@
 
 package com.hiczp.factorio.mcp
 
-import kotlin.concurrent.atomics.AtomicInt
-import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import kotlinx.cinterop.*
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.newSingleThreadContext
@@ -16,6 +14,8 @@ import kotlinx.io.*
 import platform.posix.fputs
 import platform.posix.stderr
 import platform.windows.*
+import kotlin.concurrent.atomics.AtomicInt
+import kotlin.concurrent.atomics.ExperimentalAtomicApi
 
 @OptIn(ExperimentalAtomicApi::class)
 private val stopping = AtomicInt(0)
@@ -125,7 +125,7 @@ internal actual object Platform {
 internal actual class GameProcess actual constructor(private val pid: Int) : GameConnection {
     // Windows mutex ownership is thread-affine, even across coroutine suspensions.
     private val dispatcher = newSingleThreadContext("factorio-mcp-native")
-    private var client: WindowsProcess? = null
+    private var client: ResidentConnection? = null
 
     actual override suspend fun execute(
         operation: Int,
@@ -133,7 +133,7 @@ internal actual class GameProcess actual constructor(private val pid: Int) : Gam
         action: UiAction?,
     ): GameSnapshot =
         withContext(dispatcher) {
-            val target = client ?: WindowsProcess(pid.toUInt()).also { client = it }
+            val target = client ?: ResidentConnection(pid.toUInt()).also { client = it }
             target.execute(operation, limit, action)
         }
 
@@ -152,7 +152,7 @@ internal actual class GameProcess actual constructor(private val pid: Int) : Gam
         withContext(dispatcher) { checkNotNull(client).execute(8, 4096, null, query) }
 
     actual override suspend fun sendChat(text: String): GameSnapshot =
-        withContext(dispatcher) { checkNotNull(client).execute(11, 4096, null, chatText = text) }
+        withContext(dispatcher) { checkNotNull(client).execute(11, 4096, null, chatText = validateChatMessage(text)) }
 
     actual override suspend fun beginInput(request: InputSequenceRequest): GameInputTask {
         var admitted: GameInputTask? = null

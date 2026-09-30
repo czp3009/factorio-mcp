@@ -1,0 +1,10 @@
+cmake_minimum_required(VERSION 3.24)
+project(factorio_mcp_resident LANGUAGES CXX ASM)
+
+add_library(factorio_mcp_resident SHARED resident.cpp controls.cpp pointer_hook.cpp gui_hook.cpp gui_hook.S poll_hook.S poll_site.cpp event_pump.cpp keyboard_event.cpp ui_key.cpp ui_snapshot.cpp ui_reference.cpp targeter.cpp ui_capture.cpp ui_modal.cpp ui_gesture.cpp ui_command.cpp ui_click.cpp ui_text.cpp world_objects.cpp player_objects.cpp world_query.cpp lua_query.cpp lua_state.cpp input_events.cpp key_state.cpp mouse_event.cpp input_clock.cpp input_context.cpp)
+target_compile_features(factorio_mcp_resident PRIVATE cxx_std_20)
+target_sources(factorio_mcp_resident PRIVATE frame_context.cpp frame_api.cpp frame_readback.cpp frame_hook_owner.cpp frame_hook.S)
+target_sources(factorio_mcp_resident PRIVATE view_lifetime.cpp view_hook.S)
+target_sources(factorio_mcp_resident PRIVATE event_route.cpp event_route_context.cpp input_task_context.cpp keyboard_route.cpp chat_submit.cpp chat_admission.cpp chat_read.cpp)
+target_compile_definitions(factorio_mcp_resident PRIVATE _GNU_SOURCE)
+target_compile_options(factorio_mcp_resident PRIVATE -Wall -Wextra -Werror -fvisibility=hidden)

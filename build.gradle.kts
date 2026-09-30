@@ -1,7 +1,4 @@
-import com.hiczp.factorio.mcp.buildlogic.GenerateBuildVersion
-import com.hiczp.factorio.mcp.buildlogic.PrintVersion
-import com.hiczp.factorio.mcp.buildlogic.ProjectInfo
-import com.hiczp.factorio.mcp.buildlogic.WindowsNativeBuild
+import com.hiczp.factorio.mcp.buildlogic.*
 import org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget
 import org.jetbrains.kotlin.gradle.plugin.mpp.NativeBuildType
 import org.jetbrains.kotlin.gradle.targets.native.tasks.KotlinNativeTest
@@ -42,6 +39,83 @@ val konanData =
         .orElse(providers.systemProperty("user.home").map { "$it/.konan" })
 
 kotlin {
+    linuxX64 {
+        val mainDirectory = "src/${compilations.getByName("main").defaultSourceSet.name}"
+        val testDirectory = "src/${compilations.getByName("test").defaultSourceSet.name}"
+        val interop = compilations.getByName("main").cinterops.create("linux") {
+            definitionFile.set(layout.projectDirectory.file("$mainDirectory/cinterop/linux.def"))
+            includeDirs("$mainDirectory/native")
+        }
+        compilations.getByName("test").cinterops.create("fixture") {
+            definitionFile.set(layout.projectDirectory.file("$testDirectory/cinterop/fixture.def"))
+            includeDirs("$testDirectory/native")
+        }
+        binaries.executable { entryPoint = "com.hiczp.factorio.mcp.main" }
+        if (HostManager.host == konanTarget) {
+            val taskSuffix = name.replaceFirstChar { it.uppercaseChar() }
+            val outputScope = "${HostManager.host.name}/$name"
+            fun LinuxNativeBuild.configureToolchain() {
+                inputs.dir("src/nativeMain/native")
+                dependsOn(interop.interopProcessingTaskName)
+                nativeHome.set(kotlinNativeHome)
+                konanDataDirectory.set(konanData)
+            }
+
+            val nativeBuild = tasks.register<LinuxNativeBuild>("build${taskSuffix}Native") {
+                configureToolchain()
+                sourceDirectory.set(layout.projectDirectory.dir("$mainDirectory/native"))
+                outputDirectory.set(layout.buildDirectory.dir("native/$outputScope"))
+            }
+            val nativeFixtures = tasks.register<LinuxNativeBuild>("build${taskSuffix}NativeFixtures") {
+                configureToolchain()
+                sourceDirectory.set(layout.projectDirectory.dir("$testDirectory/native"))
+                inputs.dir("$mainDirectory/native")
+                inputs.dir("src/nativeTest/lua")
+                inputs.dir("src/nativeTest/native")
+                outputDirectory.set(layout.buildDirectory.dir("native-tests/$outputScope"))
+            }
+            tasks.named<KotlinNativeTest>("${name}Test") {
+                dependsOn(nativeFixtures)
+                inputs.files(nativeFixtures.flatMap { it.outputDirectory }.map { directory ->
+                    directory.asFileTree.matching {
+                        include("*fixture*", "resident/*.so")
+                    }
+                }).withPropertyName("nativeFixtures").withPathSensitivity(PathSensitivity.RELATIVE)
+                environment(
+                    "FACTORIO_MCP_TEST_NATIVE",
+                    nativeFixtures.get().outputDirectory.get().asFile.absolutePath,
+                    true
+                )
+                val luaFixture = nativeFixtures.flatMap { it.outputDirectory.file("lua/libquery_lua_fixture.so") }
+                inputs.file(luaFixture)
+                environment("FACTORIO_MCP_TEST_LUA_LIBRARY", luaFixture.get().asFile.absolutePath, true)
+                filter.excludeTestsMatching("*AcceptanceTest")
+            }
+            binaries.configureEach {
+                linkTaskProvider.configure {
+                    dependsOn(nativeBuild)
+                    val sourceLibrary = nativeBuild.flatMap { it.outputDirectory.file("libfactorio_mcp_resident.so") }
+                    val runtime = outputFile.map { it.parentFile.resolve("libfactorio_mcp_resident.so") }
+                    inputs.file(sourceLibrary)
+                    outputs.file(runtime)
+                    doLast {
+                        val source = sourceLibrary.get().asFile
+                        val destination = runtime.get()
+                        if (!destination.exists() || Files.mismatch(source.toPath(), destination.toPath()) != -1L)
+                            source.copyTo(destination, overwrite = true)
+                    }
+                }
+            }
+            val nativeTest = tasks.register<Exec>("test${taskSuffix}Native") {
+                dependsOn(nativeFixtures)
+                commandLine(
+                    "ctest", "--test-dir", nativeFixtures.get().outputDirectory.get().asFile,
+                    "--output-on-failure", "--no-tests=error"
+                )
+            }
+            tasks.named("check") { dependsOn(nativeTest) }
+        }
+    }
     mingwX64 {
         val mainDirectory = "src/${compilations.getByName("main").defaultSourceSet.name}"
         val testDirectory = "src/${compilations.getByName("test").defaultSourceSet.name}"
@@ -58,6 +132,7 @@ kotlin {
             val interop = compilations.getByName("main").cinterops.getByName("bridge")
 
             fun WindowsNativeBuild.configureToolchain() {
+                inputs.dir("src/nativeMain/native")
                 dependsOn(interop.interopProcessingTaskName)
                 nativeHome.set(kotlinNativeHome)
                 konanDataDirectory.set(konanData)
@@ -79,7 +154,8 @@ kotlin {
                 tasks.register<WindowsNativeBuild>("build${taskSuffix}NativeFixtures") {
                     configureToolchain()
                     sourceDirectory.set(layout.projectDirectory.dir("$testDirectory/native"))
-                    inputs.dir("$testDirectory/lua")
+                    inputs.dir("src/nativeTest/lua")
+                    inputs.dir("src/nativeTest/native")
                     inputs.dir("$mainDirectory/native")
                     outputDirectory.set(layout.buildDirectory.dir("native-tests/$outputScope"))
                 }
@@ -96,7 +172,7 @@ kotlin {
                 val luaFixture =
                     nativeFixtures.flatMap { it.outputDirectory.file("lua/query_lua_fixture.dll") }
                 inputs.file(luaFixture)
-                environment("FACTORIO_MCP_TEST_LUA_DLL", luaFixture.get().asFile.absolutePath, true)
+                environment("FACTORIO_MCP_TEST_LUA_LIBRARY", luaFixture.get().asFile.absolutePath, true)
                 filter.excludeTestsMatching("*AcceptanceTest")
                 filter.excludeTestsMatching("*OfflineQueryMetadataTest")
             }
@@ -145,8 +221,8 @@ kotlin {
         commonTest.dependencies {
             implementation(kotlin("test"))
             implementation(libs.ktor.client.core)
+            implementation(libs.ktor.client.cio)
         }
-        mingwX64Test.dependencies { implementation(libs.ktor.client.winhttp) }
     }
 }
 
@@ -167,6 +243,15 @@ kotlinNativeNpmPublishing {
             copy(layout.projectDirectory.dir("images"))
         }
         platforms {
+            linuxX64 {
+                val release = kotlin.targets.getByName<KotlinNativeTarget>("linuxX64")
+                    .binaries.getExecutable(NativeBuildType.RELEASE)
+                copy(
+                    release.linkTaskProvider.flatMap { it.outputFile }
+                    .map { it.parentFile.resolve("libfactorio_mcp_resident.so") },
+                    "bin/libfactorio_mcp_resident.so"
+                )
+            }
             mingwX64 {
                 val release =
                     kotlin.targets.getByName<KotlinNativeTarget>("mingwX64")
