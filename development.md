@@ -462,8 +462,13 @@ Run all local automated tests with the standard verification task:
 The Kotlin suite runs common and Windows tests, including stdio and Lua fixtures. `mingwX64Test` runs just this suite;
 `check` also runs the CMake/CTest fixtures through `testMingwX64Native`. Reports are under
 `build/reports/tests/mingwX64Test/` and `build/native-tests/mingw_x64/mingwX64/Testing/Temporary/`.
-Gradle excludes `*AcceptanceTest` and `OfflineQueryMetadataTest` regardless of environment variables. Run these
-external checks explicitly from the built test executable as described below.
+Gradle excludes the `com.hiczp.factorio.mcp.acceptance` and `com.hiczp.factorio.mcp.offline` test packages regardless of
+environment variables. Put
+real-game tests in the acceptance package and installed-file-only checks in the offline package so the default test
+tasks keep excluding them. Run these
+external checks explicitly from the built test executable as described below. The `checkTestPackageBoundaries` task
+fails the build if external-game
+environment markers appear in any other test package.
 
 To run a single Kotlin test class, use
 `.\gradlew.bat mingwX64Test --tests 'com.hiczp.factorio.mcp.StdioSmokeTest'`.
@@ -522,10 +527,11 @@ client with ptrace permission. Then invoke the built test executable explicitly:
 
 ```sh
 FACTORIO_MCP_ACCEPTANCE_URL=http://127.0.0.1:3000/mcp FACTORIO_MCP_TEST_PID=12345 \
-  build/bin/linuxX64/debugTest/test.kexe '--ktest_filter=*UiReadAcceptanceTest.*'
+  build/bin/linuxX64/debugTest/test.kexe '--ktest_filter=com.hiczp.factorio.mcp.acceptance.UiReadAcceptanceTest.*'
 ```
 
-With the same endpoint and PID, select `*InputBindingsAcceptanceTest.*` to check read-only keyboard/mouse binding
+With the same endpoint and PID, select `com.hiczp.factorio.mcp.acceptance.InputBindingsAcceptanceTest.*` to check
+read-only keyboard/mouse binding
 discovery, custom flags, linked owners, filtering, pagination and detach. This test is shared by the native targets
 and works at the main menu. It does not change bindings or send input. Dedicated controller slots are outside its scope.
 
@@ -547,7 +553,8 @@ This checks attachment, bounded postorder UI snapshots, root/subtree selection, 
 positional matching, incomplete-search rejection, detach and retained-resident reattachment. It does not establish
 remaining Linux tool coverage or multiplayer effects. Gradle excludes installed-game acceptance from its default run.
 The snapshot includes each widget's own visible, render-enabled and search-hidden flags.
-For a client at the main menu with no world loaded, select `*WorldQueryAdmissionAcceptanceTest.*` instead to check live
+For a client at the main menu with no world loaded, select
+`com.hiczp.factorio.mcp.acceptance.WorldQueryAdmissionAcceptanceTest.*` instead to check live
 query
 metadata verification, missing-world rejection, subsequent UI/status calls and detach. That test does not demonstrate
 a successful query in a loaded world.
@@ -559,7 +566,7 @@ build:
 
 ```sh
 FACTORIO_MCP_TEST_ELF=/path/to/Factorio/bin/x64/factorio \
-  build/bin/linuxX64/debugTest/test.kexe '--ktest_filter=*WorldMetadataAcceptanceTest.*'
+  build/bin/linuxX64/debugTest/test.kexe '--ktest_filter=com.hiczp.factorio.mcp.acceptance.WorldMetadataAcceptanceTest.*'
 ```
 
 This reads the executable file without launching or attaching to Factorio. It verifies instruction-derived stack
@@ -572,14 +579,16 @@ along with its allocation bound and primary vtable identity. It also derives the
 overridden before the load handler's first named Lua call. Script selection, state identity and callable Lua ABI remain
 separate checks.
 
-Select `*WidgetRenderAcceptanceTest.*` with the same ELF variable to check render-flag metadata, relocation and
+Select `com.hiczp.factorio.mcp.acceptance.WidgetRenderAcceptanceTest.*` with the same ELF variable to check render-flag
+metadata, relocation and
 changed-code/data rejection. `WidgetRenderFlag` uses the exact `shouldRender` inline ranges within native widget
 painting code. Its single-bit read must use the same receiver as the following typed Widget virtual dispatch, whose
 position comes from matching RTTI/vtable symbols. Every selected range must agree on the bounded field. The adapter
 reads that field at the UI safe point; it does not invoke rendering or combine ancestor flags. Consulted code and
 readonly table evidence must match the loaded image before attachment.
 
-Select `*ControlMetadataAcceptanceTest.*` with the same ELF variable to check the control object extent and
+Select `com.hiczp.factorio.mcp.acceptance.ControlMetadataAcceptanceTest.*` with the same ELF variable to check the
+control object extent and
 initialized input-registry name lookup. `VectorElementSize` derives the element stride from a typed destruction
 loop. `NamedPointerRegistry` checks bounded empty, matched and missing-name paths, including length and byte
 comparisons, pointer advancement, register preservation and native result identity. The byte comparator is identified
@@ -1064,8 +1073,11 @@ owner padding, and negative tests cover unknown arguments, missing defaults, ali
 and damaged frames. `KeyInputFields` traces input bytes from the named keyboard dequeue into these event fields,
 retaining their source identity through private scalar spills. `KeyInputConversion` follows the actual event producer's
 control-key overrides and extended-key output after its pure keycode conversion. Unknown branch conditions, outputs,
-calls and escaping private addresses are rejected. Select `*WorldMetadataAcceptanceTest.resolvesTextEntryAbi` for the
-field/entry check or `*WorldMetadataAcceptanceTest.composesTextEditingConfigurationAndChecksLoadedEvidence` for the
+calls and escaping private addresses are rejected. Select
+`com.hiczp.factorio.mcp.acceptance.WorldMetadataAcceptanceTest.resolvesTextEntryAbi` for the
+field/entry check or
+`com.hiczp.factorio.mcp.acceptance.WorldMetadataAcceptanceTest.composesTextEditingConfigurationAndChecksLoadedEvidence`
+for the
 complete configuration, relocation and changed-code rejection check. These installed-file checks do not dispatch
 actions.
 
@@ -1079,7 +1091,8 @@ overwritten request/configuration and retryable reference cleanup.
 The shared `UiTextAcceptanceTest` is opt-in and uses the public HTTP contract. Set `FACTORIO_MCP_ACCEPTANCE_URL`,
 `FACTORIO_MCP_TEST_PID` and `FACTORIO_MCP_TEST_TEXT_SELECTOR` (a selector JSON object) for a disposable search field.
 Optional `FACTORIO_MCP_TEST_TEXT_OPEN` and `FACTORIO_MCP_TEST_TEXT_CLOSE` contain JSON arrays of text-button labels for
-menu navigation. Run `*UiTextAcceptanceTest.*` explicitly from the built test executable. It checks ASCII, Unicode,
+menu navigation. Run `com.hiczp.factorio.mcp.acceptance.UiTextAcceptanceTest.*` explicitly from the built test
+executable. It checks ASCII, Unicode,
 replacement and empty text through separate UI observations, restores the original text, then detaches. It does not
 launch or terminate processes and does not establish coverage of every text-control restriction or multiplayer effects.
 
@@ -1102,7 +1115,8 @@ No product command opens this scope yet: Linux timed input still requires the na
 phase validation, evaluation hook and concrete keyboard/mouse routing before using it in the game.
 
 The shared `UiKeyAcceptanceTest` uses the same URL, PID and disposable text-selector variables as the text test.
-Run `*UiKeyAcceptanceTest.*` explicitly from the built test executable. It checks selected/current focus, Backspace,
+Run `com.hiczp.factorio.mcp.acceptance.UiKeyAcceptanceTest.*` explicitly from the built test executable. It checks
+selected/current focus, Backspace,
 Home/Delete, Ctrl+A and editing after every Ctrl/Shift/Alt modifier combination through independent `ui_read` calls.
 It restores the original field contents and detaches, leaving menu navigation to the operator. These checks do not
 establish every key binding, game-world effects or authoritative multiplayer safety.
@@ -1400,7 +1414,7 @@ The explicit retirement check accepts the same ELF and optional PID variables as
 
 ```sh
 FACTORIO_MCP_TEST_ELF=/path/to/Factorio/bin/x64/factorio \
-  build/bin/linuxX64/debugTest/test.kexe '--ktest_filter=*ViewLifetimeMetadataAcceptanceTest.*'
+  build/bin/linuxX64/debugTest/test.kexe '--ktest_filter=com.hiczp.factorio.mcp.acceptance.ViewLifetimeMetadataAcceptanceTest.*'
 ```
 
 After the normal build, run the installed-file input-context check explicitly. Set `FACTORIO_MCP_TEST_PID` as well
@@ -1409,7 +1423,7 @@ hook and does not send input:
 
 ```sh
 FACTORIO_MCP_TEST_ELF=/path/to/Factorio/bin/x64/factorio \
-  build/bin/linuxX64/debugTest/test.kexe '--ktest_filter=*InputSourceMetadataAcceptanceTest.*'
+  build/bin/linuxX64/debugTest/test.kexe '--ktest_filter=com.hiczp.factorio.mcp.acceptance.InputSourceMetadataAcceptanceTest.*'
 ```
 
 The shared SDK pause-status acceptance requires a disposable, already running single-player world and its configured
@@ -1419,7 +1433,7 @@ set the same environment variables in PowerShell and use `build/bin/mingwX64/deb
 ```sh
 FACTORIO_MCP_ACCEPTANCE_URL=http://127.0.0.1:12345/mcp \
 FACTORIO_MCP_TEST_PID=1234 FACTORIO_MCP_TEST_MENU_KEY=ESCAPE \
-  build/bin/linuxX64/debugTest/test.kexe '--ktest_filter=*PauseStatusAcceptanceTest.*'
+  build/bin/linuxX64/debugTest/test.kexe '--ktest_filter=com.hiczp.factorio.mcp.acceptance.PauseStatusAcceptanceTest.*'
 ```
 
 On Windows, the PDB and runtime API checks use the following explicit inputs.
@@ -1430,12 +1444,13 @@ work, then run:
 ```powershell
 $env:FACTORIO_MCP_TEST_PDB = 'C:/path/to/Factorio/bin/x64/factorio.pdb'
 $env:FACTORIO_MCP_TEST_RUNTIME_API = 'C:/path/to/Factorio/doc-html/runtime-api.json'
-.\build\bin\mingwX64\debugTest\test.exe '--ktest_filter=*DebugMetadataAcceptanceTest.virtualInterfaceMetadataResolvesFromAnExplicitPdb:*OfflineQueryMetadataTest.*'
+.\build\bin\mingwX64\debugTest\test.exe '--ktest_filter=com.hiczp.factorio.mcp.acceptance.DebugMetadataAcceptanceTest.virtualInterfaceMetadataResolvesFromAnExplicitPdb:com.hiczp.factorio.mcp.offline.OfflineQueryMetadataTest.*'
 ```
 
 These checks resolve installed metadata without launching or injecting a game. They do not establish live ABI safety.
 For the additional live-process metadata check, set `FACTORIO_MCP_TEST_PID` and select
-`*DebugMetadataAcceptanceTest.inputMetadataResolvesFromTheLoadedTarget` instead. Check activation/output as well as
+`com.hiczp.factorio.mcp.acceptance.DebugMetadataAcceptanceTest.inputMetadataResolvesFromTheLoadedTarget` instead. Check
+activation/output as well as
 test counts; external checks without their required environment can return early.
 
 ### HTTP acceptance
@@ -1453,7 +1468,7 @@ Select the already initialized game's PID explicitly:
 ```powershell
 $env:FACTORIO_MCP_ACCEPTANCE_URL = 'http://127.0.0.1:3000/mcp'
 $env:FACTORIO_MCP_TEST_PID = '12345'
-.\build\bin\mingwX64\debugTest\test.exe '--ktest_filter=*HttpAcceptanceTest.*'
+.\build\bin\mingwX64\debugTest\test.exe '--ktest_filter=com.hiczp.factorio.mcp.acceptance.HttpAcceptanceTest.*'
 ```
 
 The HTTP tests initialize normal MCP sessions, check advertised tools and preconditions, exercise
@@ -1496,7 +1511,7 @@ Keep the scenario window open, set both log paths in addition to the endpoint/PI
 ```powershell
 $env:FACTORIO_MCP_UI_SERVER_LOG = "$PWD/temp/ui-acceptance/factorio-current.log"
 $env:FACTORIO_MCP_UI_CLIENT_LOG = "$env:APPDATA/Factorio/factorio-current.log"
-.\build\bin\mingwX64\debugTest\test.exe '--ktest_filter=*AcceptanceTest.*'
+.\build\bin\mingwX64\debugTest\test.exe '--ktest_filter=com.hiczp.factorio.mcp.acceptance.*'
 ```
 
 These tests mutate the disposable scenario: controls, inventory interactions, player/controller state, blueprint

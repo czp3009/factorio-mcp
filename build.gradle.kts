@@ -89,7 +89,7 @@ kotlin {
                 val luaFixture = nativeFixtures.flatMap { it.outputDirectory.file("lua/libquery_lua_fixture.so") }
                 inputs.file(luaFixture)
                 environment("FACTORIO_MCP_TEST_LUA_LIBRARY", luaFixture.get().asFile.absolutePath, true)
-                filter.excludeTestsMatching("*AcceptanceTest")
+                filter.excludeTestsMatching("com.hiczp.factorio.mcp.acceptance.*")
             }
             binaries.configureEach {
                 linkTaskProvider.configure {
@@ -173,8 +173,8 @@ kotlin {
                     nativeFixtures.flatMap { it.outputDirectory.file("lua/query_lua_fixture.dll") }
                 inputs.file(luaFixture)
                 environment("FACTORIO_MCP_TEST_LUA_LIBRARY", luaFixture.get().asFile.absolutePath, true)
-                filter.excludeTestsMatching("*AcceptanceTest")
-                filter.excludeTestsMatching("*OfflineQueryMetadataTest")
+                filter.excludeTestsMatching("com.hiczp.factorio.mcp.acceptance.*")
+                filter.excludeTestsMatching("com.hiczp.factorio.mcp.offline.*")
             }
             binaries.configureEach {
                 linkTaskProvider.configure {
@@ -225,6 +225,28 @@ kotlin {
         }
     }
 }
+
+val checkTestPackageBoundaries =
+    tasks.register<CheckTestPackageBoundaries>("checkTestPackageBoundaries") {
+        group = "verification"
+        description = "Rejects external-game test markers outside the excluded test packages."
+        sources.from(
+            kotlin.sourceSets
+                .filter { it.name.endsWith("Test") }
+                .map { it.kotlin },
+        )
+        excludedPackages.addAll(
+            "com.hiczp.factorio.mcp.acceptance",
+            "com.hiczp.factorio.mcp.offline",
+        )
+        requiredMarkers.addAll(
+            "FACTORIO_MCP_ACCEPTANCE_URL",
+            "FACTORIO_MCP_TEST_PID",
+            "FACTORIO_MCP_UI_SERVER_LOG",
+            "FACTORIO_MCP_UI_CLIENT_LOG",
+        )
+    }
+tasks.named("check") { dependsOn(checkTestPackageBoundaries) }
 
 kotlinNativeNpmPublishing {
     packageName.set("@czp3009/factorio-mcp")

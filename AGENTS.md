@@ -230,7 +230,9 @@
   without manual fixture preparation or a running game. Build test dependencies automatically. Keep checks requiring
   an installed game, external endpoint or operator-prepared scenario outside the default Gradle test run; execute them
   explicitly from the built test executable after the normal build. Environment variables must not opt Gradle into
-  real-game acceptance.
+  real-game acceptance. Put real-game acceptance tests in the `com.hiczp.factorio.mcp.acceptance` package and
+  installed-file-only checks in `com.hiczp.factorio.mcp.offline`; Gradle excludes these packages by package name, and
+  external-game environment markers must not appear in other test packages.
 - Use the official SDK's Streamable HTTP endpoint for acceptance and curl for exploration, with standard initialize,
   session and protocol-version headers. Keep a small stdio smoke test.
 - Real-game acceptance is opt-in and explicitly selects its endpoint and PID. Never terminate an externally managed
