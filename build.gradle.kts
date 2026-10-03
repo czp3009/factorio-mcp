@@ -3,6 +3,7 @@ import org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget
 import org.jetbrains.kotlin.gradle.plugin.mpp.MetadataDependencyTransformationTask
 import org.jetbrains.kotlin.gradle.plugin.mpp.NativeBuildType
 import org.jetbrains.kotlin.gradle.targets.native.tasks.KotlinNativeTest
+import org.jetbrains.kotlin.gradle.tasks.KotlinNativeLink
 import org.jetbrains.kotlin.gradle.utils.NativeCompilerDownloader
 import org.jetbrains.kotlin.konan.target.HostManager
 import java.nio.file.Files
@@ -316,5 +317,12 @@ kotlinNativeNpmPublishing {
                 )
             }
         }
+    }
+}
+
+// Compilation remains available for metadata and IDE use; only final linking is host-specific.
+tasks.withType<KotlinNativeLink>().configureEach {
+    if (binary.target.konanTarget != HostManager.host) {
+        onlyIf("the binary target matches the current host") { false }
     }
 }

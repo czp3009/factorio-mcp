@@ -71,9 +71,10 @@ or real-game effects; those require explicit acceptance tests.
 ### Platform boundaries
 
 The intended targets are Windows x64 (`mingwX64`), Linux x64 (`linuxX64`) and macOS ARM64 (`macosArm64`).
-Implemented targets use default KMP registration on every host. Kotlin/Native may cross-compile supported targets;
-KMP disables test execution for foreign desktop targets. `linuxX64` and `mingwX64` use standard named target blocks
-and the default hierarchy. Their cinterop definitions live beside the corresponding platform sources and are selected
+Implemented targets remain registered on every host. Compilation keeps its normal dependencies, but final linking
+runs only when the target OS and architecture match the host; foreign link tasks are skipped. KMP retains its default
+host checks for test execution. `linuxX64` and `mingwX64` use standard named target blocks and the default hierarchy.
+Their cinterop definitions live beside the corresponding platform sources and are selected
 explicitly. Both implement the portable tool contract. A build target alone does not establish real-game acceptance
 or coverage of every native widget/property; run the platform checks before declaring a new port supported.
 Keep current research and acceptance evidence under ignored `temp/`.
@@ -86,7 +87,8 @@ CMake/CTest tasks are registered on each matching host, with task names derived 
 output directories. Other hosts do not
 acquire these task dependencies merely by configuring the project. `WindowsNativeBuild`, `KonanWindows.cmake` and
 the `windows.native.*` settings are specifically for this Windows adapter.
-Cross-compiling the Kotlin executable does not build its resident library; build complete packages on their target OS.
+Build complete packages on their target OS: each executable requires its platform's resident library.
+All target declarations remain available to the npm plugin, preserving the launcher's complete platform list.
 
 When implementing `macosArm64`, keep the standard KMP source sets, add the target's own
 cinterop/toolchain/runtime
@@ -207,8 +209,8 @@ execution, not publication or game acceptance.
 
 For staging inspection alone, use `generateKotlinNativeNpmMainPackage` with
 `generateKotlinNativeNpmLinuxX64Package` or `generateKotlinNativeNpmMingwX64Package`. Choose the host package explicitly:
-aggregate plugin tasks can also select cross-compilable executables, whose resident libraries are not built on a
-foreign host.
+aggregate plugin tasks can also select foreign-platform executables, whose final links are skipped and whose
+resident libraries are not built on this host.
 
 ## Maintenance map
 

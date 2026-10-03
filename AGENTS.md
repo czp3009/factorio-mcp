@@ -79,9 +79,10 @@
 - Use CIO for HTTP servers on every platform. HTTP clients currently exist only in tests against HTTP endpoints;
   use CIO for those clients in commonTest. If product clients or HTTPS are introduced, use Curl consistently across
   platforms instead of selecting a different client engine per platform.
-- Prefer default KMP target registration, source sets, directory layouts and task wiring. Allow cross-compilation
-  where the toolchain and dependencies support it; retain the default host checks for test execution. Restrict only
-  adapters that require host-specific tools or runtime artifacts, rather than disabling foreign targets wholesale.
+- Prefer default KMP target registration, source sets, directory layouts and task wiring. Keep implemented targets
+  registered on every host, but link native binaries only when the target OS and architecture match the host.
+  Retain normal compilation and default host checks for tests. Keep npm packaging separate from ordinary builds;
+  do not alter target declarations or npm task dependencies merely to suppress foreign linking.
   Configure platforms through the standard named target/source-set blocks, such as `mingwX64` and `linuxX64`, and
   preserve the default source-set hierarchy rather than adding manual hierarchy edges or replacement source roots.
 - Keep native compilation/linking in CMake and reusable Gradle logic in `buildSrc`. Scope platform tasks and native
