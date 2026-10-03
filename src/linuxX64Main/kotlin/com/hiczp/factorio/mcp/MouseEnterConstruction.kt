@@ -62,7 +62,7 @@ internal data class MouseEnterConstruction(
         private fun resolveLayout(image: ElfImage, fields: MouseEventFields): MouseEnterConstruction {
             val function = image.symbol("_ZN4agui3Gui29orderToUpdateWidgetUnderMouseEv")
             val flow = X64ControlFlow.resolve(image, function)
-            val constructors = DwarfInlines(image).find(function, "orderToUpdateWidgetUnderMouse", setOf("MouseEvent"))
+            val constructors = image.inlines.find(function, "orderToUpdateWidgetUnderMouse", setOf("MouseEvent"))
             val widgetSize = SysVObjectSize.resolve(image, "4agui6Widget")
             val guiSize = SysVObjectSize.resolve(image, "4agui3Gui")
             val targetable = SysVTargeterRelease.resolve(

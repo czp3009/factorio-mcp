@@ -18,14 +18,13 @@ internal class ItaniumVtable private constructor(val addressPoint: Long, private
 
     fun function(image: ElfImage, slot: Int): ElfImage.Symbol {
         val address = entries.getOrNull(slot) ?: error("Virtual slot exceeds the verified primary table")
-        val function = image.symbols().filter { it.type == 2 && it.size > 0 && it.address == address }
-            .distinct().singleOrNull() ?: error("Virtual function is absent or ambiguous")
+        val function = image.function(address)
         EhFrames(image).function(function)
         return function
     }
 
     companion object {
-        fun resolve(image: ElfImage, symbol: String, pointers: ElfPointers = ElfPointers(image)): ItaniumVtable {
+        fun resolve(image: ElfImage, symbol: String, pointers: ElfPointers = image.pointers): ItaniumVtable {
             require(symbol.startsWith("_ZTV") && symbol.length > 4) { "Expected an Itanium vtable symbol" }
             val encodedType = symbol.removePrefix("_ZTV")
             val table = image.symbol(symbol)
@@ -48,7 +47,7 @@ internal class ItaniumVtable private constructor(val addressPoint: Long, private
                 "Vtable RTTI does not identify the expected type"
             }
             val functions = words.drop(2).map { it.pointer() }
-            val functionAddresses = image.symbols().filter { it.type == 2 && it.size > 0 }.map { it.address }.toSet()
+            val functionAddresses = image.functionAddresses
             for (address in functions) {
                 // Secondary tables, virtual base offsets and external method relocations require separate proofs.
                 require(address == 0L || address in functionAddresses) { "Unsupported vtable group or nonlocal function entry" }

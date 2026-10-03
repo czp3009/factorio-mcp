@@ -2,6 +2,7 @@
 
 ## Scope and language
 
+- Work without subagents unless the user explicitly re-enables them.
 - Keep user-facing conversation in the user's preferred language. Write documentation, comments and docstrings in
   English, except explicitly requested translations. Name translated READMEs `README-{language}.md`, such as
   `README-zh-cn.md`. Keep `README.md` and its translations aligned when changing user-facing requirements, usage,
@@ -16,8 +17,7 @@
 - Preserve the default KMP source-set layout for future Windows, Linux and macOS implementations. Put portable tool
   definitions, lifecycle, cancellation, task models, serialization and UI projection in `commonMain`.
   The intended desktop targets are Windows x64 (`mingwX64`), Linux x64 (`linuxX64`) and macOS ARM64 (`macosArm64`).
-  Do not expand the architecture matrix beyond these targets. Windows x64 is implemented; Linux x64 support is in
-  progress.
+  Do not expand the architecture matrix beyond these targets. Windows x64 and Linux x64 are implemented.
 - Put process discovery, developer debug information, injection and platform IPC in the corresponding platform Kotlin
   source set. Use C/C++ only for necessary resident hooks, atomic wire helpers and game C++ ABI adapters.
 - Keep one portable MCP tool contract, including schemas and result semantics. Every supported platform must
@@ -98,6 +98,13 @@
 - Each native artifact has one build-system owner. Declare inputs, dependencies and outputs. Do not create custom
   distribution or executable-renaming tasks. Do not overwrite an unchanged resident library while it is mapped by
   Factorio.
+- Use this checkout directly for Windows and WSL development; do not copy project sources to another development
+  directory. Run Windows and Linux builds/tests sequentially. Name local toolchain configuration by operating system
+  and concrete purpose, rather than sharing ambiguous `native.*` keys across hosts.
+- Prefix project-owned environment variables and other global configuration with `FACTORIO_MCP` and name their
+  platform and purpose consistently with the corresponding configuration keys. Never use broad ambient names such
+  as `INCLUDE` or `LIB` as project configuration fallbacks. Standard OS/toolchain variables belong only to their
+  documented external interfaces; keep any translation into them scoped to the relevant subprocess.
 - Treat project files and build outputs as exclusively owned by this project. Do not assume the user is running a
   particular build variant or add build/test workarounds to preserve externally occupied outputs. Tests should declare
   dependencies on the project artifacts they need and obtain their paths from the build model.
@@ -128,6 +135,8 @@
   Preserve chat-specific text, rich-text markers, links and game-generated formatting unchanged as well; do not
   interpret, expand, normalize or recreate them. Encoding and explicit bounded truncation still apply.
 - Input execution supports keyboard and mouse only on every platform; do not implement controller/gamepad input.
+  Release the buttons pressed by MCP, including after cancellation or dispatch failure. Preserving keys already held
+  by the user is outside this contract; do not add prerequisite user-input ownership detection.
   Keep `input_bindings` focused on keyboard/mouse slots. Controller-binding observation is not required and must
   not become a prerequisite for platform support. Native controller readers may still supply static evidence needed
   to distinguish keyboard/mouse fields; this does not authorize controller execution.
@@ -136,6 +145,19 @@
   deriving gameplay conclusions or replacing native values with inferred defaults. Expose each widget's own flags
   without propagating ancestor state, computing effective visibility,
   inventing semantic roles or dropping containers by type. Agents interpret the returned data and parent relationships.
+- Keep UI observations focused on structured contents, native state and game-provided image identifiers or references.
+  Prefer logical icon identifiers such as `item/iron-plate` or `utility/close` when the game retains them; never infer
+  them from filenames or pixels. Do not reconstruct rendering, expand image layers or process image contents for
+  ordinary tools. Use `screenshot` as an optional fallback for missing visual information. Reassess and simplify
+  excessive existing Windows behavior together with the portable contract and other platforms. Delete obsolete
+  functions, classes, tests and layers rather than preserving compatibility scaffolding or unused abstractions.
+  Apply this principle to every tool: simplify MCP-owned processing and presentation, while preserving the game's
+  original values, text, relationships and repetitions. Do not deduplicate observations merely for presentation,
+  interpret world contents or adapt results to gameplay workflows; the agent makes those decisions.
+- Summary tools may group observed properties and perform general calculations, like database aggregation.
+  Let arguments select grouping fields and numeric operations, with documented generic defaults. Never choose
+  aggregation rules from entity types, prototype names or gameplay meaning. Report bounds, truncation and excluded
+  values explicitly; ordinary observation tools still preserve individual values and repetitions.
 - High-frequency player, inventory and catalog reads may use dedicated selectors or tools when they materially reduce
   calls or context. Prefer extending an existing coherent query contract. Read native references, properties and
   registries without vanilla-name tables, assumed inventory sizes or inferred crafting/research/action eligibility.
@@ -146,8 +168,15 @@
   Reserve UI-based inspection primarily for interface state, unusual information or mod-specific content without a
   supported direct reader. Preserve safe-point execution and raw values; do not infer missing facts or promise access
   to all mod-private state.
-- Action completion reports dispatch/execution progress and cleanup, never fulfillment of gameplay intent. Verify
-  effects in acceptance tests; do not add runtime effect polling, retries or compensating actions to achieve an outcome.
+- Action completion reports client dispatch/execution progress and cleanup, never server acceptance, delivery or
+  fulfillment of gameplay intent. Network latency and client prediction rollback can change or undo observed effects.
+  Design every tool assuming the player is not operating the game concurrently. Errors, failures and unexpected
+  results caused by concurrent player actions are outside the contract; do not add interference detection,
+  arbitration, restoration or compensating actions for them. MCP work must still satisfy its own lifecycle,
+  cancellation, native lifetime and cleanup requirements.
+  Apply this contract to every action, including chat; return after local submission and required cleanup, without
+  waiting for a server acknowledgement or resulting state. Verify effects in acceptance tests only; do not add runtime
+  effect polling, retries or compensating actions to achieve an outcome.
 - Prefer shared UI interfaces for observation and actions, without interpreting inventory, crafting or machine
   workflows. Component-specific adapters may expose otherwise unavailable visible properties such as item identity,
   count or durability; keep these as UI properties and retain generic widget operations.
@@ -167,6 +196,8 @@
   detachment or discard the original failure before cleanup has completed.
 - Do not add tool execution timeouts. Test watchdogs are allowed. Automatic HTTP disconnect cancellation is optional
   until verified end to end; do not claim it follows merely from response cancellation.
+- Admit only one screenshot capture per MCP process. Explicit screenshot cancellation stops the current capture
+  and waits for cleanup without starting another; repeat cancellation while idle remains successful.
 - Keep stdio and HTTP sessions separate from the shared attachment. A new MCP reports detached until explicit attach,
   even when a resident exists. Do not version the resident wire contract or implement cross-build compatibility.
   Updating factorio-mcp requires restarting Factorio before attaching again; document this usage requirement.
@@ -186,6 +217,14 @@
 - Read the selected executable's matching developer PDB on Windows and ELF/debug/unwind information on Linux before
   injection. Resolve symbols and unwind ranges dynamically.
   Do not use address tables, hardcoded game object offsets, version allowlists or instruction fingerprints.
+- Keep attachment and injection fast through bounded work and reuse of validated metadata within the owned
+  attachment. Remove demonstrated duplicate work without elaborate optimizations or weakening identity, ABI,
+  lifetime or cleanup checks. Measure attach separately from first-tool metadata analysis and frontend latency.
+- Prefer stable semantic boundaries for injection and call-site discovery: matching symbols, verified virtual entries,
+  receiver/argument provenance and control flow. Accommodate unrelated instructions, register allocation and equivalent
+  compiler output where the same proof holds. Do not depend on call ordinal, adjacent setup instructions or one observed
+  prologue when those are incidental. Cover supported variations and ambiguous/unsafe cases in fixtures; retain strict
+  ABI, bounds, lifetime and ownership validation on both Windows and Linux.
 - Game member locations may be resolved dynamically from the target PDB. Validate declaring types, member types,
   widths and bounds before reading them; never substitute a remembered offset when metadata is missing or incompatible.
   Resolve virtual-method positions from the same matching debug metadata as well; never encode a researched vtable
@@ -220,8 +259,9 @@
   explicit real-game acceptance, documentation matching the implemented contracts, and local npm package contents
   and installed execution. Maintain GitHub Actions for building, testing and publishing npm packages and GitHub
   Releases on every supported platform. Distinguish local workflow validation from an actual CI run.
-- Do not trigger CI or publish to a remote npm registry during this task. Verify npm publication, installation and
-  execution against a disposable local registry only; validate GitHub Actions locally without dispatching workflows.
+- Do not trigger CI, create git commits or execute npm publication during this task, including publication to a local
+  registry. Verify package contents, installation and execution using local tarballs; validate GitHub Actions locally
+  without dispatching workflows. Report publication itself as unverified.
 - Keep automatic tests in Kotlin/Gradle and native CMake/CTest fixtures. Do not restore an external Python test runner.
   Keep native fixture assertions enabled in optimized builds as well; a successful process exit is not evidence
   for checks or test operations compiled out by `NDEBUG`.
@@ -249,6 +289,11 @@
   installed artifacts.
 - Do not infer a running simulation from world presence, absent tick callbacks or UI appearance. Report unobserved pause
   state as unknown until a validated source exists.
+- Reuse the user's already running Windows or WSL Steam client; do not start or manage Steam. Never run graphical
+  Factorio clients in both systems at once. Account for slow WSL rendering when assessing safe-point and action latency;
+  separate it from metadata-analysis costs. Behavior must not depend on resolution, fullscreen mode or window focus.
+- Start graphical Factorio clients without game arguments, including test launches. Open disposable scenarios/saves
+  through normal game UI; extra launch options can cause Steam to require unattended user confirmation.
 - For writable paths, validate authoritative local-server effects and force a full CRC. Read-only-looking Lua APIs
   can still mutate serialized state; synthetic `LuaInventory.can_insert` and client-only translation requests previously
   caused desynchronization and must not be reused as passive queries.

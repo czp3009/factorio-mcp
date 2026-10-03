@@ -10,7 +10,7 @@ internal object ChatConsoleExtent {
         val function = image.symbol("_ZN6PlayerD2Ev")
         val deletion = image.symbol("_ZdlPvm")
         EhFrames(image).function(deletion)
-        val ranges = DwarfInlines(image).find(function, "~Player", setOf("~OutputConsole"))
+        val ranges = image.inlines.find(function, "~Player", setOf("~OutputConsole"))
             .flatMap { it.ranges }.map { DwarfRanges.Range(it.start - function.address, it.end - function.address) }
         return analyze(
             X64ControlFlow.resolve(image, function), deletion.address - function.address,

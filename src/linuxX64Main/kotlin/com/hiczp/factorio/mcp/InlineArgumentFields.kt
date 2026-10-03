@@ -10,14 +10,14 @@ internal object InlineArgumentFields {
 
     fun resolve(
         image: ElfImage, function: ElfImage.Symbol, ownerName: String, argument: Int, extent: Long,
-        widths: Map<String, Int>, debug: DwarfInlines = DwarfInlines(image)
+        widths: Map<String, Int>, debug: DwarfInlines = image.inlines
     ): Map<String, Field> {
         return resolveEvidence(image, function, ownerName, argument, extent, widths, debug).mapValues { it.value.field }
     }
 
     fun resolveEvidence(
         image: ElfImage, function: ElfImage.Symbol, ownerName: String, argument: Int, extent: Long,
-        widths: Map<String, Int>, debug: DwarfInlines = DwarfInlines(image)
+        widths: Map<String, Int>, debug: DwarfInlines = image.inlines
     ): Map<String, Evidence> {
         require(argument in listOf(7, 6, 2, 1, 8, 9) && extent in 1..(64 * 1024 * 1024))
         return loads(image, function, ownerName, argument, widths, debug).also { result ->
@@ -29,7 +29,7 @@ internal object InlineArgumentFields {
     fun resolveStack(
         image: ElfImage, function: ElfImage.Symbol, ownerName: String, extent: Long,
         anchors: Map<String, Evidence>, widths: Map<String, Int>,
-        debug: DwarfInlines = DwarfInlines(image)
+        debug: DwarfInlines = image.inlines
     ): StackFields {
         require(extent in 1..4096 && anchors.size >= 2)
         require(anchors.all { (name, evidence) ->

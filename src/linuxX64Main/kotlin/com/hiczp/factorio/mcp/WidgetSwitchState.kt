@@ -11,7 +11,7 @@ internal data class WidgetSwitchState(val size: Long, val state: Long, val allow
             val allocator = image.symbol("_Znwm")
             EhFrames(image).function(constructor)
             EhFrames(image).function(allocator)
-            val instances = DwarfInlines(image).find(function, "createWidget", setOf("setState"))
+            val instances = image.inlines.find(function, "createWidget", setOf("setState"))
             // LabeledSwitch's wrapper also refreshes labels. Analyze its innermost named setters,
             // rather than admitting unrelated calls as part of a scalar member assignment.
             val leaves = instances.filter { parent ->

@@ -14,6 +14,7 @@ class GameSessionTest {
         var closed = false
         var blocked = false
         var cleaned = false
+        var cleanupGate: CompletableDeferred<Unit>? = null
         var reads = 0
         var closeCount = 0
         var failClose = false
@@ -73,6 +74,7 @@ class GameSessionTest {
                     try {
                         awaitCancellation()
                     } finally {
+                        withContext(NonCancellable) { cleanupGate?.await() }
                         cleaned = true
                     }
             }
@@ -101,6 +103,43 @@ class GameSessionTest {
 
     private val inputRequest =
         InputSequenceRequest(listOf(InputOperation(listOf(InputControl.Keyboard("W")), 2)), false)
+
+    @Test
+    fun statusReportsExitDiscoveredDuringNativeObservation() = runBlocking {
+        val connection = Connection()
+        val session = GameSession { connection }
+        session.attach(12)
+        connection.failOperation = 2
+        val result = session.status()
+        assertEquals("exited", result.getValue("state").jsonPrimitive.content)
+        assertFalse(result.getValue("attached").jsonPrimitive.boolean)
+        assertTrue(connection.closed)
+        assertEquals(1, connection.closeCount)
+        assertFalse(4 in connection.calls)
+        assertEquals(result, session.status())
+        session.close()
+    }
+
+    @Test
+    fun statusRetainsNativeFailureWhenTheProcessIsAliveOrExitCleanupFails() = runBlocking {
+        for (exits in listOf(false, true)) {
+            val connection = Connection()
+            val session = GameSession { connection }
+            session.attach(12)
+            connection.failOperation = 2
+            connection.exitOnFailure = exits
+            connection.failClose = exits
+            val failure = assertFailsWith<IllegalStateException> { session.status() }
+            assertEquals("Native operation failed", failure.message)
+            if (exits) assertEquals("Local cleanup failed", failure.suppressedExceptions.single().message)
+            else assertTrue(failure.suppressedExceptions.isEmpty())
+            assertFalse(connection.closed)
+            connection.failClose = false
+            session.detach()
+            assertTrue(connection.closed)
+            session.close()
+        }
+    }
 
     @Test
     fun inputFailureSurvivesTaskCleanupFailure() = runBlocking {
@@ -334,6 +373,58 @@ class GameSessionTest {
         }
         assertEquals(1, connection.reads)
         assertTrue(connection.cleaned)
+    }
+
+    @Test
+    fun screenshotRejectsConcurrentCaptureAndCancellationWaitsForCleanup() = runBlocking {
+        withTimeout(1000) {
+            val connection = Connection().apply {
+                blocked = true
+                cleanupGate = CompletableDeferred()
+            }
+            val session = GameSession { connection }
+            session.attach(12)
+            supervisorScope {
+                val capture = async { runCatching { session.screenshot() } }
+                connection.started.await()
+                assertFailsWith<IllegalStateException> { session.screenshot() }
+                assertEquals(1, connection.calls.count { it == 6 })
+                val cancellation = async(start = CoroutineStart.UNDISPATCHED) {
+                    session.cancelScreenshot()
+                }
+                assertFalse(cancellation.isCompleted)
+                connection.cleanupGate!!.complete(Unit)
+                assertTrue(cancellation.await().getValue("cancelled").jsonPrimitive.boolean)
+                assertIs<CancellationException>(capture.await().exceptionOrNull())
+                assertTrue(connection.cleaned)
+                assertFalse(session.cancelScreenshot().getValue("cancelled").jsonPrimitive.boolean)
+                connection.blocked = false
+                session.screenshot()
+                assertEquals(2, connection.calls.count { it == 6 })
+            }
+            session.close()
+        }
+    }
+
+    @Test
+    fun screenshotCanBeCancelledBeforeNativeAdmission() = runBlocking {
+        withTimeout(1000) {
+            val connection = Connection().apply { blocked = true }
+            val session = GameSession { connection }
+            session.attach(12)
+            supervisorScope {
+                val read = async { runCatching { session.read(10, false) } }
+                connection.started.await()
+                val capture = async(start = CoroutineStart.UNDISPATCHED) {
+                    runCatching { session.screenshot() }
+                }
+                session.cancelScreenshot()
+                assertIs<CancellationException>(capture.await().exceptionOrNull())
+                assertFalse(6 in connection.calls)
+                read.cancelAndJoin()
+            }
+            session.close()
+        }
     }
 
     @Test

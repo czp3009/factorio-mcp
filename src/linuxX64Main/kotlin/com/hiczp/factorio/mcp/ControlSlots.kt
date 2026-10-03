@@ -7,7 +7,7 @@ import com.hiczp.factorio.mcp.X64Instructions.*
 /** Two keyboard/mouse value locations, distinguished from controller slots by native readers rather than memory order. */
 internal data class ControlSlots(val values: List<Long>, val type: Long, val code: Long, val keyboardType: Long) {
     companion object {
-        fun resolve(image: ElfImage, extent: Long, debug: DwarfInlines = DwarfInlines(image)): ControlSlots = resolve(
+        fun resolve(image: ElfImage, extent: Long, debug: DwarfInlines = image.inlines): ControlSlots = resolve(
             image, extent,
             "_ZNK12ControlInput12hasKeyActionEi", "hasKeyAction", "getControlInputValuesForActiveInputMethod",
             "_ZNK12ControlInput24getControllerStickVectorEv",
@@ -16,7 +16,7 @@ internal data class ControlSlots(val values: List<Long>, val type: Long, val cod
 
         fun resolve(
             image: ElfImage, extent: Long, lookup: String, lookupName: String, getter: String,
-            controller: String, stick: String, global: String, debug: DwarfInlines = DwarfInlines(image)
+            controller: String, stick: String, global: String, debug: DwarfInlines = image.inlines
         ): ControlSlots {
             val function = image.symbol(lookup)
             require(function.size in 1..4096 && extent in 16..4096)

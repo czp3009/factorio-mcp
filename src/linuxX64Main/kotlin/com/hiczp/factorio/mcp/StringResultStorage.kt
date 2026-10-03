@@ -9,7 +9,7 @@ internal object StringResultStorage {
 
     fun resolve(
         image: ElfImage, function: String, name: String, callerName: String, storage: NativeStringLayout,
-        debug: DwarfInlines = DwarfInlines(image), initializerName: String = "_Alloc_hider",
+        debug: DwarfInlines = image.inlines, initializerName: String = "_Alloc_hider",
         lengthName: String = "_M_length"
     ): Proof {
         val method = image.symbol(function)

@@ -53,7 +53,7 @@ internal data class InputPauseField(val handlerMap: Long, val handlerSource: Lon
                 val source = SysVMemberCalls.virtualAt(prefix, address, pausedSlot, handlerSize, instruction.offset)
                 val branch = instructions.filter { it.operation == Operation.JCC }.singleOrNull()
                     ?: error("Paused input has no unique conditional dispatch")
-                val compare = instructions.single { it.offset + it.size == branch.offset }
+                val compare = ScalarExpression(X64ControlFlow(instructions)).flagDefinition(branch.offset)
                 val skipped = (branch.destination as? Immediate)?.value ?: error("Indirect pause guard")
                 val trueFallthrough = branch.condition == 5 && compare.source == Immediate(1) ||
                         branch.condition == 4 && compare.source == Immediate(0)

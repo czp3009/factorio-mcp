@@ -1,5 +1,6 @@
 import com.hiczp.factorio.mcp.buildlogic.*
 import org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget
+import org.jetbrains.kotlin.gradle.plugin.mpp.MetadataDependencyTransformationTask
 import org.jetbrains.kotlin.gradle.plugin.mpp.NativeBuildType
 import org.jetbrains.kotlin.gradle.targets.native.tasks.KotlinNativeTest
 import org.jetbrains.kotlin.gradle.utils.NativeCompilerDownloader
@@ -14,6 +15,11 @@ plugins {
 group = "com.hiczp"
 
 version = ProjectInfo.VERSION
+
+// The generated library indexes contain absolute paths and are shared by Windows and WSL.
+tasks.withType<MetadataDependencyTransformationTask>().configureEach {
+    inputs.property("factorioMcpMetadataProjectPath", layout.projectDirectory.asFile.absolutePath)
+}
 
 tasks.register<PrintVersion>("printVersion") {
     group = "help"
@@ -38,6 +44,27 @@ val konanData =
         .orElse(providers.environmentVariable("KONAN_DATA_DIR"))
         .orElse(providers.systemProperty("user.home").map { "$it/.konan" })
 
+fun KotlinNativeTarget.registerNpmVerification(residentName: String, npmPlatform: String, npmCommand: String) {
+    val release = binaries.getExecutable(NativeBuildType.RELEASE)
+    val targetName = name
+    val taskSuffix = name.replaceFirstChar { it.uppercaseChar() }
+    tasks.register<VerifyNpmPackage>("verifyNpm${taskSuffix}Package") {
+        group = "verification"
+        description = "Packs, installs offline and verifies the $targetName npm runtime without publishing."
+        dependsOn("generateKotlinNativeNpmMainPackage", "generateKotlinNativeNpm${taskSuffix}Package")
+        mainPackageDirectory.set(layout.buildDirectory.dir("kotlinNativeNpmPublishing/main"))
+        platformPackageDirectory.set(layout.buildDirectory.dir("kotlinNativeNpmPublishing/platforms/${konanTarget.name}"))
+        releasePlatforms.set(layout.projectDirectory.file(".github/release-platforms.json"))
+        executableFile.fileProvider(release.linkTaskProvider.flatMap { it.outputFile })
+        residentFile.fileProvider(release.linkTaskProvider.flatMap { it.outputFile }.map { it.parentFile.resolve(residentName) })
+        packageName.set("@czp3009/factorio-mcp")
+        releaseVersion.set(project.version.toString())
+        this.npmPlatform.set(npmPlatform)
+        npmExecutable.set(npmCommand)
+        reportDirectory.set(layout.buildDirectory.dir("reports/npm/$targetName"))
+    }
+}
+
 kotlin {
     linuxX64 {
         val mainDirectory = "src/${compilations.getByName("main").defaultSourceSet.name}"
@@ -52,6 +79,7 @@ kotlin {
         }
         binaries.executable { entryPoint = "com.hiczp.factorio.mcp.main" }
         if (HostManager.host == konanTarget) {
+            registerNpmVerification("libfactorio_mcp_resident.so", "linux-x64", "npm")
             val taskSuffix = name.replaceFirstChar { it.uppercaseChar() }
             val outputScope = "${HostManager.host.name}/$name"
             fun LinuxNativeBuild.configureToolchain() {
@@ -90,6 +118,7 @@ kotlin {
                 inputs.file(luaFixture)
                 environment("FACTORIO_MCP_TEST_LUA_LIBRARY", luaFixture.get().asFile.absolutePath, true)
                 filter.excludeTestsMatching("com.hiczp.factorio.mcp.acceptance.*")
+                filter.excludeTestsMatching("com.hiczp.factorio.mcp.offline.*")
             }
             binaries.configureEach {
                 linkTaskProvider.configure {
@@ -127,6 +156,7 @@ kotlin {
 
         // These adapters execute host tools and require the Windows SDK.
         if (HostManager.host == konanTarget) {
+            registerNpmVerification("factorio_bridge.dll", "win32-x64", "npm.cmd")
             val taskSuffix = name.replaceFirstChar { it.uppercaseChar() }
             val outputScope = "${HostManager.host.name}/$name"
             val interop = compilations.getByName("main").cinterops.getByName("bridge")

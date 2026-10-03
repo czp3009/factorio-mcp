@@ -34,7 +34,7 @@ public:
     }
 };
 
-static uintptr_t outerCaller, frame, eventAddress;
+static uintptr_t outerCaller, stack, returnAddress, eventAddress;
 
 __attribute__((noinline)) static void invoke(Gui *gui) {
     asm volatile("" : "+r"(gui) : : "memory");
@@ -44,10 +44,11 @@ __attribute__((noinline)) static void invoke(Gui *gui) {
 
 __attribute__((noinline)) static bool next(Window *window, Event &output) {
     Event event;
-    frame = reinterpret_cast<uintptr_t>(__builtin_frame_address(0));
+    returnAddress = reinterpret_cast<uintptr_t>(__builtin_frame_address(0)) + sizeof(uintptr_t);
     eventAddress = reinterpret_cast<uintptr_t>(&event);
     outerCaller = reinterpret_cast<uintptr_t>(__builtin_return_address(0));
     asm volatile("" : "+r"(window) : : "memory");
+    asm volatile("movq %%rsp, %0" : "=m"(stack));
     const bool result = window->poll(event);
     if (result)
         output = event;
@@ -114,7 +115,8 @@ int main() {
         reinterpret_cast<uintptr_t>(&instance), gui.caller, gui.caller - 1, gui.caller + 1, PROT_READ};
     shared->pollConfig = {reinterpret_cast<uintptr_t>(windowTable.addressPoint), *windowTable.original,
         reinterpret_cast<uintptr_t>(windowTable.addressPoint), window.caller, outerCaller,
-        sizeof(uintptr_t), static_cast<int32_t>(eventAddress - frame), sizeof(Event), PROT_READ};
+        static_cast<uint32_t>(returnAddress - stack), static_cast<uint32_t>(eventAddress - stack),
+        sizeof(Event), PROT_READ};
     shared->keyConfig.event.extent = sizeof(Event);
     shared->keyConfig.event.type = offsetof(Event, type);
     shared->keyConfig.event.time = offsetof(Event, time);

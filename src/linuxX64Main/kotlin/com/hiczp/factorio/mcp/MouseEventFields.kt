@@ -65,7 +65,7 @@ internal data class MouseEventFields(
                 widgetSize, parent, table.method(image, "_ZNK4agui6Widget14getLeftPaddingEv").slot,
                 table.method(image, "_ZNK4agui6Widget13getTopPaddingEv").slot
             )
-            val debug = DwarfInlines(image)
+            val debug = image.inlines
             val selected = listOf(
                 Triple("_ZN4agui6Widget17dispatchMouseDownERKNS_10MouseEventE", "dispatchMouseDown", "getButton" to 2),
                 Triple(

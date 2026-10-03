@@ -46,10 +46,18 @@ abstract class WindowsNativeBuild @Inject constructor(private val processes: Exe
     fun build() {
         val config = Properties()
         localConfiguration.orNull?.asFile?.inputStream()?.use(config::load)
-        val environment =
-            listOf("PATH", "INCLUDE", "LIB").associateWith { name ->
-                config.getProperty("native.$name") ?: System.getenv(name).orEmpty()
-            }
+        fun configured(property: String, variable: String) =
+            config.getProperty("windows.native.$property") ?: System.getenv(variable)
+
+        // These standard names belong only to the compiler subprocess interface. Project configuration
+        // never falls back to an ambient INCLUDE or LIB from an unrelated shell or application.
+        val environment = mapOf(
+            "INCLUDE" to configured("includeDirectories", "FACTORIO_MCP_WINDOWS_NATIVE_INCLUDE_DIRECTORIES").orEmpty(),
+            "LIB" to configured("libraryDirectories", "FACTORIO_MCP_WINDOWS_NATIVE_LIBRARY_DIRECTORIES").orEmpty(),
+            "PATH" to listOfNotNull(
+                configured("toolDirectories", "FACTORIO_MCP_WINDOWS_NATIVE_TOOL_DIRECTORIES"), System.getenv("PATH")
+            ).joinToString(";"),
+        )
         val directory = outputDirectory.get().asFile
         val platform =
             PlatformManager(Distribution(nativeHome.get(), konanDataDir = konanDataDirectory.get()))

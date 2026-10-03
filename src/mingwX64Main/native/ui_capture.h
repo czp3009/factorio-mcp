@@ -9,7 +9,6 @@ class UiCapture {
     void *gui;
     std::function<bool()> current;
     std::function<bool(void *)> live;
-    uintptr_t initial{};
     bool finished{};
     uintptr_t target() const;
 

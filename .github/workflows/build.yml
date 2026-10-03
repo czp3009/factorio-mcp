@@ -1,9 +1,9 @@
-name: Build pipeline
+name: Build implementation
 
 on:
   workflow_call:
     inputs:
-      github-release:
+      github:
         type: boolean
         default: false
       npm:
@@ -36,15 +36,9 @@ jobs:
           distribution: temurin
           java-version: '25'
 
-      - name: Cache Gradle dependencies and wrapper
-        uses: actions/cache@v6.1.0
+      - uses: gradle/actions/setup-gradle@v6
         with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: gradle-${{ runner.os }}-${{ runner.arch }}-metadata-${{ hashFiles('gradle/wrapper/gradle-wrapper.properties') }}-${{ hashFiles('**/*.gradle.kts', 'gradle/*.toml', 'gradle.properties', 'buildSrc/src/**') }}
-          restore-keys: |
-            gradle-${{ runner.os }}-${{ runner.arch }}-metadata-${{ hashFiles('gradle/wrapper/gradle-wrapper.properties') }}-
+          cache-provider: basic
 
       - name: Read Gradle version and enabled matrix
         id: metadata
@@ -52,43 +46,24 @@ jobs:
         run: |
           set -euo pipefail
           version="$(./gradlew --no-daemon --console=plain -q printVersion)"
-          if [[ "$version" == unspecified || ! "$version" =~ ^[0-9A-Za-z][0-9A-Za-z._+-]*$ ]]; then
+          if [[ ! "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-([0-9A-Za-z-]+\.)*[0-9A-Za-z-]+)?(\+([0-9A-Za-z-]+\.)*[0-9A-Za-z-]+)?$ ]]; then
             echo "Invalid Gradle release version: $version" >&2
             exit 1
+          fi
+          release_version="${version%%+*}"
+          if [[ "$release_version" == *-* ]]; then
+            IFS=. read -ra identifiers <<< "${release_version#*-}"
+            for identifier in "${identifiers[@]}"; do
+              if [[ "$identifier" =~ ^0[0-9]+$ ]]; then
+                echo "Numeric prerelease identifiers cannot have leading zeros: $version" >&2
+                exit 1
+              fi
+            done
           fi
           kotlin_version="$(python3 -c 'import tomllib; print(tomllib.load(open("gradle/libs.versions.toml", "rb"))["versions"]["kotlin"])')"
           matrix="$(jq -c '{include: map(select(.enabled))}' .github/release-platforms.json)"
           jq -e '.include | length > 0' <<< "$matrix" > /dev/null
           printf 'version=%s\nkotlin-version=%s\nmatrix=%s\n' "$version" "$kotlin_version" "$matrix" >> "$GITHUB_OUTPUT"
-
-      - uses: actions/setup-node@v7.0.0
-        if: inputs.npm
-        with:
-          node-version: '24'
-          package-manager-cache: false
-
-      - name: Package npm launcher
-        if: inputs.npm
-        shell: bash
-        run: |
-          set -euo pipefail
-          ./gradlew --no-daemon --console=plain generateKotlinNativeNpmMainPackage
-          expected="$(jq -c '[.[] | select(.enabled) | .id | sub("^windows-"; "win32-") | sub("^macos-"; "darwin-")] | sort' .github/release-platforms.json)"
-          actual="$(jq -c '.kotlinNativeNpmPublishing.platformPackages | keys' build/kotlinNativeNpmPublishing/main/package.json)"
-          if [[ "$actual" != "$expected" ]]; then
-            echo "npm launcher platforms ($actual) do not match the release matrix ($expected)." >&2
-            exit 1
-          fi
-          mkdir -p build/npm
-          npm pack ./build/kotlinNativeNpmPublishing/main --pack-destination build/npm
-
-      - uses: actions/upload-artifact@v7.0.1
-        if: inputs.npm
-        with:
-          name: npm-main
-          path: build/npm/*.tgz
-          if-no-files-found: error
-          retention-days: 7
 
   build:
     name: Build and test (${{ matrix.id }})
@@ -107,15 +82,9 @@ jobs:
           distribution: temurin
           java-version: '25'
 
-      - name: Cache Gradle dependencies and wrapper
-        uses: actions/cache@v6.1.0
+      - uses: gradle/actions/setup-gradle@v6
         with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: gradle-${{ runner.os }}-${{ runner.arch }}-build-${{ hashFiles('gradle/wrapper/gradle-wrapper.properties') }}-${{ hashFiles('**/*.gradle.kts', 'gradle/*.toml', 'gradle.properties', 'buildSrc/src/**') }}
-          restore-keys: |
-            gradle-${{ runner.os }}-${{ runner.arch }}-build-${{ hashFiles('gradle/wrapper/gradle-wrapper.properties') }}-
+          cache-provider: basic
 
       - name: Cache Kotlin Native compiler and dependencies
         uses: actions/cache@v6.1.0
@@ -125,64 +94,62 @@ jobs:
           restore-keys: |
             konan-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.kotlin-version }}-
 
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+
       - name: Build and test on Windows
         if: runner.os == 'Windows'
         shell: pwsh
         env:
-          GENERATE_NPM: ${{ inputs.npm }}
-          TARGET: ${{ matrix.target }}
+          FACTORIO_MCP_TARGET: ${{ matrix.target }}
         run: |
           $ErrorActionPreference = 'Stop'
           $vswhere = "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe"
           $installation = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
           if ($LASTEXITCODE -ne 0 -or -not $installation) { throw 'MSVC build tools were not found' }
           & "$installation/Common7/Tools/Launch-VsDevShell.ps1" -Arch amd64 -HostArch amd64 -SkipAutomaticLocation
-          $tasks = @('build')
-          if ($env:GENERATE_NPM -eq 'true') {
-            $target = $env:TARGET.Substring(0, 1).ToUpperInvariant() + $env:TARGET.Substring(1)
-            $tasks += "generateKotlinNativeNpm${target}Package"
-          }
-          ./gradlew.bat --no-daemon --console=plain @tasks
+          # Capture this explicit SDK setup into project configuration before starting Gradle.
+          $env:FACTORIO_MCP_WINDOWS_NATIVE_INCLUDE_DIRECTORIES = $env:INCLUDE
+          $env:FACTORIO_MCP_WINDOWS_NATIVE_LIBRARY_DIRECTORIES = $env:LIB
+          $target = $env:FACTORIO_MCP_TARGET.Substring(0, 1).ToUpperInvariant() + $env:FACTORIO_MCP_TARGET.Substring(1)
+          ./gradlew.bat --no-daemon --console=plain build "verifyNpm${target}Package"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build and test on Linux or macOS
         if: runner.os != 'Windows'
         shell: bash
         env:
-          GENERATE_NPM: ${{ inputs.npm }}
-          TARGET: ${{ matrix.target }}
+          FACTORIO_MCP_TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
-          tasks=(build)
-          if [[ "$GENERATE_NPM" == true ]]; then
-            target="$(printf '%s' "${TARGET:0:1}" | tr '[:lower:]' '[:upper:]')${TARGET:1}"
-            tasks+=("generateKotlinNativeNpm${target}Package")
-          fi
-          ./gradlew --no-daemon --console=plain "${tasks[@]}"
+          target="$(printf '%s' "${FACTORIO_MCP_TARGET:0:1}" | tr '[:lower:]' '[:upper:]')${FACTORIO_MCP_TARGET:1}"
+          ./gradlew --no-daemon --console=plain build "verifyNpm${target}Package"
 
       - name: Collect release binaries
-        if: inputs.github-release
+        if: inputs.github
         shell: bash
         env:
-          RELEASE_DIRECTORY: build/bin/${{ matrix.target }}/releaseExecutable
-          PLATFORM: ${{ matrix.id }}
+          FACTORIO_MCP_RELEASE_DIRECTORY: build/bin/${{ matrix.target }}/releaseExecutable
+          FACTORIO_MCP_PLATFORM: ${{ matrix.id }}
         run: |
           set -euo pipefail
-          test -d "$RELEASE_DIRECTORY"
-          test -n "$(find "$RELEASE_DIRECTORY" -type f -print -quit)"
-          if [[ "$PLATFORM" == windows-x64 ]]; then
-            test -s "$RELEASE_DIRECTORY/factorio-mcp.exe"
-            test -s "$RELEASE_DIRECTORY/factorio_bridge.dll"
-          elif [[ "$PLATFORM" == linux-x64 ]]; then
-            test -x "$RELEASE_DIRECTORY/factorio-mcp.kexe"
-            test -s "$RELEASE_DIRECTORY/libfactorio_mcp_resident.so"
+          test -d "$FACTORIO_MCP_RELEASE_DIRECTORY"
+          test -n "$(find "$FACTORIO_MCP_RELEASE_DIRECTORY" -type f -print -quit)"
+          if [[ "$FACTORIO_MCP_PLATFORM" == windows-x64 ]]; then
+            test -s "$FACTORIO_MCP_RELEASE_DIRECTORY/factorio-mcp.exe"
+            test -s "$FACTORIO_MCP_RELEASE_DIRECTORY/factorio_bridge.dll"
+          elif [[ "$FACTORIO_MCP_PLATFORM" == linux-x64 ]]; then
+            test -x "$FACTORIO_MCP_RELEASE_DIRECTORY/factorio-mcp.kexe"
+            test -s "$FACTORIO_MCP_RELEASE_DIRECTORY/libfactorio_mcp_resident.so"
           fi
           # Preserve executable permissions across the artifact handoff for Unix targets.
           mkdir -p build/release-handoff
-          tar -cf "build/release-handoff/runtime-$PLATFORM.tar" -C "$RELEASE_DIRECTORY" .
+          tar -cf "build/release-handoff/runtime-$FACTORIO_MCP_PLATFORM.tar" -C "$FACTORIO_MCP_RELEASE_DIRECTORY" .
 
       - name: Upload release binaries
-        if: inputs.github-release
+        if: inputs.github
         uses: actions/upload-artifact@v7.0.1
         with:
           name: runtime-${{ matrix.id }}
@@ -190,27 +157,19 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      - uses: actions/setup-node@v7.0.0
-        if: inputs.npm
-        with:
-          node-version: '24'
-          package-manager-cache: false
-
-      - name: Package native npm runtime
-        if: inputs.npm
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p build/npm
-          for directory in build/kotlinNativeNpmPublishing/platforms/*; do
-            npm pack "./$directory" --pack-destination build/npm
-          done
-
       - uses: actions/upload-artifact@v7.0.1
         if: inputs.npm
         with:
-          name: npm-${{ matrix.id }}
-          path: build/npm/*.tgz
+          name: npm-runtime-${{ matrix.id }}
+          path: build/reports/npm/${{ matrix.target }}/platform/*.tgz
+          if-no-files-found: error
+          retention-days: 7
+
+      - uses: actions/upload-artifact@v7.0.1
+        if: inputs.npm && runner.os == 'Linux'
+        with:
+          name: npm-main
+          path: build/reports/npm/${{ matrix.target }}/main/*.tgz
           if-no-files-found: error
           retention-days: 7
 
@@ -223,5 +182,10 @@ jobs:
             build/reports/tests/
             build/test-results/
             build/native-tests/**/Testing/Temporary/
+            build/reports/npm/${{ matrix.target }}/*.log
+            build/reports/npm/${{ matrix.target }}/*.stderr
+            build/reports/npm/${{ matrix.target }}/*.jsonl
+            build/reports/npm/${{ matrix.target }}/*.txt
+            build/reports/npm/${{ matrix.target }}/*/pack.json*
           if-no-files-found: ignore
           retention-days: 7

@@ -10,6 +10,7 @@ internal class WorldQueryMetadata private constructor(
     private val context: LuaContextLayout,
     private val script: LuaScriptLayout,
     private val player: PlayerLayout,
+    private val viewport: ViewportLayout,
     private val evidence: List<ElfImage.Symbol>,
 ) {
     fun writeTo(output: FmLinuxWorldQueryConfig, loadBias: Long) {
@@ -18,10 +19,12 @@ internal class WorldQueryMetadata private constructor(
         player.writeTo(output.player, loadBias)
         api.state.writeTo(output.state)
         api.writeTo(output.api, loadBias)
+        viewport.writeTo(output.viewport, loadBias)
     }
 
     fun verifyLoaded(image: ElfImage, process: ProcessHandle, loadBias: Long) {
         api.verifyLoaded(image, process, loadBias)
+        viewport.verifyLoaded(image, process, loadBias)
         for (symbol in evidence) {
             require(
                 symbol.size in 1..(16 * 1024 * 1024) && symbol.address >= 0 &&
@@ -51,7 +54,8 @@ internal class WorldQueryMetadata private constructor(
                 require(world.contextSize == context.size)
                 Layouts(world, script, context, PlayerLayout.resolve(image, world.gameSize, api.state))
             }
-            return WorldQueryMetadata(api, layouts.world, layouts.context, layouts.script, layouts.player, evidence)
+            val viewport = ViewportLayout.resolve(image, layouts.player.viewSize)
+            return WorldQueryMetadata(api, layouts.world, layouts.context, layouts.script, layouts.player, viewport, evidence)
         }
     }
 }

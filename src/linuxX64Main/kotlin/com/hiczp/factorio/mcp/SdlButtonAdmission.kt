@@ -12,7 +12,7 @@ internal object SdlButtonAdmission {
     private const val DOWN = 0x401L
     private const val UP = 0x402L
 
-    enum class Button(val sdkValue: Int) { LEFT(1), MIDDLE(2), RIGHT(3) }
+    enum class Button(val sdkValue: Int) { LEFT(1), MIDDLE(2), RIGHT(3), X1(4), X2(5) }
     enum class Transition(val sdkValue: Long) { PRESS(DOWN), RELEASE(UP) }
     data class Case(val button: Button, val transition: Transition, val path: List<Long>)
     data class Proof(val table: GuardedByteTable.Proof, val cases: List<Case>)

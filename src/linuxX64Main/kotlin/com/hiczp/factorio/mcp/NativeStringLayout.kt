@@ -103,9 +103,22 @@ internal object StringStorageProof {
         }
     }
 
+    /** The caller independently bounds the embedded string within its typed complete owner. */
+    fun embeddedSizedDestructor(
+        instructions: List<Instruction>, address: Long, deallocate: Long,
+        data: Long, local: Long, size: Long, member: Long, ownerSize: Long
+    ) {
+        require(size in 1..4096 && data in 0..size - 8 && local in 0..size - 8)
+        require(ownerSize in size..4096 && member in 0..ownerSize - size)
+        for (inline in listOf(true, false)) {
+            val result = path(instructions, address, deallocate, data, local, false, inline, true, -member)
+            require(result.reads.all { it in 0..size - 8 })
+        }
+    }
+
     private fun path(
         instructions: List<Instruction>, address: Long, deallocate: Long, data: Long, local: Long,
-        owner: Boolean, inline: Boolean?, sized: Boolean
+        owner: Boolean, inline: Boolean?, sized: Boolean, objectBase: Long = 0
     ): Result {
         require(
             instructions.isNotEmpty() && instructions.size <= 8192 && address >= 0 && deallocate >= 0 && data in 0..4088 && local in 0..4088 &&
@@ -113,7 +126,8 @@ internal object StringStorageProof {
         )
         val body = instructions.associateBy { it.offset }
         val registers = MutableList<Value>(16) { Original(it) }
-        registers[7] = if (owner) Owner else Object()
+        require(objectBase in -4096..0 && (!owner || objectBase == 0L))
+        registers[7] = if (owner) Owner else Object(objectBase)
         registers[4] = Stack(0)
         val stack = mutableMapOf<Long, Value>()
         val reads = mutableSetOf<Long>()
@@ -187,7 +201,7 @@ internal object StringStorageProof {
         fun add(value: Value, amount: Long): Value {
             require(amount in -4096..4096)
             return when (value) {
-                is Object -> Object(value.offset + amount).also { require(it.offset in 0..4088 && size == null) }
+                is Object -> Object(value.offset + amount).also { require(it.offset in objectBase..4088 && size == null) }
                 is Stack -> Stack(value.offset + amount).also { require(it.offset in -256..0 && it.offset % 8 == 0L) }
                 is Capacity -> Capacity(value.extra + amount).also { require(it.extra in 0..1) }
                 else -> error("String cleanup modifies an unproven address or size")

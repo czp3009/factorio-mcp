@@ -114,6 +114,12 @@ internal class McpHttpClient(private val url: String) {
         )
             .getValue("result")
             .jsonObject
+            .also { result ->
+                val text = result.getValue("content").jsonArray.first().jsonObject.getValue("text").jsonPrimitive.content
+                check(result.getValue("structuredContent") == Json.parseToJsonElement(text)) {
+                    "Tool $name returned inconsistent structured content"
+                }
+            }
 
     suspend fun close() {
         try {

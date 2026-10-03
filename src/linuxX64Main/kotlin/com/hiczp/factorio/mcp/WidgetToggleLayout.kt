@@ -15,7 +15,7 @@ internal data class WidgetToggleLayout(
             val mode = SysVAccessors.resolve(image, modeFunction).withinObject(size)
             require(mode.width == 1 && mode.mask == 255uL && mode.shift == 0)
             val slot = ItaniumVtable.resolve(image, "_ZTVN4agui6ButtonE").method(image, function.name).slot
-            val words = ElfPointers(image)
+            val words = image.pointers
             val references = if (image.positionIndependent) words.relativeReferences(function.address) else null
             val tables = image.symbols().filter {
                 it.type == 1 && it.name.startsWith("_ZTV") &&

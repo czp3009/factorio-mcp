@@ -2,6 +2,7 @@
 #include "world_objects.h"
 #include "player_objects.h"
 #include "lua_query.h"
+#include "viewport.h"
 
 typedef struct FmLinuxWorldQueryConfig {
     FmLinuxWorldLayout world;
@@ -9,6 +10,7 @@ typedef struct FmLinuxWorldQueryConfig {
     FmLinuxPlayerLayout player;
     FmLinuxLuaStateLayout state;
     FmLinuxLuaApi api;
+    FmLinuxViewportLayout viewport;
 } FmLinuxWorldQueryConfig;
 
 #ifdef __cplusplus

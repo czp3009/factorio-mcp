@@ -48,7 +48,7 @@ internal object SysVLineAllocation {
             val instruction = decoder.decode(position)
             position += instruction.size
             when (instruction.operation) {
-                Operation.NOP, Operation.ENDBR -> Unit
+                Operation.NOP, Operation.ENDBR, Operation.TEST, Operation.CMP -> Unit
                 Operation.MOV -> {
                     val target = instruction.destination as? Register ?: error("Allocation window writes memory")
                     require(target.number != 4 && target.width in listOf(4, 8))
@@ -67,6 +67,22 @@ internal object SysVLineAllocation {
                         value is Constant -> Constant(value.value and 0xffffffffL)
                         else -> Unknown
                     }
+                }
+
+                Operation.LEA -> {
+                    val target = instruction.destination as? Register ?: error("Invalid allocation-window address")
+                    require(target.number != 4 && target.width in listOf(4, 8))
+                    registers[target.number] = Unknown
+                }
+
+                Operation.CMOV -> {
+                    val target = instruction.destination as? Register ?: error("Invalid conditional argument")
+                    require(target.number != 4 && target.width in listOf(4, 8))
+                    val source = instruction.source as? Register
+                    val previous = registers[target.number]
+                    registers[target.number] = if (source != null && source.width == target.width &&
+                        previous == registers[source.number]
+                    ) previous else Unknown
                 }
 
                 Operation.CALL -> {

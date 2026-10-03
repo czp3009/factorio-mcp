@@ -5,7 +5,7 @@ import com.hiczp.factorio.mcp.X64Instructions.*
 /** Required-modifier bits associated with named native checks. Other bits retain their raw meaning. */
 internal data class ControlModifiers(val field: Long, val control: Int, val shift: Int, val alt: Int) {
     companion object {
-        fun resolve(image: ElfImage, extent: Long, debug: DwarfInlines = DwarfInlines(image)): ControlModifiers =
+        fun resolve(image: ElfImage, extent: Long, debug: DwarfInlines = image.inlines): ControlModifiers =
             resolve(
                 image, extent,
                 "_ZN17ControlInputValue27checkRequiredModifiersMatchEPKS_", "checkRequiredModifiersMatch",
@@ -14,7 +14,7 @@ internal data class ControlModifiers(val field: Long, val control: Int, val shif
 
         fun resolve(
             image: ElfImage, extent: Long, function: String, ownerName: String,
-            control: String, shift: String, alt: String, debug: DwarfInlines = DwarfInlines(image)
+            control: String, shift: String, alt: String, debug: DwarfInlines = image.inlines
         ): ControlModifiers {
             val entry = image.symbol(function)
             EhFrames(image).function(entry)

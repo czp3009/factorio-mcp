@@ -50,10 +50,13 @@ internal data class MouseStateMetadata(
         output.eventCode = conversion.payload.code.toUInt()
         output.press = conversion.kinds.getValue(SdlButtonAdmission.Transition.PRESS).toUInt()
         output.release = conversion.kinds.getValue(SdlButtonAdmission.Transition.RELEASE).toUInt()
-        SdlButtonAdmission.Button.entries.forEachIndexed { index, button ->
-            output.codes[index] = checkNotNull(conversion.admission.table.value(button.sdkValue)).toUInt()
-            output.masks[index] = update.masks.getValue(button).toUInt()
-        }
+        // This wire layout mirrors the three buttons supported by direct widget gestures.
+        // Timed-input integration must use all five verified entries, including X1/X2.
+        listOf(SdlButtonAdmission.Button.LEFT, SdlButtonAdmission.Button.MIDDLE, SdlButtonAdmission.Button.RIGHT)
+            .forEachIndexed { index, button ->
+                output.codes[index] = checkNotNull(conversion.admission.table.value(button.sdkValue)).toUInt()
+                output.masks[index] = update.masks.getValue(button).toUInt()
+            }
     }
 
     fun writeTo(output: FmLinuxMouseStateConfig, loadBias: Long) {

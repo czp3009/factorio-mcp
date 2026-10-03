@@ -31,7 +31,7 @@ internal data class SdlDeviceAllocation(val size: Long, val member: Long, val al
             val table = image.symbol("s_mem")
             require(table.type == 1 && table.size in 8..4096 && table.size % 8 == 0L)
             val slots =
-                ElfPointers(image).words(table.address, (table.size / 8).toInt()).mapIndexedNotNull { index, word ->
+                image.pointers.words(table.address, (table.size / 8).toInt()).mapIndexedNotNull { index, word ->
                     if ((word.relocation ?: word.raw.takeUnless { word.positionIndependent }) == allocator.address)
                         table.address + index * 8 else null
                 }

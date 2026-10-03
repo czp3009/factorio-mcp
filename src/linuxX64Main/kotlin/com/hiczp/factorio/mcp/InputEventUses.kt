@@ -13,9 +13,45 @@ internal object InputEventUses {
     }
 
     fun resolve(image: ElfImage, header: EventHeader, code: Long, kinds: Set<Long>): Map<Long, Proof> {
+        return resolve(image, header, scalarCases(header, code, kinds))
+    }
+
+    fun resolve(image: ElfImage, header: EventHeader, cases: Map<Long, Set<Long>>): Map<Long, Proof> {
         val function = image.symbol("_ZN10InputState6updateERK5Event")
         val tables = X64JumpTables.resolve(image, function)
-        return analyze(X64ControlFlow.resolve(image, function), tables.single(), header, code, kinds)
+        return analyze(X64ControlFlow.resolve(image, function), tables.single(), header, cases)
+    }
+
+    fun postUpdate(image: ElfImage, header: EventHeader, cases: Map<Long, Set<Long>>): Map<Long, Proof> {
+        val function = image.symbol("_ZN10InputState10postUpdateERK5Event")
+        return postUpdate(X64ControlFlow.resolve(image, function), header, cases)
+    }
+
+    /** Keep state-dependent paths conservative; prune only branches proved to depend on the native kind. */
+    fun postUpdate(flow: X64ControlFlow, header: EventHeader, cases: Map<Long, Set<Long>>): Map<Long, Proof> {
+        validateCases(flow, header, cases)
+        val type = SysVArgumentFlow.Read(SysVArgumentFlow.Reference(6, header.type), 4)
+        val scalars = ScalarExpression(flow, mapOf(6 to header.extent.toLong()))
+        val branches = flow.instructions.filter { it.offset in flow.reachable && it.operation == Operation.JCC }
+            .mapNotNull { branch ->
+                val expression = try {
+                    scalars.branch(branch.offset).takeIf { value ->
+                        ScalarExpression.inputs(value).all { it.field == type }
+                    }
+                } catch (_: IllegalArgumentException) {
+                    null
+                } catch (_: IllegalStateException) {
+                    null
+                }
+                expression?.let { branch to it }
+            }
+        return cases.mapValues { (kind, initialized) ->
+            val forced = branches.associate { (branch, expression) ->
+                branch.offset to if (ScalarExpression.evaluate(expression) { kind } != 0L)
+                    (branch.destination as Immediate).value else branch.offset + branch.size
+            }
+            inspect(flow, initialized, forced)
+        }
     }
 
     fun postUpdate(image: ElfImage, header: EventHeader, update: InputStateKeyUpdate): Map<Long, Proof> {
@@ -36,25 +72,45 @@ internal object InputEventUses {
                 (header.type + 4 <= update.code || update.code + 4 <= header.type))
         require(flow.instructions.none { it.operation == Operation.MULTIPLY_WIDE })
         return KeyPostUpdate.analyze(flow, lookup, header, update).mapValues { (_, proof) ->
-            inspect(flow, fields, proof.path.zipWithNext().toMap())
+            inspect(flow, fields.flatMap { (offset, width) -> (offset until offset + width).toList() }.toSet(),
+                proof.path.zipWithNext().toMap())
         }
     }
 
     fun analyze(
         flow: X64ControlFlow, table: X64JumpTables.Table, header: EventHeader, code: Long,
         kinds: Set<Long>
-    ): Map<Long, Proof> {
-        require(header.extent in 16..4096 && kinds.size == 2 && kinds.all { it in 0..0xffffffffL })
+    ): Map<Long, Proof> = analyze(flow, table, header, scalarCases(header, code, kinds))
+
+    private fun scalarCases(header: EventHeader, code: Long, kinds: Set<Long>): Map<Long, Set<Long>> {
+        require(header.extent in 16..4096 && kinds.size == 2)
         require(header.type + 4 <= code || code + 4 <= header.type)
-        require(flow.instructions.none { it.operation == Operation.MULTIPLY_WIDE })
         val fields = listOf(header.type to 4, code to 4)
         require(fields.all { (offset, width) -> offset >= 0 && offset <= header.extent - width })
+        val initialized = fields.flatMap { (offset, width) -> (offset until offset + width).toList() }.toSet()
+        return kinds.associateWith { initialized }
+    }
+
+    private fun validateCases(flow: X64ControlFlow, header: EventHeader, cases: Map<Long, Set<Long>>) {
+        require(header.extent in 16..4096 && header.type >= 0 && header.type <= header.extent - 4 &&
+                cases.size in 1..32 && cases.keys.all { it in 0..0xffffffffL })
+        require(flow.instructions.none { it.operation == Operation.MULTIPLY_WIDE })
+        require(cases.values.all { initialized ->
+            (header.type until header.type + 4).all { it in initialized } &&
+                    initialized.all { it in 0L until header.extent }
+        }) { "Input event case has incomplete or unbounded initialization" }
+    }
+
+    fun analyze(
+        flow: X64ControlFlow, table: X64JumpTables.Table, header: EventHeader, cases: Map<Long, Set<Long>>
+    ): Map<Long, Proof> {
+        validateCases(flow, header, cases)
         val type = SysVArgumentFlow.Read(SysVArgumentFlow.Reference(6, header.type), 4)
         val scalars = ScalarExpression(flow, mapOf(6 to header.extent.toLong()))
         require(table.index.width in listOf(4, 8)) { "Event switch cannot use a byte-only discriminator" }
         val index = scalars.before(table.guard, Register(table.index.number, 4))
         require(ScalarExpression.inputs(index).map { it.field }.toSet() == setOf(type))
-        return kinds.associateWith { kind ->
+        return cases.mapValues { (kind, initialized) ->
             val prefix = ScalarBranchPath(flow, mapOf(6 to header.extent.toLong())).to(table.guard) {
                 require(it.field == type)
                 kind
@@ -64,11 +120,11 @@ internal object InputEventUses {
             val forced =
                 prefix.zipWithNext().toMap() + (table.guard to table.guard + flow.body.getValue(table.guard).size) +
                         (table.jump to table.targets[selected.toInt()])
-            inspect(flow, fields, forced)
+            inspect(flow, initialized, forced)
         }
     }
 
-    private fun inspect(flow: X64ControlFlow, fields: List<Pair<Long, Int>>, forced: Map<Long, Long>): Proof {
+    private fun inspect(flow: X64ControlFlow, initialized: Set<Long>, forced: Map<Long, Long>): Proof {
         val incoming = mutableMapOf(0L to setOf(6))
         val pending = ArrayDeque<Long>()
         pending.add(0)
@@ -90,7 +146,7 @@ internal object InputEventUses {
                     !operand.relative && operand.index == null && operand.base in aliases &&
                             (operand == source && instruction.operation in listOf(
                                 Operation.MOV, Operation.MOVZX,
-                                Operation.MOVSX, Operation.CMP, Operation.TEST
+                                Operation.MOVSX, Operation.SCALAR_MOV, Operation.VECTOR_MOV, Operation.CMP, Operation.TEST
                             ) ||
                                     operand == destination && instruction.operation in listOf(
                                 Operation.CMP,
@@ -99,10 +155,9 @@ internal object InputEventUses {
                 ) {
                     "Input-state handler writes, derives or transforms an event address"
                 }
-                require(fields.any { (offset, width) ->
-                    operand.displacement >= offset &&
-                            operand.width <= width && operand.displacement <= offset + width - operand.width
-                }) {
+                require(operand.width in listOf(1, 2, 4, 8, 16) &&
+                        operand.displacement in 0..4096L - operand.width &&
+                        (operand.displacement until operand.displacement + operand.width).all { it in initialized }) {
                     "Input-state handler reads an uninitialized event field"
                 }
                 reads += Read(site, operand.displacement, operand.width)

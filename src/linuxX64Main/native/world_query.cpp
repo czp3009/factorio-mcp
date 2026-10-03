@@ -17,10 +17,14 @@ int queryWorld(const FmLinuxWorldQueryConfig &config, const FmLinuxLuaQuery &que
     if (const auto error = readDefaultScript(world.context, config.script, cancel, script))
         return error;
     QueryViewport viewport;
-    static constexpr char unavailable[] = "Linux viewport reader is not implemented yet";
+    static constexpr char unavailable[] = "The current viewport is unavailable";
     if (query.includeViewport) {
-        viewport.error = unavailable;
-        viewport.errorSize = sizeof(unavailable) - 1;
+        if (const auto error = readViewport(world.game, player.player, config.player, config.viewport, cancel, viewport)) {
+            if (error == ECANCELED)
+                return error;
+            viewport.error = unavailable;
+            viewport.errorSize = sizeof(unavailable) - 1;
+        }
     }
     return queryLua(reinterpret_cast<void *>(script.state), config.api, config.state, query,
                     static_cast<double>(player.index) + 1, viewport, cancel, result);

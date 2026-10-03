@@ -29,7 +29,7 @@ class InputStateMouseUpdateTest {
             val code = constant("fixture_event_code")
             val size = constant("fixture_state_size")
             val kinds = mapOf(Transition.PRESS to 3L, Transition.RELEASE to 5L)
-            val codes = mapOf(Button.LEFT to 1L, Button.MIDDLE to 3L, Button.RIGHT to 2L)
+            val codes = mapOf(Button.LEFT to 1L, Button.MIDDLE to 3L, Button.RIGHT to 2L, Button.X1 to 4L, Button.X2 to 5L)
             fun resolve(
                 selectedFlow: X64ControlFlow = flow, selectedSize: Long = size,
                 selectedCode: Long = code, selectedKinds: Map<Transition, Long> = kinds,
@@ -42,7 +42,7 @@ class InputStateMouseUpdateTest {
 
             val proof = resolve()
             assertEquals(constant("fixture_state_mask_offset"), proof.member)
-            assertEquals(mapOf(Button.LEFT to 1L, Button.MIDDLE to 4L, Button.RIGHT to 2L), proof.masks)
+            assertEquals(mapOf(Button.LEFT to 1L, Button.MIDDLE to 4L, Button.RIGHT to 2L, Button.X1 to 8L, Button.X2 to 16L), proof.masks)
             assertFails { resolve(selectedSize = proof.member) }
             assertFails { resolve(selectedCode = code - 1) }
             assertFails { resolve(selectedKinds = kinds.mapValues { if (it.key == Transition.PRESS) 5 else 3 }) }

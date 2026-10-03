@@ -15,8 +15,7 @@ internal class SysVArgumentFlow(
     init {
         require(flow.instructions.none {
             it.operation in listOf(
-                Operation.MULTIPLY_WIDE,
-                Operation.ATOMIC_EXCHANGE_ADD
+                Operation.MULTIPLY_WIDE
             )
         })
         require(allowByteCompareExchange || flow.instructions.none { it.operation == Operation.BYTE_COMPARE_EXCHANGE })
@@ -82,6 +81,11 @@ internal class SysVArgumentFlow(
                     val right = value(instruction.source)
                     write(instruction.destination, right)
                     write(instruction.source, left)
+                }
+
+                Operation.ATOMIC_EXCHANGE_ADD -> {
+                    require(instruction.destination is Memory && instruction.source is Register)
+                    write(instruction.source, null)
                 }
 
                 Operation.CALL -> for (register in listOf(0, 1, 2, 6, 7, 8, 9, 10, 11) + (16..31)) registers[register] =

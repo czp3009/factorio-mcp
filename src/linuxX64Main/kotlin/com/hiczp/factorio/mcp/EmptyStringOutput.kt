@@ -10,7 +10,7 @@ internal object EmptyStringOutput {
 
     fun resolve(
         image: ElfImage, function: String, name: String, callerName: String, string: NativeStringLayout,
-        debug: DwarfInlines = DwarfInlines(image), constructor: String = "basic_string"
+        debug: DwarfInlines = image.inlines, constructor: String = "basic_string"
     ): Proof {
         val method = image.symbol(function)
         val caller = image.symbol(callerName)

@@ -14,7 +14,7 @@ internal data class LuaBooleanMember(val objectPointer: Long, val field: Long) {
 
         fun resolve(
             image: ElfImage, function: String, ownerName: String, wrapperExtent: Long,
-            objectExtent: Long, top: Long, valueSize: Long, debug: DwarfInlines = DwarfInlines(image)
+            objectExtent: Long, top: Long, valueSize: Long, debug: DwarfInlines = image.inlines
         ): LuaBooleanMember {
             val entry = image.symbol(function)
             val flow = X64ControlFlow.resolve(image, entry)

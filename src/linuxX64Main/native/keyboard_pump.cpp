@@ -4,9 +4,9 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 
-KeyboardPumpKey::KeyboardPumpKey(EventPump &pump, const KeyboardPumpConfig &config,
-                                 EventPump::Pump entry, void *context)
-    : pump_(pump), config_(config), entry_(entry), context_(context) {}
+KeyboardPumpKey::KeyboardPumpKey(EventPump &pump, const KeyboardPumpConfig &config, EventPump::Pump entry,
+                                 void *context, pid_t evaluationThread)
+    : pump_(pump), config_(config), entry_(entry), context_(context), evaluationThread_(evaluationThread) {}
 
 int KeyboardPumpKey::record(int error) {
     if (error && !failure_)
@@ -29,21 +29,18 @@ int KeyboardPumpKey::write(void *event, size_t capacity, void *context) noexcept
     KeyStateValue value;
     if (const int error = self.current(value))
         return error;
-    if (self.writingDown_ && (value.held || value.blocked))
-        return EBUSY;
     double time;
     if (const int error = readEventClock(self.config_.clock, time))
         return error;
     // A clock callback is still a native call; reacquire ownership before touching the empty Event.
     if (const int error = self.current(value))
         return error;
-    if (self.writingDown_ && (value.held || value.blocked))
-        return EBUSY;
     return writeKeyboardEvent(self.config_.event, event, capacity, self.code_, self.writingDown_, time);
 }
 
 int KeyboardPumpKey::press(uint32_t code) {
-    if (syscall(SYS_gettid) != getpid())
+    const auto thread = static_cast<pid_t>(syscall(SYS_gettid));
+    if (thread != getpid() && thread != evaluationThread_)
         return EPERM;
     if (started_)
         return EALREADY;
@@ -58,14 +55,12 @@ int KeyboardPumpKey::press(uint32_t code) {
     KeyStateValue value;
     if (const int error = readKeyState(config_.owner, config_.keys, static_cast<int32_t>(code), objects, value))
         return record(error);
-    if (value.held || value.blocked)
-        return record(EBUSY);
     code_ = code;
     global_ = objects.global;
     state_ = objects.state;
     writingDown_ = true;
     dispatching_ = true;
-    record(pump_.dispatch(config_.site, entry_, context_, write, this, press_));
+    record(pump_.dispatch(config_.site, entry_, context_, write, this, press_, thread));
     dispatching_ = false;
     // Delivery can precede a routing exception. Never lose the corresponding release obligation.
     owned_ = press_.delivered;
@@ -73,7 +68,8 @@ int KeyboardPumpKey::press(uint32_t code) {
 }
 
 int KeyboardPumpKey::release() {
-    if (syscall(SYS_gettid) != getpid())
+    const auto thread = static_cast<pid_t>(syscall(SYS_gettid));
+    if (thread != getpid() && thread != evaluationThread_)
         return EPERM;
     if (dispatching_)
         return EBUSY;
@@ -90,7 +86,7 @@ int KeyboardPumpKey::release() {
     if (!release_.delivered) {
         writingDown_ = false;
         dispatching_ = true;
-        record(pump_.dispatch(config_.site, entry_, context_, write, this, release_));
+        record(pump_.dispatch(config_.site, entry_, context_, write, this, release_, thread));
         dispatching_ = false;
         // Rejection before delivery may be retried by a later cleanup phase, never by this call.
         if (!release_.delivered)

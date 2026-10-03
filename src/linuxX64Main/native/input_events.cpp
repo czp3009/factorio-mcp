@@ -64,9 +64,11 @@ int readInputState(const FmLinuxMouseStateLayout &layout, InputStateObjects &out
 }
 
 int dispatchMouseState(const FmLinuxMouseStateLayout &layout, const InputStateFunctions &functions,
-                       const InputStateObjects &objects, uint32_t code, bool pressed, double time, InputDispatch &output) {
+                       const InputStateObjects &objects, uint32_t code, bool pressed, double time,
+                       InputDispatch &output) {
     output = {};
-    if (!validMouseStateLayout(layout) || !functions.update || !functions.postUpdate || !std::isfinite(time) || time < 0)
+    if (!validMouseStateLayout(layout) || !functions.update || !functions.postUpdate || !std::isfinite(time) ||
+        time < 0)
         return EINVAL;
     bool known = false;
     for (const auto candidate : layout.codes)
@@ -82,8 +84,8 @@ int dispatchMouseState(const FmLinuxMouseStateLayout &layout, const InputStateFu
 }
 
 int dispatchInputStateEvent(const FmLinuxMouseStateLayout &layout, const InputStateFunctions &functions,
-                           const InputStateObjects &objects,
-                           const unsigned char (&event)[FM_LINUX_INPUT_EVENT_BYTES], InputDispatch &output) {
+                            const InputStateObjects &objects, const unsigned char (&event)[FM_LINUX_INPUT_EVENT_BYTES],
+                            InputDispatch &output) {
     output = {};
     if (!validMouseStateLayout(layout) || !functions.update || !functions.postUpdate)
         return EINVAL;
@@ -146,8 +148,6 @@ int MouseButtonOwnership::press(const FmLinuxMouseStateLayout &layout, const Inp
     InputStateObjects objects;
     if (const int error = readInputState(layout, objects))
         return record(error);
-    if (objects.held & mask_)
-        return record(EBUSY);
     globalIdentity_ = objects.global;
     stateIdentity_ = objects.state;
     owned_ = true;

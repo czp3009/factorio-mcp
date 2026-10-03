@@ -8,6 +8,42 @@ add_subdirectory("../../linuxX64Main/native" resident)
 # Fixtures run in the standard Release build too. Never compile away checks or calls inside assert().
 add_compile_options(-UNDEBUG)
 
+foreach(padding IN ITEMS 1 23)
+    add_executable(game_state_fixture_${padding} game_state_fixture.cpp ../../linuxX64Main/native/game_state.cpp)
+    target_link_options(game_state_fixture_${padding} PRIVATE -static-libstdc++ -static-libgcc)
+    target_include_directories(game_state_fixture_${padding} PRIVATE ../../linuxX64Main/native)
+    target_compile_features(game_state_fixture_${padding} PRIVATE cxx_std_20)
+    target_compile_definitions(game_state_fixture_${padding} PRIVATE FIXTURE_PADDING=${padding})
+    add_test(NAME game_state_fixture_${padding} COMMAND game_state_fixture_${padding})
+
+    add_executable(worker_completion_fixture_${padding} worker_completion_fixture.cpp
+        ../../linuxX64Main/native/worker_completion.cpp ../../linuxX64Main/native/worker_hook.S
+        ../../linuxX64Main/native/gui_hook.cpp ../../linuxX64Main/native/pointer_hook.cpp)
+    target_include_directories(worker_completion_fixture_${padding} PRIVATE ../../linuxX64Main/native)
+    target_compile_features(worker_completion_fixture_${padding} PRIVATE cxx_std_20)
+    target_compile_definitions(worker_completion_fixture_${padding} PRIVATE FIXTURE_PADDING=${padding})
+    target_compile_options(worker_completion_fixture_${padding} PRIVATE -Wall -Wextra -Werror -g
+        -fno-omit-frame-pointer -fno-optimize-sibling-calls)
+    target_link_libraries(worker_completion_fixture_${padding} PRIVATE Threads::Threads)
+    add_test(NAME worker_completion_fixture_${padding} COMMAND worker_completion_fixture_${padding})
+
+    add_executable(worker_resident_fixture_${padding} worker_resident_fixture.cpp)
+    target_include_directories(worker_resident_fixture_${padding} PRIVATE ../../linuxX64Main/native)
+    target_compile_features(worker_resident_fixture_${padding} PRIVATE cxx_std_20)
+    target_compile_definitions(worker_resident_fixture_${padding} PRIVATE FIXTURE_PADDING=${padding})
+    target_compile_options(worker_resident_fixture_${padding} PRIVATE -Wall -Wextra -Werror -g
+        -fno-omit-frame-pointer -fno-optimize-sibling-calls)
+    target_link_libraries(worker_resident_fixture_${padding} PRIVATE factorio_mcp_resident Threads::Threads)
+    add_test(NAME worker_resident_fixture_${padding} COMMAND worker_resident_fixture_${padding})
+
+    add_executable(viewport_fixture_${padding} viewport_fixture.cpp ../../linuxX64Main/native/viewport.cpp
+        ../../linuxX64Main/native/player_objects.cpp)
+    target_include_directories(viewport_fixture_${padding} PRIVATE ../../linuxX64Main/native)
+    target_compile_features(viewport_fixture_${padding} PRIVATE cxx_std_20)
+    target_compile_definitions(viewport_fixture_${padding} PRIVATE FIXTURE_PADDING=${padding})
+    add_test(NAME viewport_fixture_${padding} COMMAND viewport_fixture_${padding})
+endforeach()
+
 foreach(version IN ITEMS 4 5)
     add_executable(debug_fixture_${version} debug_fixture.cpp)
     target_compile_options(debug_fixture_${version} PRIVATE -O1 -g -gdwarf-${version})
@@ -58,7 +94,7 @@ target_include_directories(hook_fixture PRIVATE ../../linuxX64Main/native)
 target_compile_features(hook_fixture PRIVATE cxx_std_20)
 target_compile_options(hook_fixture PRIVATE -g -fno-omit-frame-pointer)
 
-add_executable(poll_hook_fixture poll_hook_fixture.cpp ../../linuxX64Main/native/poll_hook.S
+add_executable(poll_hook_fixture poll_hook_fixture.cpp poll_hook_caller.S ../../linuxX64Main/native/poll_hook.S
     ../../linuxX64Main/native/gui_hook.cpp ../../linuxX64Main/native/pointer_hook.cpp)
 target_include_directories(poll_hook_fixture PRIVATE ../../linuxX64Main/native)
 target_compile_features(poll_hook_fixture PRIVATE cxx_std_20)
@@ -72,6 +108,13 @@ target_compile_features(event_pump_fixture PRIVATE cxx_std_20)
 target_compile_options(event_pump_fixture PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(event_pump_fixture PRIVATE Threads::Threads)
 add_test(NAME event_pump_fixture COMMAND event_pump_fixture)
+
+add_executable(input_task_mapping_fixture input_task_mapping_fixture.cpp
+    ../../linuxX64Main/native/input_task_mapping.cpp)
+target_include_directories(input_task_mapping_fixture PRIVATE ../../linuxX64Main/native)
+target_compile_features(input_task_mapping_fixture PRIVATE cxx_std_20)
+target_compile_options(input_task_mapping_fixture PRIVATE -Wall -Wextra -Werror)
+add_test(NAME input_task_mapping_fixture COMMAND input_task_mapping_fixture)
 
 add_executable(event_route_fixture event_route_fixture.cpp ../../linuxX64Main/native/event_route.cpp)
 target_include_directories(event_route_fixture PRIVATE ../../linuxX64Main/native)
@@ -145,7 +188,7 @@ add_test(NAME controls_fixture COMMAND controls_fixture)
 add_executable(ipc_fixture ipc_fixture.cpp)
 target_include_directories(ipc_fixture PRIVATE "../../linuxX64Main/native")
 
-add_executable(ui_fixture ui_fixture.cpp ../../linuxX64Main/native/ui_snapshot.cpp ../../linuxX64Main/native/mouse_event.cpp
+add_executable(ui_fixture ui_fixture.cpp ../../linuxX64Main/native/ui_snapshot.cpp ../../linuxX64Main/native/ui_number.cpp ../../linuxX64Main/native/ui_icons.cpp ../../linuxX64Main/native/ui_identity.cpp ../../linuxX64Main/native/ui_elements.cpp ../../linuxX64Main/native/ui_quality.cpp ../../linuxX64Main/native/mouse_event.cpp
     ../../linuxX64Main/native/input_clock.cpp ../../linuxX64Main/native/ui_capture.cpp ../../linuxX64Main/native/targeter.cpp
     ../../linuxX64Main/native/ui_modal.cpp ../../linuxX64Main/native/ui_gesture.cpp ../../linuxX64Main/native/ui_reference.cpp
     ../../linuxX64Main/native/ui_command.cpp ../../linuxX64Main/native/ui_click.cpp ../../linuxX64Main/native/ui_text.cpp
@@ -153,6 +196,29 @@ add_executable(ui_fixture ui_fixture.cpp ../../linuxX64Main/native/ui_snapshot.c
     ../../linuxX64Main/native/input_events.cpp ../../linuxX64Main/native/key_state.cpp)
 target_include_directories(ui_fixture PRIVATE ../../linuxX64Main/native)
 target_compile_features(ui_fixture PRIVATE cxx_std_20)
+
+foreach(padding IN ITEMS 0 17)
+    add_executable(ui_number_fixture_${padding} ui_number_fixture.cpp ../../linuxX64Main/native/ui_number.cpp)
+    target_include_directories(ui_number_fixture_${padding} PRIVATE ../../linuxX64Main/native)
+    target_compile_features(ui_number_fixture_${padding} PRIVATE cxx_std_20)
+    target_compile_definitions(ui_number_fixture_${padding} PRIVATE FIXTURE_PADDING=${padding})
+    add_test(NAME ui_number_fixture_${padding} COMMAND ui_number_fixture_${padding})
+    add_executable(ui_icons_fixture_${padding} ui_icons_fixture.cpp ../../linuxX64Main/native/ui_icons.cpp)
+    target_include_directories(ui_icons_fixture_${padding} PRIVATE ../../linuxX64Main/native)
+    target_compile_features(ui_icons_fixture_${padding} PRIVATE cxx_std_20)
+    target_compile_definitions(ui_icons_fixture_${padding} PRIVATE FIXTURE_PADDING=${padding})
+    add_test(NAME ui_icons_fixture_${padding} COMMAND ui_icons_fixture_${padding})
+    add_executable(ui_identity_fixture_${padding} ui_identity_fixture.cpp ../../linuxX64Main/native/ui_identity.cpp)
+    target_include_directories(ui_identity_fixture_${padding} PRIVATE ../../linuxX64Main/native)
+    target_compile_features(ui_identity_fixture_${padding} PRIVATE cxx_std_20)
+    target_compile_definitions(ui_identity_fixture_${padding} PRIVATE FIXTURE_PADDING=${padding})
+    add_test(NAME ui_identity_fixture_${padding} COMMAND ui_identity_fixture_${padding})
+    add_executable(ui_elements_fixture_${padding} ui_elements_fixture.cpp ../../linuxX64Main/native/ui_elements.cpp)
+    target_include_directories(ui_elements_fixture_${padding} PRIVATE ../../linuxX64Main/native)
+    target_compile_features(ui_elements_fixture_${padding} PRIVATE cxx_std_20)
+    target_compile_definitions(ui_elements_fixture_${padding} PRIVATE FIXTURE_PADDING=${padding})
+    add_test(NAME ui_elements_fixture_${padding} COMMAND ui_elements_fixture_${padding})
+endforeach()
 
 add_executable(keyboard_event_fixture keyboard_event_fixture.cpp ../../linuxX64Main/native/keyboard_event.cpp)
 target_include_directories(keyboard_event_fixture PRIVATE ../../linuxX64Main/native)
@@ -186,7 +252,7 @@ target_compile_features(script_objects_fixture PRIVATE cxx_std_20)
 add_executable(lua_query_fixture lua_query_fixture.cpp world_query_fixture.cpp
     ../../linuxX64Main/native/lua_query.cpp ../../linuxX64Main/native/lua_state.cpp
     ../../linuxX64Main/native/world_objects.cpp ../../linuxX64Main/native/player_objects.cpp
-    ../../linuxX64Main/native/world_query.cpp)
+    ../../linuxX64Main/native/world_query.cpp ../../linuxX64Main/native/viewport.cpp)
 target_include_directories(lua_query_fixture PRIVATE ../../linuxX64Main/native)
 target_compile_features(lua_query_fixture PRIVATE cxx_std_20)
 target_link_libraries(lua_query_fixture PRIVATE query_lua_fixture)
@@ -200,6 +266,10 @@ target_include_directories(input_events_fixture PRIVATE ../../linuxX64Main/nativ
 target_compile_features(input_events_fixture PRIVATE cxx_std_20)
 
 enable_testing()
+add_executable(ui_quality_fixture ui_quality_fixture.cpp ../../linuxX64Main/native/ui_quality.cpp ../../linuxX64Main/native/ui_identity.cpp)
+target_include_directories(ui_quality_fixture PRIVATE ../../linuxX64Main/native)
+target_compile_features(ui_quality_fixture PRIVATE cxx_std_20)
+add_test(NAME ui_quality_fixture COMMAND ui_quality_fixture)
 add_executable(switch_fixture switch_fixture.cpp)
 target_compile_options(switch_fixture PRIVATE -O2 -fno-omit-frame-pointer)
 add_test(NAME switch_fixture COMMAND switch_fixture)
@@ -534,3 +604,34 @@ target_link_libraries(frame_resident_fixture PRIVATE factorio_mcp_resident)
 target_compile_features(frame_resident_fixture PRIVATE cxx_std_20)
 target_compile_options(frame_resident_fixture PRIVATE -g -fno-omit-frame-pointer -fno-optimize-sibling-calls)
 add_test(NAME frame_resident_fixture COMMAND frame_resident_fixture)
+
+add_executable(mouse_input_event_fixture mouse_input_event_fixture.cpp
+    ../../linuxX64Main/native/mouse_input_event.cpp ../../linuxX64Main/native/input_events.cpp)
+target_include_directories(mouse_input_event_fixture PRIVATE ../../linuxX64Main/native)
+target_compile_features(mouse_input_event_fixture PRIVATE cxx_std_20)
+target_compile_options(mouse_input_event_fixture PRIVATE -Wall -Wextra -Werror)
+add_test(NAME mouse_input_event_fixture COMMAND mouse_input_event_fixture)
+
+add_executable(pointer_pump_fixture pointer_pump_fixture.cpp ../../nativeMain/native/input_sequence.cpp
+    ../../linuxX64Main/native/pointer_pump.cpp ../../linuxX64Main/native/pump_input.cpp
+    ../../linuxX64Main/native/keyboard_pump.cpp ../../linuxX64Main/native/event_pump.cpp
+    ../../linuxX64Main/native/poll_site.cpp ../../linuxX64Main/native/keyboard_event.cpp
+    ../../linuxX64Main/native/mouse_input_event.cpp ../../linuxX64Main/native/key_state.cpp
+    ../../linuxX64Main/native/input_events.cpp)
+target_include_directories(pointer_pump_fixture PRIVATE ../../linuxX64Main/native)
+target_compile_features(pointer_pump_fixture PRIVATE cxx_std_20)
+target_compile_options(pointer_pump_fixture PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(pointer_pump_fixture PRIVATE Threads::Threads)
+add_test(NAME pointer_pump_fixture COMMAND pointer_pump_fixture)
+
+add_executable(input_task_session_fixture input_task_session_fixture.cpp
+    ../../linuxX64Main/native/input_task_session.cpp ../../linuxX64Main/native/input_task_mapping.cpp
+    ../../linuxX64Main/native/input_task_context.cpp ../../linuxX64Main/native/input_evaluation.cpp
+    ../../linuxX64Main/native/input_context.cpp ../../linuxX64Main/native/view_lifetime.cpp
+    ../../linuxX64Main/native/world_objects.cpp ../../nativeMain/native/input_sequence.cpp)
+target_include_directories(input_task_session_fixture PRIVATE ../../linuxX64Main/native)
+target_compile_features(input_task_session_fixture PRIVATE cxx_std_20)
+target_compile_options(input_task_session_fixture PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(input_task_session_fixture PRIVATE Threads::Threads)
+target_link_options(input_task_session_fixture PRIVATE -Wl,--wrap=close)
+add_test(NAME input_task_session_fixture COMMAND input_task_session_fixture)

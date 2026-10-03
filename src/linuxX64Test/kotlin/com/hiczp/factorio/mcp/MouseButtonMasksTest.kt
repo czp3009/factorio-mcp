@@ -24,9 +24,9 @@ class MouseButtonMasksTest {
                 ), 2
             )
         )
-        val codes = mapOf(Button.LEFT to 3, Button.MIDDLE to 7, Button.RIGHT to 5)
+        val codes = mapOf(Button.LEFT to 3, Button.MIDDLE to 7, Button.RIGHT to 5, Button.X1 to 2, Button.X2 to 6)
         assertEquals(
-            mapOf(Button.LEFT to 8, Button.MIDDLE to 128, Button.RIGHT to 32),
+            mapOf(Button.LEFT to 8, Button.MIDDLE to 128, Button.RIGHT to 32, Button.X1 to 4, Button.X2 to 64),
             MouseButtonMasks.values(expression, header, setOf(17, 18), codes)
         )
         assertFails { MouseButtonMasks.values(expression, header, setOf(17), codes) }

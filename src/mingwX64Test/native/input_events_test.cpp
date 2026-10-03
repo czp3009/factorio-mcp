@@ -122,7 +122,8 @@ const InputEventLayout layout{sizeof(Event),
 void normalRoutingAndLiveMousePosition() {
     State state;
     expectedState = &state;
-    GameInputEvents emitter(layout, api, &state);
+    InputEventButtons buttons;
+    GameInputEvents emitter(layout, api, buttons, &state);
     trace.clear();
     events.clear();
     emitter.button({InputDevice::Keyboard, 83}, true);
@@ -147,11 +148,37 @@ void normalRoutingAndLiveMousePosition() {
     assert(events.back().dw == -1 && events.back().dy == -1 && state.held.empty() && constructed == destroyed);
 }
 
+void mouseEntryRevalidatesBeforeTheFollowingMove() {
+    State state;
+    expectedState = &state;
+    InputEventButtons buttons;
+    GameInputEvents emitter(layout, api, buttons, &state);
+    events.clear();
+    unsigned checked = 0;
+    bool rejected = false;
+    try {
+        emitter.move(
+            {640, 360},
+            [](void *owner) {
+                ++*static_cast<unsigned *>(owner);
+                assert(events.size() == 1 && events.back().type == mouseEnter);
+                assert(constructed == destroyed);
+                throw std::runtime_error("Fixture world was replaced during mouse entry");
+            },
+            &checked);
+    } catch (const std::runtime_error &) {
+        rejected = true;
+    }
+    assert(rejected && checked == 1 && events.size() == 1 && state.inside);
+    assert(state.x == 11 && state.y == 29 && constructed == destroyed);
+}
+
 void failedDispatchRemainsReleasable() {
     for (const auto stage : {Failure::Construct, Failure::Update, Failure::Process, Failure::Post}) {
         State state;
         expectedState = &state;
-        GameInputEvents emitter(layout, api, &state);
+        InputEventButtons buttons;
+        GameInputEvents emitter(layout, api, buttons, &state);
         InputSequence task({{10, {{InputDevice::Keyboard, 83}}, {}}});
         failure = stage;
         trace.clear();
@@ -165,7 +192,8 @@ void failedDispatchRemainsReleasable() {
     }
     State state;
     expectedState = &state;
-    GameInputEvents emitter(layout, api, &state);
+    InputEventButtons buttons;
+    GameInputEvents emitter(layout, api, buttons, &state);
     InputSequence task({{10, {{InputDevice::Mouse, 65}}, {}}});
     transition = true;
     task.beforeTick(100, emitter);
@@ -177,7 +205,8 @@ void failedDispatchRemainsReleasable() {
 void widgetChordUpdatesStateWithoutRoutingAnotherAction() {
     State state;
     expectedState = &state;
-    GameInputEvents emitter(layout, api, &state, false);
+    InputEventButtons buttons;
+    GameInputEvents emitter(layout, api, buttons, &state, false);
     trace.clear();
     events.clear();
     emitter.button({InputDevice::Keyboard, 83}, true);
@@ -189,6 +218,57 @@ void widgetChordUpdatesStateWithoutRoutingAnotherAction() {
     assert(state.held.empty() && constructed == destroyed);
     for (const auto &entry : trace)
         assert(entry != "process");
+}
+
+void releaseProgressSurvivesPhaseAdaptersWithoutReplaying() {
+    for (const auto stage : {Failure::Construct, Failure::Update, Failure::Process, Failure::Post}) {
+        State state;
+        expectedState = &state;
+        InputEventButtons buttons;
+        InputSequence task({{10, {{InputDevice::Keyboard, 83}, {InputDevice::Mouse, 65}}, {}}});
+        GameInputEvents press(layout, api, buttons, &state);
+        task.beforeTick(100, press);
+        assert(state.held.size() == 2 && buttons.active());
+        task.cancel("Fixture cancellation");
+        failure = stage;
+        GameInputEvents release(layout, api, buttons, &state);
+        task.cleanup(release);
+        assert(task.state() == InputSequenceState::Releasing && buttons.active());
+        // A failed mouse release cannot keep the rest of the chord down.
+        assert(!state.held.contains(83));
+        const auto beforeRetry = constructed;
+        GameInputEvents nextPhase(layout, api, buttons, &state);
+        task.cleanup(nextPhase);
+        if (stage == Failure::Construct) {
+            assert(constructed == beforeRetry + 1 && task.state() == InputSequenceState::Aborted);
+            assert(state.held.empty() && !buttons.active());
+        } else {
+            assert(constructed == beforeRetry && task.state() == InputSequenceState::Releasing);
+            assert(buttons.active() && task.hasHeldInput());
+            // Local state was cleared even when routing/post-update failed. It is not proof of completed cleanup.
+            assert(state.held.empty());
+        }
+        assert(constructed == destroyed);
+    }
+}
+
+void releaseNeverTargetsAReplacementInputState() {
+    State state, replacement;
+    expectedState = &state;
+    InputEventButtons buttons;
+    GameInputEvents first(layout, api, buttons, &state);
+    first.button({InputDevice::Keyboard, 83}, true);
+    const auto before = constructed;
+    bool rejected = false;
+    try {
+        GameInputEvents other(layout, api, buttons, &replacement);
+        other.button({InputDevice::Keyboard, 83}, false);
+    } catch (const std::invalid_argument &) {
+        rejected = true;
+    }
+    assert(rejected && constructed == before && buttons.active() && state.held.contains(83));
+    first.button({InputDevice::Keyboard, 83}, false);
+    assert(state.held.empty() && !buttons.active());
 }
 
 void invalidLayoutNeverConstructsAnEvent() {
@@ -204,7 +284,8 @@ void invalidLayoutNeverConstructsAnEvent() {
             invalid.stateMouseX = invalid.stateSize;
         bool rejected = false;
         try {
-            GameInputEvents emitter(invalid, api, &state);
+            InputEventButtons buttons;
+            GameInputEvents emitter(invalid, api, buttons, &state);
         } catch (const std::invalid_argument &) {
             rejected = true;
         }
@@ -309,8 +390,11 @@ void onlyTheOwnedRunningWorldSuppliesAnInputClock() {
 
 int main() {
     normalRoutingAndLiveMousePosition();
+    mouseEntryRevalidatesBeforeTheFollowingMove();
     failedDispatchRemainsReleasable();
     widgetChordUpdatesStateWithoutRoutingAnotherAction();
+    releaseProgressSurvivesPhaseAdaptersWithoutReplaying();
+    releaseNeverTargetsAReplacementInputState();
     invalidLayoutNeverConstructsAnEvent();
     onlyTheOwnedRunningWorldSuppliesAnInputClock();
 }

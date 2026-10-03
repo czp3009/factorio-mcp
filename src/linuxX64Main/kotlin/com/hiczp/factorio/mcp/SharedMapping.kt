@@ -56,7 +56,8 @@ internal class SharedMapping private constructor(
 
     companion object {
         private fun validateSize(size: Long) {
-            require(size in 1..(64L * 1024 * 1024)) { "Linux IPC size exceeds supported bounds" }
+            val maximum = maxOf(sizeOf<FmLinuxShared>(), sizeOf<FmLinuxInputTask>())
+            require(size in 1..maximum) { "Linux IPC size exceeds supported wire bounds" }
         }
 
         fun create(size: Long): SharedMapping {

@@ -7,6 +7,11 @@ import com.hiczp.factorio.mcp.nativebridge.TimedInputLayout
 import com.hiczp.factorio.mcp.processModule
 import com.hiczp.factorio.mcp.readPdbVirtualMethods
 import com.hiczp.factorio.mcp.resolveSymbols
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
+import kotlin.test.assertTrue
+import kotlin.time.TimeSource
 import kotlinx.cinterop.alloc
 import kotlinx.cinterop.memScoped
 import kotlinx.cinterop.toKString
@@ -15,11 +20,6 @@ import platform.windows.CloseHandle
 import platform.windows.OpenProcess
 import platform.windows.PROCESS_QUERY_INFORMATION
 import platform.windows.PROCESS_VM_READ
-import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertNotEquals
-import kotlin.test.assertTrue
-import kotlin.time.TimeSource
 
 /** Read-only acceptance for optional adapters against an explicitly selected local client. */
 class DebugMetadataAcceptanceTest {
@@ -94,7 +94,7 @@ class DebugMetadataAcceptanceTest {
             symbols.visibility.getOrThrow()
             symbols.progress.getOrThrow()
             symbols.elements.getOrThrow()
-            symbols.sprites.getOrThrow()
+            symbols.icons.getOrThrow()
             symbols.conditions.getOrThrow()
             symbols.switches.getOrThrow()
             memScoped {

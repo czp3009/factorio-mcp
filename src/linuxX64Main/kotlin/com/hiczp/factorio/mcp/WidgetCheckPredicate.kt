@@ -8,7 +8,7 @@ internal data class WidgetCheckPredicate(val offset: Long, val checkedValue: Int
 
     companion object {
         fun resolve(image: ElfImage): WidgetCheckPredicate {
-            val debug = DwarfInlines(image)
+            val debug = image.inlines
             val fields = listOf("nextCheckState", "dispatchCheckChange").flatMap { owner ->
                 val function = image.symbol("_ZN4agui12ToggleButton${owner.length}${owner}Ev")
                 val bytes = image.functionBytes(function, 4096)

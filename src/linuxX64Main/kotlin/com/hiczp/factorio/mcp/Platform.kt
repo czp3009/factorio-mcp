@@ -8,6 +8,7 @@
 package com.hiczp.factorio.mcp
 
 import kotlinx.cinterop.*
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.newSingleThreadContext
 import kotlinx.coroutines.withContext
 import kotlinx.io.*
@@ -108,7 +109,29 @@ internal actual class GameProcess actual constructor(private val pid: Int) : Gam
     actual override suspend fun sendChat(text: String): GameSnapshot =
         withContext(dispatcher) { checkNotNull(client).sendChat(text) }
 
-    actual override suspend fun beginInput(request: InputSequenceRequest): GameInputTask = super.beginInput(request)
+    actual override suspend fun beginInput(request: InputSequenceRequest): GameInputTask {
+        var admitted: GameInputTask? = null
+        try {
+            return withContext(dispatcher) {
+                val task = checkNotNull(client).beginInput(request)
+                admitted = task
+                object : GameInputTask {
+                    override suspend fun awaitResult() = withContext(dispatcher) { task.awaitResult() }
+
+                    override suspend fun close() = withContext(dispatcher) { task.close() }
+                }
+            }
+        } catch (failure: Throwable) {
+            withContext(NonCancellable + dispatcher) {
+                try {
+                    admitted?.close()
+                } catch (cleanup: Throwable) {
+                    failure.addSuppressed(cleanup)
+                }
+            }
+            throw failure
+        }
+    }
 
     actual override suspend fun awaitExit() = super.awaitExit()
 

@@ -8,6 +8,8 @@ internal class PrivateValueCopies(
     reads: Map<Long, Read>,
     produced: Map<Long, Read> = emptyMap(),
     private val scalarArguments: Map<Int, Int> = emptyMap(),
+    callResults: Map<Long, Read> = emptyMap(),
+    private val terminalConsumer: Long? = null,
 ) {
     data class Read(val source: Long, val field: InlineArgumentFields.Field)
     private data class ByteSource(val source: Long, val offset: Long)
@@ -19,11 +21,18 @@ internal class PrivateValueCopies(
     private val before = mutableMapOf<Long, State>()
 
     init {
-        // Empty borrow contracts require that no local pointer reaches an external call/store. This
-        // permits retaining scalar spills across calls without assuming that borrowed output is unchanged.
-        ConstructorValues(flow, emptyMap())
+        // The optional terminal call is excluded only from escape validation. Every query observes
+        // its pre-call state, and no successor is analyzed. All earlier calls/stores still cannot
+        // receive a frame alias. No assumption about the terminal callee's borrowed extent is needed.
+        terminalConsumer?.let {
+            require(it in flow.reachable && flow.body.getValue(it).operation == Operation.CALL &&
+                    flow.successors.getValue(it).isEmpty()) { "Private bytes have post-consumer observations" }
+        }
+        ConstructorValues(terminalConsumer?.let(flow::withoutTerminal) ?: flow, emptyMap())
         require(
-            reads.size + produced.size + scalarArguments.size in 1..64 && reads.keys.intersect(produced.keys).isEmpty()
+            reads.size + produced.size + scalarArguments.size + callResults.size in 1..64 &&
+                    reads.keys.intersect(produced.keys).isEmpty() &&
+                    (reads.keys + produced.keys).intersect(callResults.keys).isEmpty()
         )
         require(scalarArguments.all { (register, width) ->
             register in listOf(7, 6, 2, 1, 8, 9) && width in listOf(
@@ -33,7 +42,11 @@ internal class PrivateValueCopies(
                 8
             )
         })
-        require(scalarArguments.isEmpty() || (reads.values + produced.values).all { it.source >= 0 })
+        require(scalarArguments.isEmpty() || (reads.values + produced.values + callResults.values).all { it.source >= 0 })
+        for ((site, value) in callResults) {
+            require(site in flow.reachable && flow.body.getValue(site).operation == Operation.CALL &&
+                    value.field.width in listOf(1, 2, 4, 8) && value.field.offset in 0..4096L - value.field.width)
+        }
         for ((site, read) in reads) {
             val field = read.field
             val instruction = flow.body.getValue(site)
@@ -104,6 +117,11 @@ internal class PrivateValueCopies(
                 }
             }
             when (instruction.operation) {
+                Operation.ATOMIC_EXCHANGE_ADD -> {
+                    require(instruction.destination is Memory && instruction.source is Register)
+                    write(instruction.destination, emptyList())
+                    write(instruction.source, emptyList())
+                }
                 Operation.MOV, Operation.MOVZX, Operation.SCALAR_MOV, Operation.VECTOR_MOV -> {
                     val source = reads[site]?.let { input ->
                         List(input.field.width) { ByteSource(input.source, input.field.offset + it) }
@@ -127,8 +145,14 @@ internal class PrivateValueCopies(
                         left.mapIndexed { index, byte -> byte.takeIf { it == right.getOrNull(index) } })
                 }
 
-                Operation.CALL -> for (register in listOf(0, 1, 2, 6, 7, 8, 9, 10, 11) + (16..31))
-                    state.registers[register] = List(16) { null }
+                Operation.CALL -> {
+                    for (register in listOf(0, 1, 2, 6, 7, 8, 9, 10, 11) + (16..31))
+                        state.registers[register] = List(16) { null }
+                    callResults[site]?.let { value ->
+                        write(Register(0, value.field.width),
+                            List(value.field.width) { ByteSource(value.source, value.field.offset + it) })
+                    }
+                }
 
                 Operation.PUSH -> {
                     val slot = checkNotNull(frame.registers(site)[4]) - 8
@@ -184,12 +208,23 @@ internal class PrivateValueCopies(
 
     fun field(site: Long, register: Register): Read {
         require(register.number in 0..31 && register.width in listOf(1, 2, 4, 8, 16) && site in flow.reachable)
-        val bytes = before.getValue(site).registers[register.number].take(register.width)
+        return field(before.getValue(site).registers[register.number].take(register.width))
+    }
+
+    /** Private bytes before the sole terminal consumer; does not establish that callee's type or ABI. */
+    fun terminalField(argument: Int, extent: Int, offset: Long, width: Int): Read {
+        val site = checkNotNull(terminalConsumer)
+        require(width in listOf(1, 2, 4, 8, 16) && offset in 0..extent - width.toLong())
+        val start = frame.argument(site, argument, extent) + offset
+        return field(List(width) { before.getValue(site).locals[start + it] })
+    }
+
+    private fun field(bytes: List<ByteSource?>): Read {
         val first = bytes.firstOrNull() ?: error("Copy result has no original input bytes")
         require(bytes.withIndex().all { (index, value) -> value == first.copy(offset = first.offset + index) }) {
             "Copied scalar is partial, changed or assembled from different input fields"
         }
-        return Read(first.source, InlineArgumentFields.Field(first.offset, register.width))
+        return Read(first.source, InlineArgumentFields.Field(first.offset, bytes.size))
     }
 
     fun argument(site: Long, register: Register): Int {

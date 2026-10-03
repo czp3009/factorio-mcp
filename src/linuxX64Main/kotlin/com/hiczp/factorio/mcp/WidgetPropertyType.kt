@@ -13,8 +13,8 @@ internal data class WidgetPropertyType(val table: Long, val size: Long, val base
 
         fun resolve(image: ElfImage, concreteType: String, baseType: String, extent: Long): WidgetPropertyType {
             val size = SysVObjectSize.resolve(image, destructorOwner(concreteType))
-            val pointers = ElfPointers(image)
-            val names = image.symbols().filter { it.type == 1 && it.name.startsWith("_ZTI") }.groupBy { it.address }
+            val pointers = image.pointers
+            val names = image.rttiByAddress
             val cache = mutableMapOf<Long, ItaniumClass>()
             fun load(address: Long): ItaniumClass = cache.getOrPut(address) {
                 val name = names[address]?.map { it.name }?.distinct()?.singleOrNull()

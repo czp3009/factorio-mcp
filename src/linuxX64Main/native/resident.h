@@ -14,6 +14,11 @@
 #include "frame_context.h"
 #include "frame_api.h"
 #include "frame_hook_owner.h"
+#include "worker_completion.h"
+#include "input_task_wire.h"
+#include "mouse_input_event.h"
+#include "input_dispatch.h"
+#include "game_state.h"
 
 enum FmLinuxCommand {
     FM_LINUX_IDLE = 0,
@@ -35,7 +40,10 @@ enum FmLinuxOperation {
     FM_LINUX_INPUT_CONTEXT = 10,
     FM_LINUX_CHAT = 11,
     FM_LINUX_CHAT_READ = 12,
-    FM_LINUX_SCREENSHOT = 13
+    FM_LINUX_SCREENSHOT = 13,
+    FM_LINUX_WORKER = 14,
+    FM_LINUX_INPUT = 15,
+    FM_LINUX_INPUT_CANCEL = 16
 };
 
 // Raw same-callback scalar observations only. Borrowed game pointers never cross the native wire.
@@ -50,6 +58,14 @@ typedef struct FmLinuxRetirementConfig {
     uint64_t original;
     uint32_t protection;
 } FmLinuxRetirementConfig;
+
+typedef struct FmLinuxInputEvaluationConfig {
+    uint64_t entry;
+    uint64_t original;
+    uint64_t caller;
+    uint32_t protection;
+    uint32_t thread;
+} FmLinuxInputEvaluationConfig;
 
 // Supplied only after the selected executable and live dispatch have been validated by Kotlin.
 typedef struct FmLinuxHookConfig {
@@ -75,6 +91,9 @@ typedef struct FmLinuxShared {
     uint32_t protectionOwned;
     uint32_t actionOwned;
     uint64_t resultFrame;
+    FmLinuxGameStateConfig gameStateConfig;
+    FmLinuxGameState gameState;
+    int32_t gameStateError;
     FmLinuxHookConfig config;
     FmLinuxUiLayout ui;
     uint32_t nodeLimit;
@@ -95,6 +114,14 @@ typedef struct FmLinuxShared {
     FmLinuxInputContextConfig inputContextConfig;
     FmLinuxInputContextSnapshot inputContextSnapshot;
     FmLinuxRetirementConfig retirementConfig;
+    FmLinuxWorkerCompletionConfig workerConfig;
+    uint32_t workerThread;
+    uint32_t workerFailure;
+    FmLinuxInputDispatchConfig inputDispatch;
+    FmLinuxInputEvaluationConfig inputEvaluation;
+    uint32_t inputOwner;
+    int32_t inputDescriptor;
+    uint32_t inputOwned;
     FmLinuxChatConfig chatConfig;
     FmLinuxChatRequest chatRequest;
     FmLinuxChatProgress chatProgress;
@@ -115,6 +142,9 @@ static inline uint32_t *fm_linux_cancel_word(FmLinuxShared *shared) { return &sh
 static inline uint32_t *fm_linux_attached_word(FmLinuxShared *shared) { return &shared->attached; }
 static inline uint32_t *fm_linux_pointer_word(FmLinuxShared *shared) { return &shared->pointerOwned; }
 static inline uint32_t *fm_linux_action_word(FmLinuxShared *shared) { return &shared->actionOwned; }
+static inline uint32_t *fm_linux_worker_thread_word(FmLinuxShared *shared) { return &shared->workerThread; }
+static inline uint32_t *fm_linux_worker_failure_word(FmLinuxShared *shared) { return &shared->workerFailure; }
+static inline uint32_t *fm_linux_input_owned_word(FmLinuxShared *shared) { return &shared->inputOwned; }
 
 typedef struct FmLinuxResidentInfo {
     uint64_t mapping;

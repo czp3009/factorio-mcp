@@ -15,6 +15,7 @@ class ResidentChannelTest {
             ProcessHandle(getpid()).use { process ->
                 SharedMapping.create(sizeOf<FmLinuxShared>()).use { mapping ->
                     val shared = mapping.memory.reinterpret<FmLinuxShared>()
+                    shared.pointed.gameState.paused = -1
                     fm_ipc_store(fm_linux_attached_word(shared), 1u)
                     withTimeout(5000) { test(ResidentChannel(process, mapping), shared) }
                 }

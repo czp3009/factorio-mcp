@@ -12,7 +12,7 @@ internal data class ScriptTickField(val scriptMap: Long, val mapTick: Long) {
         fun resolve(
             image: ElfImage, scriptSize: Long, mapSize: Long,
             name: String = "_ZN13LuaGameScript11luaReadTickEP9lua_State", owner: String = "luaReadTick",
-            debug: DwarfInlines = DwarfInlines(image)
+            debug: DwarfInlines = image.inlines
         ): ScriptTickField {
             val function = image.symbol(name)
             val instances = debug.find(function, owner, setOf("toLuaDouble"))

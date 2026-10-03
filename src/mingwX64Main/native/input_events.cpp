@@ -1,6 +1,8 @@
 #include "input_events.h"
+#include <algorithm>
 #include <array>
 #include <cstring>
+#include <exception>
 #include <stdexcept>
 
 namespace {
@@ -59,9 +61,9 @@ void *gameInputState(const Symbols &symbols) {
     return state;
 }
 
-GameInputEvents::GameInputEvents(const InputEventLayout &values, const InputEventFunctions &api, void *receiver,
-                                 bool routeEvents)
-    : layout(values), functions(api), state(receiver), route(routeEvents) {
+GameInputEvents::GameInputEvents(const InputEventLayout &values, const InputEventFunctions &api,
+                                 InputEventButtons &ownedButtons, void *receiver, bool routeEvents)
+    : layout(values), functions(api), buttons(ownedButtons), state(receiver), route(routeEvents) {
     require(state && api.construct && api.destroy && api.ticks && api.update && api.process && api.postUpdate,
             "Game input event adapter is unavailable");
     require(layout.eventSize >= 4 && layout.eventSize <= 256 && layout.stateSize >= 4,
@@ -80,7 +82,7 @@ GameInputEvents::GameInputEvents(const InputEventLayout &values, const InputEven
 }
 
 void GameInputEvents::dispatch(int type, std::optional<uint32_t> key, std::optional<InputPosition> position,
-                               std::optional<uint32_t> button, int32_t wheel) {
+                               std::optional<uint32_t> button, int32_t wheel, InputEventProgress *progress) {
     alignas(16) unsigned char event[256];
     functions.construct(event, functions.ticks() / 1000.0, type);
 
@@ -106,6 +108,8 @@ void GameInputEvents::dispatch(int type, std::optional<uint32_t> key, std::optio
         write(event, layout.mouseWheel, wheel);
         write(event, layout.mouseWheelY, wheel);
     }
+    if (progress)
+        progress->started = true;
     functions.update(state, event);
     int result;
     try {
@@ -119,15 +123,23 @@ void GameInputEvents::dispatch(int type, std::optional<uint32_t> key, std::optio
         throw;
     }
     functions.postUpdate(state, event);
+    if (progress)
+        progress->completed = true;
     if (result != 0)
         throw std::runtime_error("Game event processing requested an application transition");
 }
 
 void GameInputEvents::move(InputPosition position) {
+    move(position, nullptr, nullptr);
+}
+
+void GameInputEvents::move(InputPosition position, void (*validate)(void *), void *owner) {
     require(position.x >= 0 && position.y >= 0, "Viewport coordinates must be nonnegative");
     // A synthetic cursor enters the client just as a real pointer does, without changing OS focus.
     if (!read<bool>(state, layout.stateMouseInWindow))
         dispatch(layout.mouseEnter, {}, position, {});
+    if (validate)
+        validate(owner);
     dispatch(layout.mouseMove, {}, position, {});
 }
 
@@ -139,14 +151,53 @@ void GameInputEvents::wheel(int32_t direction) {
 
 void GameInputEvents::button(InputButton button, bool down) {
     require(button.code != 0, "Input button must have a resolved game code");
+    require(button.device == InputDevice::Keyboard || button.device == InputDevice::Mouse, "Unsupported input device");
+    auto entry = std::find_if(buttons.entries.begin(), buttons.entries.end(),
+                              [&](const auto &entry) { return entry.state && entry.button == button; });
+    if (down) {
+        require(entry == buttons.entries.end(), "Input button already belongs to this task");
+        entry = std::find_if(buttons.entries.begin(), buttons.entries.end(),
+                             [](const auto &entry) { return !entry.state; });
+        require(entry != buttons.entries.end(), "Input button ownership exceeds its bound");
+        *entry = {button, state, {}, {}};
+    } else {
+        if (entry == buttons.entries.end())
+            return;
+        if (!entry->press.started || entry->release.completed) {
+            *entry = {};
+            return;
+        }
+        require(entry->state == state, "Input state changed before button release");
+        require(!entry->release.started, "Input release did not finish; an uncertain event cannot be replayed");
+    }
+    auto &progress = down ? entry->press : entry->release;
     if (button.device == InputDevice::Keyboard) {
-        dispatch(down ? layout.keyDown : layout.keyUp, button.code, {}, {});
-    } else if (button.device == InputDevice::Mouse) {
+        dispatch(down ? layout.keyDown : layout.keyUp, button.code, {}, {}, 0, &progress);
+    } else {
         // Use the current in-game cursor for both edges, including cancellation after another move.
         const InputPosition position{read<int32_t>(state, layout.stateMouseX),
                                      read<int32_t>(state, layout.stateMouseY)};
-        dispatch(down ? layout.mouseDown : layout.mouseUp, {}, position, button.code);
-    } else {
-        throw std::invalid_argument("Unsupported input device");
+        dispatch(down ? layout.mouseDown : layout.mouseUp, {}, position, button.code, 0, &progress);
     }
+    if (!down)
+        *entry = {};
+}
+
+bool InputEventButtons::active() const {
+    return std::any_of(entries.begin(), entries.end(), [](const auto &entry) { return entry.state != nullptr; });
+}
+
+void InputEventButtons::release(GameInputEvents &events) {
+    std::exception_ptr failure;
+    for (auto entry = entries.rbegin(); entry != entries.rend(); ++entry)
+        if (entry->state) {
+            try {
+                events.button(entry->button, false);
+            } catch (...) {
+                if (!failure)
+                    failure = std::current_exception();
+            }
+        }
+    if (failure)
+        std::rethrow_exception(failure);
 }

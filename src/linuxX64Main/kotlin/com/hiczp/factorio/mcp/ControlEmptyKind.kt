@@ -6,7 +6,7 @@ import com.hiczp.factorio.mcp.X64Instructions.*
 internal object ControlEmptyKind {
     fun resolve(
         image: ElfImage, extent: Long, type: Long, code: Long,
-        string: NativeStringLayout, debug: DwarfInlines = DwarfInlines(image),
+        string: NativeStringLayout, debug: DwarfInlines = image.inlines,
         function: String = "_ZNK17ControlInputValue4saveB5cxx11Ev"
     ): Int {
         val entry = image.symbol(function)

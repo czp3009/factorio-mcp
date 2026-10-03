@@ -42,6 +42,23 @@ class EventCopyCasesTest {
             }
             assertTrue((code until code + 4).all { it in proofs.getValue(3).bytes })
             assertTrue(proofs.getValue(3).path.any { flow.body.getValue(it).operation == Operation.VECTOR_MOV })
+            val complete = proofs.getValue(3)
+            val required = listOf(header.type to 4, header.time to 8, code to 4)
+                .flatMap { (offset, width) -> (offset until offset + width).toList() }.toSet()
+            val unused = (0L until header.extent).first { it !in complete.reads && it !in complete.bytes }
+            val initialized = complete.reads + unused
+            val selectedCase = EventCopyCases.Case(required, initialized)
+            assertEquals(complete, EventCopyCases.analyze(flow, tables.single(), header, mapOf(3L to selectedCase))[3])
+            // Extra initialized padding need not be copied, but every actual scalar/vector source byte must exist.
+            val payloadByte = complete.reads.first { it !in required }
+            assertFails {
+                EventCopyCases.analyze(flow, tables.single(), header,
+                    mapOf(3L to selectedCase.copy(initialized = initialized - payloadByte)))
+            }
+            assertFails {
+                EventCopyCases.analyze(flow, tables.single(), header,
+                    mapOf(3L to selectedCase.copy(required = required + unused)))
+            }
             assertFails { resolve(kinds = setOf(1, 3)) }
             assertFails { resolve(kinds = setOf(0, 5)) }
             assertFails { resolve(selectedHeader = header.copy(extent = code.toInt())) }

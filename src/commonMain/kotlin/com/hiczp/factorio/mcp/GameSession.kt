@@ -6,7 +6,14 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
+import kotlin.time.TimeSource
 
 /** All transports share one attachment; detach and process exit share resource cleanup. */
 internal class GameSession(private val open: (Int) -> GameConnection = ::GameProcess) {
@@ -22,6 +29,8 @@ internal class GameSession(private val open: (Int) -> GameConnection = ::GamePro
     private val lifecycle = Mutex()
     private val command = Mutex()
     private val registry = Mutex()
+    private val screenshotAdmission = Mutex()
+    private var activeScreenshot: Deferred<GameSnapshot>? = null
     private val observations = mutableSetOf<Job>()
     private val observerScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var attachment: Attachment? = null
@@ -163,7 +172,15 @@ internal class GameSession(private val open: (Int) -> GameConnection = ::GamePro
         if (current == null) {
             exitedPid?.let { exitedStatus(it) } ?: detachedStatus()
         } else {
-            useConnection(current) { it.execute(2).statusJson(current.pid) }
+            try {
+                useConnection(current) { it.execute(2).statusJson(current.pid) }
+            } catch (failure: Exception) {
+                // A process can exit during the native observation, after the preflight liveness check.
+                // Report the exit only after resource cleanup succeeds; retain every cleanup failure.
+                if (failure !is CancellationException && attachment == null && exitedPid == current.pid)
+                    exitedStatus(current.pid)
+                else throw failure
+            }
         }
     }
 
@@ -188,9 +205,45 @@ internal class GameSession(private val open: (Int) -> GameConnection = ::GamePro
         buildJsonObject { put("dispatch", "completed") }
     }
 
-    suspend fun screenshot(): GameSnapshot = observe {
-        val target = attachment ?: error("Call attach before screenshot")
-        useConnection(target) { it.execute(6) }
+    suspend fun screenshot(): GameSnapshot = supervisorScope {
+        val task = async(start = CoroutineStart.LAZY) {
+            observe {
+                val target = attachment ?: error("Call attach before screenshot")
+                useConnection(target) { it.execute(6) }
+            }
+        }
+        try {
+            screenshotAdmission.withLock {
+                check(activeScreenshot == null || activeScreenshot!!.isCompleted) {
+                    "Another screenshot is active; cancel it before capturing again"
+                }
+                activeScreenshot = task
+                task.start()
+            }
+            task.await()
+        } finally {
+            withContext(NonCancellable) {
+                task.cancel()
+                task.join()
+                screenshotAdmission.withLock {
+                    if (activeScreenshot === task) activeScreenshot = null
+                }
+            }
+        }
+    }
+
+    suspend fun cancelScreenshot(): JsonObject = withContext(NonCancellable) {
+        screenshotAdmission.withLock {
+            val task = activeScreenshot
+            val cancelled = task != null && !task.isCompleted
+            task?.cancel(CancellationException("Screenshot cancelled"))
+            task?.join()
+            activeScreenshot = null
+            buildJsonObject {
+                put("dispatch", "completed")
+                put("cancelled", cancelled)
+            }
+        }
     }
 
     suspend fun input(request: InputSequenceRequest): JsonObject {
@@ -261,18 +314,37 @@ internal class GameSession(private val open: (Int) -> GameConnection = ::GamePro
         }
     }
 
-    suspend fun readChat(after: String?, limit: Int): JsonObject = observe {
+    suspend fun readChat(offset: ChatOffset?, limit: Int, timeout: Int = 0): JsonObject = observe(serialized = false) {
         require(limit in 1..128) { "Chat limit must be 1..128" }
-        val target = attachment ?: error("Call attach before chat_read")
-        val snapshot = useConnection(target) { it.execute(10) }
-        val result = target.chat.read(checkNotNull(snapshot.chat), after, limit)
-        JsonObject(
-            result +
-                    mapOf(
+        require(timeout >= 0) { "Chat timeout must be nonnegative seconds" }
+        val start = TimeSource.Monotonic.markNow()
+        var selected: Attachment? = null
+        var last: JsonObject? = null
+        while (true) {
+            if (last != null && start.elapsedNow() >= timeout.seconds) return@observe last
+            val result = command.withLock {
+                val target = attachment ?: error("Call attach before chat_read")
+                check(selected == null || selected === target) { "Chat attachment changed while waiting" }
+                selected = target
+                val snapshot = useConnection(target) { it.execute(10) }
+                JsonObject(
+                    target.chat.read(checkNotNull(snapshot.chat), offset, limit) + mapOf(
                         "ui_frame" to JsonPrimitive(snapshot.frame),
                         "state" to JsonPrimitive(snapshot.state),
                     )
-        )
+                )
+            }
+            last = result
+            if (timeout == 0 || result.getValue("messages").jsonArray.isNotEmpty() ||
+                result.getValue("history_lost").jsonPrimitive.boolean
+            ) return@observe result
+            val remaining = timeout.seconds - start.elapsedNow()
+            if (remaining <= Duration.ZERO) return@observe result
+            // Release command ownership between observations so chat_send, other reads and detach can proceed.
+            delay(minOf(remaining, 250.milliseconds))
+        }
+        @Suppress("UNREACHABLE_CODE")
+        error("Unreachable chat wait")
     }
 
     suspend fun sendChat(text: String): JsonObject = observe {

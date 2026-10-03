@@ -12,7 +12,7 @@ internal class ChatAdmissionMetadata private constructor(val layout: ChatAdmissi
             val (resolved, readonly) = image.withReadonlyEvidence {
                 image.withFunctionEvidence {
                     val layout = ChatAdmissionLayout.resolve(image)
-                    val reader = ElfPointers(image)
+                    val reader = image.pointers
                     for (type in listOf("10LuaContext", "6Player", "8GameView", "17GameActionHandler")) {
                         val identity = ItaniumType.resolve(image, type)
                         scalars[identity.addressPoint - 16] = 0

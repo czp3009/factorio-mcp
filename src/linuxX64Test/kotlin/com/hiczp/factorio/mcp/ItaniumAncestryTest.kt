@@ -15,6 +15,7 @@ class ItaniumAncestryTest {
         val derived = ItaniumClass(300, listOf(edge(200, 16)))
         val types = listOf(base, parent, derived).associateBy { it.typeInfo }
         assertEquals(24, derived.baseOffset(base, 64, 40, types::getValue))
+        assertEquals(24, derived.baseDisplacement(base, types::getValue))
         assertEquals(0, base.baseOffset(base, 40, 40, types::getValue))
         assertFails { derived.baseOffset(base, 63, 40, types::getValue) }
         assertFails { derived.baseOffset(base, 64, 40) { base } }

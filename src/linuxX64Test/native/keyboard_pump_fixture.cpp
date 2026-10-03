@@ -2,33 +2,41 @@
 #include <cassert>
 #include <cerrno>
 #include <cstddef>
+#include <memory>
 #include <stdexcept>
 #include <sys/mman.h>
+#include <sys/syscall.h>
 #include <thread>
+#include <unistd.h>
 
 namespace {
 struct Value {
     uint8_t held = 0, blocked = 0;
 };
+
 struct Record {
     int32_t code = 42;
     Value value;
     uint16_t padding = 0;
 };
+
 struct State {
     uint64_t buttons = 0;
     Record *begin = nullptr, *end = nullptr;
 };
+
 struct Global {
     State *state;
 };
+
 struct Event {
     uint32_t type = 0, code = 0;
     double time = 0;
 };
+
 struct Frame {
-    uintptr_t outer = 0x2000;
     Event event;
+    uintptr_t outer = 0x2000;
 };
 
 bool failClock = false;
@@ -61,14 +69,32 @@ struct Fixture {
         site.original = table[0];
         site.caller = 0x1000;
         site.pumpCaller = frame.outer;
-        site.eventFromFrame = offsetof(Frame, event);
+        site.stackReturn = offsetof(Frame, outer);
+        site.eventFromStack = offsetof(Frame, event);
         site.eventExtent = sizeof(Event);
         site.protection = PROT_READ;
-        config.owner = {reinterpret_cast<uintptr_t>(&root), sizeof(Global), offsetof(Global, state), sizeof(State),
-            offsetof(State, buttons), sizeof(Event), offsetof(Event, type), offsetof(Event, time),
-            offsetof(Event, code), 3, 4, {1, 2, 3}, {2, 4, 8}};
-        config.keys = {0, offsetof(State, begin), offsetof(State, end), sizeof(Record), offsetof(Record, code),
-            offsetof(Record, value), sizeof(Value), offsetof(Value, held), offsetof(Value, blocked)};
+        config.owner = {reinterpret_cast<uintptr_t>(&root),
+                        sizeof(Global),
+                        offsetof(Global, state),
+                        sizeof(State),
+                        offsetof(State, buttons),
+                        sizeof(Event),
+                        offsetof(Event, type),
+                        offsetof(Event, time),
+                        offsetof(Event, code),
+                        3,
+                        4,
+                        {1, 2, 3},
+                        {2, 4, 8}};
+        config.keys = {0,
+                       offsetof(State, begin),
+                       offsetof(State, end),
+                       sizeof(Record),
+                       offsetof(Record, code),
+                       offsetof(Record, value),
+                       sizeof(Value),
+                       offsetof(Value, held),
+                       offsetof(Value, blocked)};
         config.event.extent = sizeof(Event);
         config.event.type = offsetof(Event, type);
         config.event.time = offsetof(Event, time);
@@ -126,12 +152,14 @@ int main() {
         assert(key.release() == 0 && !key.owned() && f.ups == 1 && !f.record.value.held);
         assert(key.release() == 0 && f.ups == 1);
     }
-    for (bool blocked : {false, true}) {
+    // Existing user state does not prevent MCP dispatch or remove its release obligation.
+    for (Value initial : {Value{1, 0}, Value{0, 1}, Value{1, 1}}) {
         Fixture f;
-        f.record.value = {uint8_t(!blocked), uint8_t(blocked)};
+        f.record.value = initial;
         KeyboardPumpKey key(f.pump, f.config, Fixture::run, &f);
-        assert(key.press(42) == EBUSY && !key.owned() && f.calls == 0);
-        assert(key.release() == EBUSY && f.calls == 0);
+        assert(key.press(42) == 0 && key.owned() && f.downs == 1);
+        assert(key.release() == 0 && !key.owned() && f.ups == 1 && !f.record.value.held);
+        assert(key.release() == 0 && f.ups == 1);
     }
     {
         Fixture f;
@@ -198,6 +226,25 @@ int main() {
         cleanup.join();
         assert(key.owned() && f.ups == 0);
         assert(key.release() == 0 && !key.owned());
+    }
+    for (bool uncertainRelease : {false, true}) {
+        Fixture f;
+        std::unique_ptr<KeyboardPumpKey> key;
+        std::thread evaluation([&] {
+            key = std::make_unique<KeyboardPumpKey>(f.pump, f.config, Fixture::run, &f,
+                                                    static_cast<pid_t>(syscall(SYS_gettid)));
+            assert(key->press(42) == 0 && key->owned() && f.downs == 1);
+            if (uncertainRelease) {
+                f.throwAfterDelivery = true;
+                assert(key->release() == EFAULT && key->owned() && f.ups == 1);
+            }
+        });
+        evaluation.join();
+        f.throwAfterDelivery = false;
+        // The frontend can release a worker's held key. An up that already entered the native route
+        // retains its uncertainty across the thread transition and is never replayed.
+        assert(key->release() == (uncertainRelease ? EFAULT : 0));
+        assert(key->owned() == uncertainRelease && f.ups == 1);
     }
     for (unsigned invalid = 0; invalid < 4; ++invalid) {
         Fixture f;

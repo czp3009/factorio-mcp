@@ -8,7 +8,7 @@ import com.hiczp.factorio.mcp.X64Instructions.Operation
 internal object ChatConsoleCounts {
     fun verify(image: ElfImage, lists: ChatConsoleLists) {
         val function = image.symbol("_ZN13OutputConsole22removeMessagesByPlayerERK6Player")
-        val ranges = DwarfInlines(image).find(function, "removeMessagesByPlayer", setOf("_M_dec_size"))
+        val ranges = image.inlines.find(function, "removeMessagesByPlayer", setOf("_M_dec_size"))
             .flatMap { it.ranges }.map { DwarfRanges.Range(it.start - function.address, it.end - function.address) }
         analyze(X64ControlFlow.resolve(image, function), ranges, lists.lists.map { it.count }.toSet())
     }

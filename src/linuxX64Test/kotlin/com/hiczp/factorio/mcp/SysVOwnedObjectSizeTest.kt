@@ -21,6 +21,23 @@ class SysVOwnedObjectSizeTest {
             assertEquals(constant("fixture_owner_pointer"), proof.pointer)
             val symbol = image.symbol("fixture_destroy_owner")
             val bytes = image.functionBytes(symbol, 256)
+            val table = 0x1000L
+            val address = symbol.address - 10
+            val displacement = table - address - 7
+            val prefix = byteArrayOf(0x48, 0x8d.toByte(), 0x05) +
+                    ByteArray(4) { (displacement ushr (it * 8)).toByte() } +
+                    byteArrayOf(0x48, 0x89.toByte(), 0x07)
+            val polymorphic = BinaryView(prefix + bytes.bytes(0, bytes.size.toInt()))
+            assertEquals(proof, SysVOwnedObjectSize.analyze(polymorphic, address,
+                image.symbol("_ZN6ObjectD2Ev").address, image.symbol("fixture_delete").address, table))
+            for (unverified in listOf(null, table + 8)) assertFails {
+                SysVOwnedObjectSize.analyze(polymorphic, address,
+                    image.symbol("_ZN6ObjectD2Ev").address, image.symbol("fixture_delete").address, unverified)
+            }
+            assertFails {
+                SysVOwnedObjectSize.analyze(bytes, symbol.address,
+                    image.symbol("_ZN6ObjectD2Ev").address, image.symbol("fixture_delete").address, table)
+            }
             val branch = X64Instructions(bytes).all().first { it.operation == X64Instructions.Operation.JCC }
             val reversed = bytes.bytes(0, bytes.size.toInt())
             val opcode = branch.offset.toInt() + if (branch.size == 6) 1 else 0

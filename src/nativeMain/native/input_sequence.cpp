@@ -1,5 +1,6 @@
 #include "input_sequence.h"
 #include <algorithm>
+#include <exception>
 #include <limits>
 #include <stdexcept>
 #include <utility>
@@ -40,11 +41,19 @@ InputSequence::InputSequence(std::vector<InputStep> values) : steps(std::move(va
 }
 
 void InputSequence::release(InputEmitter &emitter) {
-    while (!held.empty()) {
-        emitter.button(held.back(), false);
-        // The adapter reconciles native ownership on repeated cleanup calls; it must not replay an uncertain up.
-        held.pop_back();
+    std::exception_ptr failure;
+    for (size_t i = held.size(); i > 0; --i) {
+        try {
+            emitter.button(held[i - 1], false);
+            // Retain only unfinished obligations. A failed release must not keep other chord keys pressed.
+            held.erase(held.begin() + i - 1);
+        } catch (...) {
+            if (!failure)
+                failure = std::current_exception();
+        }
     }
+    if (failure)
+        std::rethrow_exception(failure);
 }
 
 void InputSequence::fail(const char *message) {

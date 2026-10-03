@@ -26,7 +26,7 @@ class WorldQueryAcceptanceTest {
     @Test
     fun boundedApiReadsPreserveWorldStateAndRecoverAfterErrors() = runBlocking {
         fun environment(name: String) = getenv(name)?.toKString()?.takeIf { it.isNotBlank() }
-        val serverLog = environment("FACTORIO_MCP_UI_SERVER_LOG") ?: return@runBlocking
+        val serverLog = checkNotNull(environment("FACTORIO_MCP_UI_SERVER_LOG"))
         val clientLog = checkNotNull(environment("FACTORIO_MCP_UI_CLIENT_LOG"))
         val client = McpHttpClient(checkNotNull(environment("FACTORIO_MCP_ACCEPTANCE_URL")))
         val pid = checkNotNull(environment("FACTORIO_MCP_TEST_PID")).toInt()

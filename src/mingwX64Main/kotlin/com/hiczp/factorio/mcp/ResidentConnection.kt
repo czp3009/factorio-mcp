@@ -182,12 +182,12 @@ internal class ResidentConnection(private val pid: UInt) {
         try {
             state =
                 MapViewOfFile(
-                    file,
-                    FILE_MAP_ALL_ACCESS.toUInt(),
-                    0u,
-                    0u,
-                    sizeOf<Shared>().toULong(),
-                )
+                        file,
+                        FILE_MAP_ALL_ACCESS.toUInt(),
+                        0u,
+                        0u,
+                        sizeOf<Shared>().toULong(),
+                    )
                     ?.reinterpret<Shared>() ?: error("Cannot map resident IPC: ${GetLastError()}")
             resources.mapping = file
             resources.shared = state
@@ -456,13 +456,6 @@ internal class ResidentConnection(private val pid: UInt) {
                 "Invalid resident control count"
             }
             check(result.optionCount <= FM_MAX_OPTIONS.toUInt()) { "Invalid resident option count" }
-            check(result.spriteCount <= FM_MAX_SPRITES.toUInt()) { "Invalid resident sprite count" }
-            fun spriteReference(value: Int): Int {
-                check(value >= -2 && value < result.spriteCount.toInt()) {
-                    "Invalid sprite reference"
-                }
-                return value
-            }
             return GameSnapshot(
                 when (result.state) {
                     1 -> "main_menu"
@@ -488,164 +481,164 @@ internal class ResidentConnection(private val pid: UInt) {
                         node.selected != 0,
                         node.truncated and 2 != 0,
                         WidgetProperties(
-                            if (node.properties and 1u != 0u)
-                                symbols.properties.getOrThrow().checkState(node.checkState)
-                            else null,
-                            if (node.properties and 2u != 0u) node.toggled != 0 else null,
-                            if (node.properties and 4u != 0u) node.selectedIndex else null,
-                            if (node.properties and 8u != 0u)
-                                SliderProperties(
-                                    node.value,
-                                    node.minimum,
-                                    node.maximum,
-                                    node.valueStep,
-                                )
-                            else null,
-                            if (node.properties and 16u != 0u) {
-                                check(
-                                    node.optionFirst <= result.optionCount &&
+                                if (node.properties and 1u != 0u)
+                                    node.checkState
+                                else null,
+                                if (node.properties and 2u != 0u) node.toggled != 0 else null,
+                                if (node.properties and 4u != 0u) node.selectedIndex else null,
+                                if (node.properties and 8u != 0u)
+                                    SliderProperties(
+                                        node.value,
+                                        node.minimum,
+                                        node.maximum,
+                                        node.valueStep,
+                                    )
+                                else null,
+                                if (node.properties and 16u != 0u) {
+                                    check(
+                                        node.optionFirst <= result.optionCount &&
                                             node.optionCount <=
-                                            result.optionCount - node.optionFirst &&
+                                                result.optionCount - node.optionFirst &&
                                             node.optionCount <= node.optionTotal &&
                                             node.optionTotal <= 65536u
-                                )
-                                WidgetOptions(
-                                    (0 until node.optionCount.toInt()).map { index ->
-                                        val option =
-                                            result.options[node.optionFirst.toInt() + index]
-                                        WidgetOption(
-                                            option.text.toKString(),
-                                            option.truncated != 0u,
-                                        )
-                                    },
-                                    node.optionTotal.toInt(),
-                                )
-                            } else null,
-                            if (node.properties and 4u != 0u)
-                                symbols.properties
-                                    .getOrThrow()
-                                    .options
-                                    .exceptionOrNull()
-                                    ?.message
-                            else null,
-                            prototype =
-                                if (node.properties and 32u != 0u)
-                                    WidgetPrototype(
-                                        node.prototypeName.toKString().takeIf {
-                                            it.isNotEmpty()
-                                        },
-                                        node.prototypeType
-                                            .toKString()
-                                            .takeIf { it.isNotEmpty() }
-                                            ?.removePrefix("class "),
-                                        node.identityTruncated and 1u != 0u,
-                                        node.identityTruncated and 2u != 0u,
                                     )
-                                else null,
-                            element =
-                                if (node.properties and 1024u != 0u)
-                                    WidgetElement(
-                                        node.elementFlags and 2u != 0u,
-                                        node.elementCount.toLong().takeIf {
-                                            node.elementFlags and 3u == 3u
-                                        },
-                                        if (node.elementFlags and 4u != 0u)
-                                            WidgetItem(
-                                                node.itemType
-                                                    .toKString()
-                                                    .removePrefix("class "),
-                                                node.elementFlags and 32u != 0u,
-                                                node.itemHealth.toDouble(),
-                                                node.durabilityLeft.takeIf {
-                                                    node.elementFlags and 8u != 0u
-                                                },
-                                                node.magazineLeft.toDouble().takeIf {
-                                                    node.elementFlags and 16u != 0u
-                                                },
+                                    WidgetOptions(
+                                        (0 until node.optionCount.toInt()).map { index ->
+                                            val option =
+                                                result.options[node.optionFirst.toInt() + index]
+                                            WidgetOption(
+                                                option.text.toKString(),
+                                                option.truncated != 0u,
                                             )
-                                        else null,
-                                    )
-                                else null,
-                            quality =
-                                if (node.properties and 512u != 0u)
-                                    WidgetPrototype(
-                                        node.qualityName.toKString().takeIf { it.isNotEmpty() },
-                                        node.qualityType
-                                            .toKString()
-                                            .takeIf { it.isNotEmpty() }
-                                            ?.removePrefix("class "),
-                                        node.identityTruncated and 4u != 0u,
-                                        node.identityTruncated and 8u != 0u,
-                                    )
-                                else null,
-                            icons =
-                                if (node.properties and 2048u != 0u)
-                                    WidgetIcons(
-                                        spriteReference(node.iconNormal),
-                                        spriteReference(node.iconHovered),
-                                        spriteReference(node.iconDisabled),
-                                    )
-                                else null,
-                            qualityCondition =
-                                if (node.properties and 4096u != 0u)
-                                    WidgetQualityCondition(
-                                        node.conditionQuality.toInt(),
-                                        node.conditionComparison.toInt(),
-                                        symbols.conditions
-                                            .getOrThrow()
-                                            .comparison(node.conditionComparison.toInt()),
-                                        if (node.conditionLookup == 1u)
-                                            node.conditionName.toKString()
-                                        else null,
-                                        node.conditionNameTruncated != 0u,
-                                        when (node.conditionLookup) {
-                                            0u -> "null"
-                                            1u -> "present"
-                                            2u -> "index_out_of_range"
-                                            else ->
-                                                error("Invalid quality condition lookup state")
                                         },
+                                        node.optionTotal.toInt(),
                                     )
+                                } else null,
+                                if (node.properties and 4u != 0u)
+                                    symbols.properties
+                                        .getOrThrow()
+                                        .options
+                                        .exceptionOrNull()
+                                        ?.message
                                 else null,
-                            progress =
-                                if (node.properties and 256u != 0u)
-                                    WidgetProgress(
-                                        node.progressValue,
-                                        symbols.progress
-                                            .getOrThrow()
-                                            .direction(node.progressDirection.toInt()),
-                                        node.progressHasText != 0u,
-                                    )
-                                else null,
-                            switch =
-                                if (node.properties and 8192u != 0u)
-                                    WidgetSwitch(
-                                        node.switchState.toInt(),
-                                        symbols.switches
-                                            .getOrThrow()
-                                            .state(node.switchState.toInt()),
-                                        node.switchAllowNone != 0u,
-                                    )
-                                else null,
-                            number =
-                                if (node.properties and 64u != 0u)
-                                    WidgetNumber(
-                                        node.numberFlags and 1u != 0u,
-                                        node.numberValue.takeIf {
-                                            node.numberFlags and 16u != 0u
-                                        },
-                                        (node.numberFlags and 2u != 0u).takeIf {
-                                            node.numberFlags and 1u != 0u
-                                        },
-                                        (node.numberFlags and 4u != 0u).takeIf {
-                                            node.numberFlags and 1u != 0u
-                                        },
-                                        (node.numberFlags and 8u != 0u).takeIf {
-                                            node.numberFlags and 1u != 0u
-                                        },
-                                    )
-                                else null,
-                        )
+                                prototype =
+                                    if (node.properties and 32u != 0u)
+                                        WidgetPrototype(
+                                            node.prototypeName.toKString().takeIf {
+                                                it.isNotEmpty()
+                                            },
+                                            node.prototypeType
+                                                .toKString()
+                                                .takeIf { it.isNotEmpty() }
+                                                ?.removePrefix("class "),
+                                            node.identityTruncated and 1u != 0u,
+                                            node.identityTruncated and 2u != 0u,
+                                        )
+                                    else null,
+                                element =
+                                    if (node.properties and 1024u != 0u)
+                                        WidgetElement(
+                                            node.elementFlags and 2u != 0u,
+                                            node.elementCount.toLong().takeIf {
+                                                node.elementFlags and 3u == 3u
+                                            },
+                                            if (node.elementFlags and 4u != 0u)
+                                                WidgetItem(
+                                                    node.itemType
+                                                        .toKString()
+                                                        .removePrefix("class "),
+                                                    node.elementFlags and 32u != 0u,
+                                                    node.itemHealth.toDouble(),
+                                                    node.durabilityLeft.takeIf {
+                                                        node.elementFlags and 8u != 0u
+                                                    },
+                                                    node.magazineLeft.toDouble().takeIf {
+                                                        node.elementFlags and 16u != 0u
+                                                    },
+                                                )
+                                            else null,
+                                        )
+                                    else null,
+                                quality =
+                                    if (node.properties and 512u != 0u)
+                                        WidgetPrototype(
+                                            node.qualityName.toKString().takeIf { it.isNotEmpty() },
+                                            node.qualityType
+                                                .toKString()
+                                                .takeIf { it.isNotEmpty() }
+                                                ?.removePrefix("class "),
+                                            node.identityTruncated and 4u != 0u,
+                                            node.identityTruncated and 8u != 0u,
+                                        )
+                                    else null,
+                                icons =
+                                    if (node.properties and 2048u != 0u)
+                                        WidgetIcons(
+                                            widgetIconReference(node.iconNormal),
+                                            widgetIconReference(node.iconHovered),
+                                            widgetIconReference(node.iconDisabled),
+                                        )
+                                    else null,
+                                qualityCondition =
+                                    if (node.properties and 4096u != 0u)
+                                        WidgetQualityCondition(
+                                            node.conditionQuality.toInt(),
+                                            node.conditionComparison.toInt(),
+                                            symbols.conditions
+                                                .getOrThrow()
+                                                .comparison(node.conditionComparison.toInt()),
+                                            if (node.conditionLookup == 1u)
+                                                node.conditionName.toKString()
+                                            else null,
+                                            node.conditionNameTruncated != 0u,
+                                            when (node.conditionLookup) {
+                                                0u -> "null"
+                                                1u -> "present"
+                                                2u -> "index_out_of_range"
+                                                else ->
+                                                    error("Invalid quality condition lookup state")
+                                            },
+                                        )
+                                    else null,
+                                progress =
+                                    if (node.properties and 256u != 0u)
+                                        WidgetProgress(
+                                            node.progressValue,
+                                            symbols.progress
+                                                .getOrThrow()
+                                                .direction(node.progressDirection.toInt()),
+                                            node.progressHasText != 0u,
+                                        )
+                                    else null,
+                                switch =
+                                    if (node.properties and 8192u != 0u)
+                                        WidgetSwitch(
+                                            node.switchState.toInt(),
+                                            symbols.switches
+                                                .getOrThrow()
+                                                .state(node.switchState.toInt()),
+                                            node.switchAllowNone != 0u,
+                                        )
+                                    else null,
+                                number =
+                                    if (node.properties and 64u != 0u)
+                                        WidgetNumber(
+                                            node.numberFlags and 1u != 0u,
+                                            node.numberValue.takeIf {
+                                                node.numberFlags and 16u != 0u
+                                            },
+                                            (node.numberFlags and 2u != 0u).takeIf {
+                                                node.numberFlags and 1u != 0u
+                                            },
+                                            (node.numberFlags and 4u != 0u).takeIf {
+                                                node.numberFlags and 1u != 0u
+                                            },
+                                            (node.numberFlags and 8u != 0u).takeIf {
+                                                node.numberFlags and 1u != 0u
+                                            },
+                                        )
+                                    else null,
+                            )
                             .takeUnless { it == emptyWidgetProperties },
                         visible = if (node.properties and 128u != 0u) node.visible != 0 else null,
                         renderEnabled =
@@ -683,24 +676,9 @@ internal class ResidentConnection(private val pid: UInt) {
                 visibilityUnavailableReason = symbols.visibility.exceptionOrNull()?.message,
                 progressUnavailableReason = symbols.progress.exceptionOrNull()?.message,
                 elementUnavailableReason = symbols.elements.exceptionOrNull()?.message,
-                spriteUnavailableReason = symbols.sprites.exceptionOrNull()?.message,
+                iconsUnavailableReason = symbols.icons.exceptionOrNull()?.message,
                 qualityConditionUnavailableReason = symbols.conditions.exceptionOrNull()?.message,
                 switchUnavailableReason = symbols.switches.exceptionOrNull()?.message,
-                inputTransfer =
-                    if (operation == 1 || operation == 2) {
-                        val transfer = result.inputTransfer
-                        InputTransferSnapshot(
-                            transfer.available != 0u,
-                            transfer.clientPresent != 0u,
-                            transfer.queuedBatches.toLong(),
-                            if (transfer.importPresent != 0u) transfer.segmentIndex.toLong()
-                            else null,
-                            if (transfer.importPresent != 0u) transfer.totalSegments.toLong()
-                            else null,
-                            symbols.inputTransfer.exceptionOrNull()?.message
-                                ?: transfer.reason.toKString().takeIf { it.isNotEmpty() },
-                        )
-                    } else null,
                 chat =
                     if (operation == 10) {
                         check(result.chat.count <= FM_MAX_CHAT.toUInt()) {
@@ -725,25 +703,6 @@ internal class ResidentConnection(private val pid: UInt) {
                             },
                         )
                     } else null,
-                sprites =
-                    (0 until result.spriteCount.toInt()).map { index ->
-                        val sprite = result.sprites[index]
-                        WidgetSprite(
-                            if (sprite.flags and 1u != 0u) sprite.filename.toKString() else null,
-                            sprite.flags and 2u != 0u,
-                            sprite.flags and 4u != 0u,
-                            sprite.x.toInt(),
-                            sprite.y.toInt(),
-                            sprite.width.toInt(),
-                            sprite.height.toInt(),
-                            sprite.scale,
-                            sprite.shiftX,
-                            sprite.shiftY,
-                            List(4) { sprite.tint[it].toDouble() },
-                            spriteReference(sprite.next),
-                            spriteReference(sprite.extra),
-                        )
-                    },
             )
         } finally {
             ReleaseMutex(resources.gate)

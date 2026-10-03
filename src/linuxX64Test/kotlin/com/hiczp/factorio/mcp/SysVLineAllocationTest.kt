@@ -12,6 +12,19 @@ import kotlin.test.assertFails
 
 class SysVLineAllocationTest {
     @Test
+    fun permitsConditionalUnrelatedArgumentsWithoutLosingTheAllocatedReceiver() {
+        val code = "bf 40 00 00 00 e8 f6 00 00 00 48 89 c7 48 85 d2 " +
+                "48 8d 15 10 00 00 00 48 0f 44 d1 e8 e0 01 00 00 c3"
+        fun resolve(value: String) = SysVLineAllocation.analyze(
+            machineCode(value), 0x1000, setOf(0x1000), 0x1100, 0x1200
+        )
+        assertEquals(64L, resolve(code))
+        assertFails { resolve(code.replace("48 0f 44 d1", "48 0f 44 f9")) }
+        assertFails { resolve(code.replace("48 8d 15", "48 8d 3d")) }
+        assertFails { resolve(code.replace("48 85 d2", "eb 01 90")) }
+    }
+
+    @Test
     fun derivesCompilerAllocationsAtDebugLineBoundaries() {
         val directory = checkNotNull(getenv("FACTORIO_MCP_TEST_NATIVE")).toKString()
         for (padding in listOf(1, 23)) MappedBinary("$directory/line_allocation_fixture_$padding").use { file ->

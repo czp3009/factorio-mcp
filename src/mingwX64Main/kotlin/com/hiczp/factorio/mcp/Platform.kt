@@ -11,6 +11,7 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.newSingleThreadContext
 import kotlinx.coroutines.withContext
 import kotlinx.io.*
+import platform.posix.fflush
 import platform.posix.fputs
 import platform.posix.stderr
 import platform.windows.*
@@ -37,6 +38,7 @@ internal actual object Platform {
 
     actual fun writeError(message: String) {
         fputs("$message\n", stderr)
+        fflush(stderr)
     }
 
     actual fun findProcesses(name: String): List<Int> = discoverProcesses(name)

@@ -40,6 +40,7 @@ struct ResidentInput::Task {
     HANDLE mapping{}, owner{};
     FmInputTask *wire{};
     std::unique_ptr<InputSequence> sequence;
+    InputEventButtons buttons;
     void *game{};
     uint64_t epoch{};
 
@@ -70,21 +71,24 @@ class ResidentInput::Emitter final : public InputEmitter {
 
     void move(InputPosition position) override {
         checkWorld();
-        GameInputEvents(symbols.timedInput.events, functions, gameInputState(symbols)).move(position);
+        GameInputEvents(symbols.timedInput.events, functions, runtime.task->buttons, gameInputState(symbols))
+            .move(position, [](void *owner) { static_cast<Emitter *>(owner)->checkWorld(); }, this);
         checkWorld();
     }
 
     void button(InputButton button, bool down) override {
         if (down)
             checkWorld();
-        GameInputEvents(symbols.timedInput.events, functions, gameInputState(symbols)).button(button, down);
+        GameInputEvents(symbols.timedInput.events, functions, runtime.task->buttons, gameInputState(symbols))
+            .button(button, down);
         if (down)
             checkWorld();
     }
 
     void wheel(int32_t direction) override {
         checkWorld();
-        GameInputEvents(symbols.timedInput.events, functions, gameInputState(symbols)).wheel(direction);
+        GameInputEvents(symbols.timedInput.events, functions, runtime.task->buttons, gameInputState(symbols))
+            .wheel(direction);
         checkWorld();
     }
 };

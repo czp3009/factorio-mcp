@@ -46,7 +46,6 @@ struct UiGestureContext {
     const FmLinuxCaptureLayout &capture;
     const FmLinuxMouseGestureLayout &gesture;
     UiMouseFunctions functions;
-    const TargetReference *initialCapture = nullptr;
     const TargetReference *previous = nullptr;
     UiTargetReference *captureRecipient = nullptr;
     UiTargetReference *finalCaptureRecipient = nullptr;
@@ -84,7 +83,7 @@ struct UiMouseGesture : UiMouseProgress {
 bool validMouseGesture(const UiGestureContext &context);
 // The caller selects and admits the target, and owns mirrored button/modifier state through gesture cleanup.
 // No cancellation or IPC boundary occurs between these synchronous callbacks.
-int runUiMouseGesture(const UiGestureContext &context, const UiTarget &target,
-                       const UiMouseRequest &request, UiMouseGesture &state);
+int runUiMouseGesture(const UiGestureContext &context, const UiTarget &target, const UiMouseRequest &request,
+                      UiMouseGesture &state);
 int finishUiMouseGesture(const UiGestureContext &context, UiMouseGesture &state);
 #endif

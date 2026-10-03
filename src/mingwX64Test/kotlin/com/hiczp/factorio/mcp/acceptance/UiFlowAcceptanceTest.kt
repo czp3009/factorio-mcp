@@ -3,6 +3,7 @@
 package com.hiczp.factorio.mcp.acceptance
 
 import com.hiczp.factorio.mcp.*
+import kotlin.test.*
 import kotlinx.cinterop.toKString
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
@@ -13,7 +14,6 @@ import kotlinx.io.files.SystemFileSystem
 import kotlinx.io.readString
 import kotlinx.serialization.json.*
 import platform.posix.getenv
-import kotlin.test.*
 
 /** Requires the UI acceptance scenario on an isolated local server and its non-admin client. */
 class UiFlowAcceptanceTest {
@@ -82,6 +82,7 @@ class UiFlowAcceptanceTest {
                     }
                 }
 
+                val observedCheckStates = mutableMapOf<Boolean, Int>()
                 suspend fun assertProperties(checked: Boolean) {
                     val snapshot = client.tool("ui_read").toolValue()
                     val fullBudgetTarget =
@@ -91,7 +92,7 @@ class UiFlowAcceptanceTest {
                             .map { it.jsonObject }
                             .single {
                                 it["type"]?.jsonPrimitive?.content == "agui::DropDown" &&
-                                        it["text"]?.jsonPrimitive?.content == "MCP budget target first"
+                                    it["text"]?.jsonPrimitive?.content == "MCP budget target first"
                             }
                             .getValue("properties")
                             .jsonObject
@@ -130,66 +131,86 @@ class UiFlowAcceptanceTest {
                     assertTrue(
                         targetedNodes.any {
                             it["matched"]?.jsonPrimitive?.boolean == true &&
-                                    it["visible"]?.jsonPrimitive?.boolean == false
+                                it["visible"]?.jsonPrimitive?.boolean == false
                         }
                     )
                     assertTrue(
                         targetedNodes.any {
                             it["type"]?.jsonPrimitive?.content == "agui::DropDown" &&
-                                    it["visible"]?.jsonPrimitive?.boolean == true
+                                it["visible"]?.jsonPrimitive?.boolean == true
                         }
                     )
-                    val targetedSprites = targeted.getValue("sprites").jsonArray
-                    assertTrue(targetedSprites.isNotEmpty())
-                    assertTrue(
-                        targetedSprites.all {
-                            it.jsonObject.getValue("filename").jsonPrimitive.content ==
-                                    "__base__/graphics/icons/copper-plate.png"
-                        }
-                    )
-                    assertNull(snapshot["sprite_unavailable_reason"])
-                    val sprites =
-                        snapshot
-                            .getValue("sprites")
-                            .jsonArray
-                            .map { it.jsonObject }
-                            .associateBy { it.getValue("id").jsonPrimitive.int }
-
-                    fun sprite(reference: JsonElement) =
-                        sprites.getValue(reference.jsonPrimitive.int)
-
+                    assertWidgetIconReferences(targeted)
+                    assertWidgetIconReferences(snapshot)
+                    val fixture =
+                        client
+                            .tool(
+                                "ui_read",
+                                buildJsonObject {
+                                    put(
+                                        "selector",
+                                        uiSelector("MCP action fixture", "agui::Window"),
+                                    )
+                                },
+                            )
+                            .toolValue()
                     val icon =
-                        snapshot
+                        fixture
                             .getValue("nodes")
                             .jsonArray
+                            .filter {
+                                it.jsonObject["type"] == JsonPrimitive("IconButtonWithNumber")
+                            }
                             .mapNotNull {
                                 (it.jsonObject["properties"] as? JsonObject)?.get("icons")
-                                        as? JsonObject
+                                    as? JsonObject
                             }
-                            .single {
-                                val reference = it["normal"]?.jsonPrimitive?.intOrNull
-                                reference != null &&
-                                        sprites[reference]?.get("filename")?.jsonPrimitive?.content ==
-                                        "__base__/graphics/icons/iron-plate.png"
-                            }
-                    val normalSprite = sprite(icon.getValue("normal"))
+                            .single()
+                    assertNotEquals(JsonNull, icon.getValue("normal"))
+                    assertNotEquals(JsonNull, icon.getValue("hovered"))
+                    assertNotEquals(icon.getValue("normal"), icon.getValue("hovered"))
+                    assertEquals(JsonNull, icon.getValue("disabled"))
+                    val configured =
+                        client
+                            .tool(
+                                "world_query",
+                                buildJsonObject {
+                                    putJsonObject("selection") {
+                                        put("kind", "inspect")
+                                        putJsonObject("target") { put("kind", "player") }
+                                        putJsonArray("path") {
+                                            add(buildJsonObject { put("property", "gui") })
+                                            add(buildJsonObject { put("property", "screen") })
+                                            add(buildJsonObject { put("index", "mcp_actions") })
+                                            add(buildJsonObject { put("index", "sprite_fixture") })
+                                        }
+                                    }
+                                    putJsonArray("fields") {
+                                        add("sprite")
+                                        add("hovered_sprite")
+                                        add("clicked_sprite")
+                                    }
+                                },
+                            )
+                            .toolValue()
+                            .getValue("objects")
+                            .jsonArray
+                            .single()
+                            .jsonObject
+                    assertTrue(configured.getValue("read_status").jsonObject.isEmpty())
                     assertEquals(
-                        "__base__/graphics/icons/steel-plate.png",
-                        sprite(icon.getValue("hovered")).getValue("filename").jsonPrimitive.content,
+                        buildJsonObject {
+                            put("sprite", "item/iron-plate")
+                            put("hovered_sprite", "item/copper-plate")
+                            put("clicked_sprite", "item/steel-plate")
+                        },
+                        configured.getValue("attributes"),
                     )
-                    assertEquals(JsonNull, icon["disabled"])
-                    assertEquals(64, normalSprite.getValue("width").jsonPrimitive.int)
-                    assertEquals(0.5, normalSprite.getValue("scale").jsonPrimitive.double)
-                    val extraSprite = sprite(normalSprite.getValue("extra"))
-                    assertEquals(normalSprite["filename"], extraSprite["filename"])
-                    assertEquals(32, extraSprite.getValue("width").jsonPrimitive.int)
-                    // These are the observed native fields, not a reconstruction of Lua creation
-                    // arguments.
                     assertNull(snapshot["progress_unavailable_reason"])
                     val progress =
                         snapshot.getValue("nodes").jsonArray.mapNotNull {
                             (it.jsonObject["properties"] as? JsonObject)?.get("progress")
-                                    as? JsonObject
+                                as? JsonObject
                         }
                     assertTrue(progress.isNotEmpty())
                     progress.forEach {
@@ -206,10 +227,10 @@ class UiFlowAcceptanceTest {
                             .single { it["text"]?.jsonPrimitive?.content == text }
                             .getValue("properties")
                             .jsonObject
-                    assertEquals(
-                        if (checked) "checked" else "unchecked",
-                        properties("MCP checkbox")["check_state"]!!.jsonPrimitive.content,
-                    )
+                    val checkState = properties("MCP checkbox")["check_state"]!!.jsonPrimitive.int
+                    observedCheckStates[checked]?.let { assertEquals(it, checkState) }
+                    observedCheckStates[!checked]?.let { assertNotEquals(it, checkState) }
+                    observedCheckStates[checked] = checkState
                     assertEquals(
                         checked,
                         properties("MCP toggle")["toggled"]!!.jsonPrimitive.boolean,
@@ -261,8 +282,8 @@ class UiFlowAcceptanceTest {
                 waitFor { current ->
                     current.any { event ->
                         event["kind"]?.jsonPrimitive?.content == "checkpoint" &&
-                                (event["data"]?.jsonObject?.get("slider")?.jsonPrimitive?.double
-                                    ?: 0.0) >= 80.0
+                            (event["data"]?.jsonObject?.get("slider")?.jsonPrimitive?.double
+                                ?: 0.0) >= 80.0
                     }
                 }
                 sliderClick(0.5)
@@ -277,7 +298,7 @@ class UiFlowAcceptanceTest {
                         .map { it.jsonObject }
                         .single {
                             it["type"]?.jsonPrimitive?.content == "agui::TextButton" &&
-                                    it["text"]?.jsonPrimitive?.content == "MCP option 80"
+                                it["text"]?.jsonPrimitive?.content == "MCP option 80"
                         }
                 assertTrue(lastOption.getValue("visible").jsonPrimitive.boolean)
                 click("MCP option 80", "agui::TextButton")
@@ -285,8 +306,8 @@ class UiFlowAcceptanceTest {
                     events.any { event ->
                         val data = event["data"] as? JsonObject
                         event["kind"]?.jsonPrimitive?.content == "selection" &&
-                                data?.get("name")?.jsonPrimitive?.content == "long_selection" &&
-                                data["selected_index"]?.jsonPrimitive?.int == 80
+                            data?.get("name")?.jsonPrimitive?.content == "long_selection" &&
+                            data["selected_index"]?.jsonPrimitive?.int == 80
                     }
                 }
                 val selectedDropdown =
@@ -298,7 +319,7 @@ class UiFlowAcceptanceTest {
                         .map { it.jsonObject }
                         .single {
                             it["type"]?.jsonPrimitive?.content == "agui::DropDown" &&
-                                    it["text"]?.jsonPrimitive?.content == "MCP option 80"
+                                it["text"]?.jsonPrimitive?.content == "MCP option 80"
                         }
                         .getValue("properties")
                         .jsonObject
@@ -331,7 +352,7 @@ class UiFlowAcceptanceTest {
                 waitFor { events ->
                     events.any { event ->
                         event["kind"]?.jsonPrimitive?.content == "checkpoint" &&
-                                (event["data"] as? JsonObject)?.get("text")?.jsonPrimitive?.content ==
+                            (event["data"] as? JsonObject)?.get("text")?.jsonPrimitive?.content ==
                                 ""
                     }
                 }
@@ -396,11 +417,11 @@ class UiFlowAcceptanceTest {
                     events.any { event ->
                         val data = event["data"] as? JsonObject
                         event["kind"]?.jsonPrimitive?.content == "checkpoint" &&
-                                data?.get("text")?.jsonPrimitive?.content == "MCP 中文🚀" &&
-                                data["numeric"]?.jsonPrimitive?.content == "98" &&
-                                data["readonly"]?.jsonPrimitive?.content == "MCP read-only" &&
-                                data["checked"]?.jsonPrimitive?.boolean == true &&
-                                data["toggle"]?.jsonPrimitive?.boolean == true
+                            data?.get("text")?.jsonPrimitive?.content == "MCP 中文🚀" &&
+                            data["numeric"]?.jsonPrimitive?.content == "98" &&
+                            data["readonly"]?.jsonPrimitive?.content == "MCP read-only" &&
+                            data["checked"]?.jsonPrimitive?.boolean == true &&
+                            data["toggle"]?.jsonPrimitive?.boolean == true
                     }
                 }
                 assertProperties(true)
@@ -408,9 +429,9 @@ class UiFlowAcceptanceTest {
                     events.any { event ->
                         val data = event["data"] as? JsonObject
                         event["kind"]?.jsonPrimitive?.content == "click" &&
-                                data?.get("name")?.jsonPrimitive?.content == "normal" &&
-                                data["control"]?.jsonPrimitive?.boolean == true &&
-                                data["shift"]?.jsonPrimitive?.boolean == true
+                            data?.get("name")?.jsonPrimitive?.content == "normal" &&
+                            data["control"]?.jsonPrimitive?.boolean == true &&
+                            data["shift"]?.jsonPrimitive?.boolean == true
                     }
                 )
                 assertTrue(
@@ -444,8 +465,8 @@ class UiFlowAcceptanceTest {
                     current.any { event ->
                         val data = event["data"] as? JsonObject
                         event["kind"]?.jsonPrimitive?.content == "click" &&
-                                data?.get("name")?.jsonPrimitive?.content == "normal" &&
-                                data["control"]?.jsonPrimitive?.boolean == false
+                            data?.get("name")?.jsonPrimitive?.content == "normal" &&
+                            data["control"]?.jsonPrimitive?.boolean == false
                     }
                 }
                 val lastActionTick = completed.last().getValue("tick").jsonPrimitive.long
@@ -493,18 +514,11 @@ class UiFlowAcceptanceTest {
                             .mapNotNull { it["properties"] as? JsonObject }
                             .filter {
                                 it["prototype"]?.jsonObject?.get("name")?.jsonPrimitive?.content ==
-                                        "copper-ore"
+                                    "copper-ore"
                             }
                     assertEquals(6, filterProperties.size)
                     assertEquals(
-                        setOf(
-                            "GreaterThan",
-                            "LessThan",
-                            "Equals",
-                            "GreaterOrEqual",
-                            "LessOrEqual",
-                            "NotEqual",
-                        ),
+                        setOf(">", "<", "=", "≥", "≤", "≠"),
                         filterProperties
                             .map {
                                 it.getValue("quality_condition")
@@ -531,7 +545,7 @@ class UiFlowAcceptanceTest {
                             condition.getValue("quality_lookup").jsonPrimitive.content,
                         )
                         val observedQuality = it.getValue("quality").jsonObject.getValue("name")
-                        if (condition.getValue("comparison").jsonPrimitive.content == "Equals")
+                        if (condition.getValue("comparison").jsonPrimitive.content == "=")
                             assertEquals(JsonPrimitive("rare"), observedQuality)
                         else assertEquals(JsonNull, observedQuality)
                     }
@@ -570,7 +584,7 @@ class UiFlowAcceptanceTest {
                             .mapNotNull { it["properties"] as? JsonObject }
                             .filter {
                                 it["prototype"]?.jsonObject?.get("name")?.jsonPrimitive?.content ==
-                                        name
+                                    name
                             }
                             .map { it.getValue("element") }
 
@@ -581,19 +595,19 @@ class UiFlowAcceptanceTest {
                     assertTrue(
                         items("stone-furnace").any {
                             it.getValue("health").jsonPrimitive.double ==
-                                    itemFixture.getValue("health").jsonPrimitive.double
+                                itemFixture.getValue("health").jsonPrimitive.double
                         }
                     )
                     assertTrue(
                         items("repair-pack").any {
                             it.getValue("durability_left").jsonPrimitive.double ==
-                                    itemFixture.getValue("durability").jsonPrimitive.double
+                                itemFixture.getValue("durability").jsonPrimitive.double
                         }
                     )
                     assertTrue(
                         items("firearm-magazine").any {
                             it.getValue("magazine_left").jsonPrimitive.double ==
-                                    itemFixture.getValue("ammo").jsonPrimitive.double
+                                itemFixture.getValue("ammo").jsonPrimitive.double
                         }
                     )
                     // Stack providers distinguish a missing stack from an unallocated Item.
@@ -604,12 +618,12 @@ class UiFlowAcceptanceTest {
                             .map { it.jsonObject }
                             .filter {
                                 it["type"]?.jsonPrimitive?.content == "InventoryGuiSlot" &&
-                                        (it["properties"] as? JsonObject)
-                                            ?.get("prototype")
-                                            ?.jsonObject
-                                            ?.get("name")
-                                            ?.jsonPrimitive
-                                            ?.content == "iron-plate"
+                                    (it["properties"] as? JsonObject)
+                                        ?.get("prototype")
+                                        ?.jsonObject
+                                        ?.get("name")
+                                        ?.jsonPrimitive
+                                        ?.content == "iron-plate"
                             }
                             .map {
                                 it.getValue("properties")
@@ -721,7 +735,7 @@ class UiFlowAcceptanceTest {
                 waitFor { current ->
                     current.any {
                         it["kind"]?.jsonPrimitive?.content == "checkpoint" &&
-                                it.getValue("tick").jsonPrimitive.long >
+                            it.getValue("tick").jsonPrimitive.long >
                                 maxOf(lastActionTick, afterIdentityTick) + 300
                     }
                 }

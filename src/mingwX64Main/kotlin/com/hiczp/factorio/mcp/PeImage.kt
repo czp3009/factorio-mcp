@@ -104,6 +104,18 @@ internal class PeImage(private val bytes: ByteArray) {
         error("Required function has no unwind range")
     }
 
+    fun readonlyBytes(rva: Int, length: Int): ByteArray {
+        val offset = raw(rva, length)
+        val view = BinaryView(bytes)
+        val section = (0 until sections).map { sectionTable + it * 40 }.single {
+            val start = u32(it + 12)
+            rva >= start && rva.toLong() + length <= start.toLong() + u32(it + 16)
+        }
+        val flags = view.unsigned((section + 36).toLong(), 4)
+        require(flags and 0x40000000 != 0L && flags and 0x80000000 == 0L) { "Expected immutable PE data or code" }
+        return bytes.copyOfRange(offset, offset + length)
+    }
+
     fun debugIdentity(): Pair<ByteArray, Int> {
         val (start, size) = directory(6)
         require(size % 28 == 0) { "Invalid PE debug directory size" }

@@ -2,32 +2,59 @@ package com.hiczp.factorio.mcp
 
 import com.hiczp.factorio.mcp.X64Instructions.*
 
-/** Copies an independently identified original receiver byte into a bounded constructed allocation. */
+/**
+ * Copies an independently identified original receiver byte into a bounded constructed allocation.
+ */
 internal object ConstructedByteCopy {
     fun analyze(
-        bytes: BinaryView, address: Long, allocator: Long, constructor: Long, size: Long,
-        sourceSize: Long, sourceField: Long
+        bytes: BinaryView,
+        address: Long,
+        allocator: Long,
+        constructor: Long,
+        size: Long,
+        sourceSize: Long,
+        sourceField: Long,
     ): Long {
         require(sourceSize in 8..4096 && sourceField in 8 until sourceSize)
         val flow = X64ControlFlow(X64Instructions(bytes).all(4096))
         val arguments = SysVArgumentFlow(flow)
-        val ranges = flow.instructions.zipWithNext().mapNotNull { (load, store) ->
-            val memory = load.source as? Memory ?: return@mapNotNull null
-            val register = load.destination as? Register ?: return@mapNotNull null
-            if (load.offset !in flow.reachable || load.operation != Operation.MOVZX || memory.width != 1 ||
-                register.width != 4 || register.number !in 0..15 ||
-                arguments.memory(load.offset, memory)?.reference != SysVArgumentFlow.Reference(7, sourceField)
-            )
-                return@mapNotNull null
-            require(
-                store.operation == Operation.MOV && store.source == Register(register.number, 1) &&
-                        store.destination is Memory && flow.predecessors[store.offset] == setOf(load.offset)
-            ) {
-                "Identified byte is not copied directly to the constructed object"
+        val scalars = ScalarExpression(flow, mapOf(7 to sourceSize), arguments)
+        val ranges =
+            flow.instructions.mapNotNull { store ->
+                val target = store.destination as? Memory ?: return@mapNotNull null
+                val register = store.source as? Register ?: return@mapNotNull null
+                if (
+                    store.offset !in flow.reachable ||
+                        store.operation != Operation.MOV ||
+                        target.width != 1 ||
+                        register.width != 1 ||
+                        register.number !in 0..15
+                )
+                    return@mapNotNull null
+                var value =
+                    runCatching { scalars.before(store.offset, register) }.getOrNull()
+                        ?: return@mapNotNull null
+                // Widening and reading the low byte preserve a byte input. Arithmetic, conditional
+                // values, differing incoming definitions and native call clobbers do not prove a
+                // copy.
+                while (value is ScalarExpression.Narrow) value = value.value
+                if (
+                    value !is ScalarExpression.Input ||
+                        value.width != 1 ||
+                        value.field !=
+                            SysVArgumentFlow.Read(SysVArgumentFlow.Reference(7, sourceField), 1)
+                )
+                    return@mapNotNull null
+                DwarfRanges.Range(store.offset, store.offset + store.size)
             }
-            DwarfRanges.Range(store.offset, store.offset + store.size)
-        }
         require(ranges.size == 1) { "Identified byte has no unique constructed copy" }
-        return ConstructedInlineByteMember.analyze(bytes, address, allocator, constructor, size, ranges)
+        return ConstructedInlineByteMember.analyze(
+            bytes,
+            address,
+            allocator,
+            constructor,
+            size,
+            ranges,
+        )
     }
 }

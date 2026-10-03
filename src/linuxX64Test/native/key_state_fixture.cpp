@@ -13,24 +13,29 @@ struct Value {
     uint8_t held = 0;
     uint8_t blocked = 0;
 };
+
 struct Record {
     uint64_t padding{};
     int32_t key{};
     Value value;
 };
+
 struct Map {
     uint64_t padding[2]{};
     Record *begin = nullptr;
     Record *end = nullptr;
 };
+
 struct State {
     uint32_t buttons = 0;
     Map keys;
 };
+
 struct Global {
     uint64_t padding{};
     State *state = nullptr;
 };
+
 struct Event {
     uint32_t type, code;
     double time;
@@ -91,11 +96,22 @@ int main() {
     State state;
     Global global{0, &state};
     Global *root = &global;
-    FmLinuxMouseStateLayout owner{
-        reinterpret_cast<uintptr_t>(&root), sizeof(Global), offsetof(Global, state), sizeof(State), offsetof(State, buttons),
-        sizeof(Event), offsetof(Event, type), offsetof(Event, time), offsetof(Event, code), 7, 9, {1, 2, 3}, {2, 4, 8}};
-    const FmLinuxKeyStateLayout layout{offsetof(State, keys), offsetof(Map, begin), offsetof(Map, end), sizeof(Record),
-        offsetof(Record, key), offsetof(Record, value), sizeof(Value), offsetof(Value, held), offsetof(Value, blocked)};
+    FmLinuxMouseStateLayout owner{reinterpret_cast<uintptr_t>(&root),
+                                  sizeof(Global),
+                                  offsetof(Global, state),
+                                  sizeof(State),
+                                  offsetof(State, buttons),
+                                  sizeof(Event),
+                                  offsetof(Event, type),
+                                  offsetof(Event, time),
+                                  offsetof(Event, code),
+                                  7,
+                                  9,
+                                  {1, 2, 3},
+                                  {2, 4, 8}};
+    const FmLinuxKeyStateLayout layout{offsetof(State, keys), offsetof(Map, begin),  offsetof(Map, end),
+                                       sizeof(Record),        offsetof(Record, key), offsetof(Record, value),
+                                       sizeof(Value),         offsetof(Value, held), offsetof(Value, blocked)};
     assert(validKeyStateLayout(owner, layout));
     InputStateObjects objects;
     KeyStateValue result;
@@ -126,7 +142,7 @@ int main() {
     state.keys.end = reinterpret_cast<Record *>(reinterpret_cast<uintptr_t>(records) + 1);
     assert(read(7) == EPROTO);
     state.keys.end = reinterpret_cast<Record *>(reinterpret_cast<uintptr_t>(records) +
-        sizeof(Record) * (FM_LINUX_KEY_RECORDS + 1ULL));
+                                                sizeof(Record) * (FM_LINUX_KEY_RECORDS + 1ULL));
     assert(read(7) == EPROTO);
     auto invalid = layout;
     invalid.held = invalid.clear;
@@ -167,18 +183,19 @@ int main() {
         assert(key.release(owner, config, functions, 3) == 0 && updates == count);
     }
     {
-        const auto count = updates;
         KeyboardKeyOwnership key;
         records[1].value.held = 1;
-        assert(key.press(owner, config, functions, 7, 0) == EBUSY && !key.owned() && updates == count);
-        records[1].value.held = 0;
+        assert(key.press(owner, config, functions, 7, 0) == 0 && key.owned());
+        assert(key.release(owner, config, functions, 1) == 0 && !key.owned() && !records[1].value.held);
         KeyboardKeyOwnership blocked;
-        assert(blocked.press(owner, config, functions, 19, 0) == EBUSY && !blocked.owned() && updates == count);
+        assert(blocked.press(owner, config, functions, 19, 0) == 0 && blocked.owned());
+        assert(blocked.release(owner, config, functions, 1) == 0 && !blocked.owned() && !records[2].value.held);
+        const auto count = updates;
         KeyboardKeyOwnership unknown;
         assert(unknown.press(owner, config, functions, 42, 0) == EINVAL && !unknown.owned() && updates == count);
         KeyboardKeyOwnership badTime;
         assert(badTime.press(owner, config, functions, 7, std::numeric_limits<double>::quiet_NaN()) == EINVAL &&
-            !badTime.owned() && updates == count);
+               !badTime.owned() && updates == count);
     }
     {
         KeyboardKeyOwnership key;
@@ -234,8 +251,8 @@ int main() {
         state.keys = {};
         blockInserted = blocked;
         KeyboardKeyOwnership key;
-        assert(key.press(owner, config, functions, 7, 0) == (blocked ? EPROTO : 0) && key.owned());
-        assert(key.release(owner, config, functions, 1) == (blocked ? EPROTO : 0) && !key.owned());
+        assert(key.press(owner, config, functions, 7, 0) == 0 && key.owned());
+        assert(key.release(owner, config, functions, 1) == 0 && !key.owned());
         assert(inserted.value.held == 0 && inserted.value.blocked == 0);
     }
 }

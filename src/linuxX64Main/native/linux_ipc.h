@@ -22,3 +22,7 @@ static inline int fm_ipc_exchange_if(uint32_t *value, uint32_t expected, uint32_
 static inline uint64_t fm_ipc_load64(const uint64_t *value) {
     return __atomic_load_n(value, __ATOMIC_ACQUIRE);
 }
+
+static inline void fm_ipc_store64(uint64_t *value, uint64_t next) {
+    __atomic_store_n(value, next, __ATOMIC_RELEASE);
+}

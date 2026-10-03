@@ -166,7 +166,7 @@ internal data class ControlLayouts(
                         "_ZN12ControlInput16findControlInputESt17basic_string_viewIcSt11char_traitsIcEE",
                         registry.name, guard.name, size
                     )
-                    val debug = DwarfInlines(image)
+                    val debug = image.inlines
                     val slots = ControlSlots.resolve(image, size, debug)
                     val extent = slots.values.minOf { size - it }
                     val modifiers = ControlModifiers.resolve(image, extent, debug)
@@ -194,7 +194,7 @@ internal data class ControlLayouts(
                         header.extent.toLong(), keyboard.code
                     )
                     val table = image.symbol("_ZTV20CustomInputPrototype")
-                    val pointers = ElfPointers(image)
+                    val pointers = image.pointers
                     val words = pointers.words(table.address, (table.size / 8).toInt())
                         .mapIndexed { index, word -> table.address + index * 8L to if (index == 0) word.scalar() else word.pointer() }
                         .toMap()

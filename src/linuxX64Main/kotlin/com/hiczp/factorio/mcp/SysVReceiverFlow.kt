@@ -468,6 +468,18 @@ internal class SysVReceiverFlow(
                     registers[target.number] = Constant(0)
                 }
 
+                Operation.DOUBLE_DIVIDE, Operation.DOUBLE_MULTIPLY -> {
+                    val target = instruction.destination as? Register ?: error("Invalid floating-point destination")
+                    require(target.number in 16..31 && target.width == 8)
+                    val source = instruction.source
+                    require(source is Register && source.number in 16..31 && source.width == 8 ||
+                            source is Memory && source.width == 8)
+                    require(read(source) !is Stack && registers[target.number] !is Stack) {
+                        "Floating-point arithmetic loses a saved-frame pointer"
+                    }
+                    registers[target.number] = Unknown
+                }
+
                 Operation.VECTOR_MOV -> {
                     val source =
                         instruction.source as? Register ?: error("Vector loads cannot preserve pointer provenance")

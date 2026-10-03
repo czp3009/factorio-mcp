@@ -22,6 +22,10 @@ struct Source {
     virtual ~Source() = default;
     Player *player = nullptr;
 };
+struct ForwardedSource {
+    virtual ~ForwardedSource() = default;
+    Source *source = nullptr;
+};
 struct View {
     virtual ~View() = default;
     Player *player = nullptr;
@@ -162,6 +166,26 @@ int main() {
     assert(read() == 0 && output.game == reinterpret_cast<uintptr_t>(&game) &&
            output.source == reinterpret_cast<uintptr_t>(&source) && output.tick == map.tick &&
            output.view == reinterpret_cast<uintptr_t>(&view));
+    {
+        const auto direct = config;
+        ForwardedSource forwarded;
+        forwarded.source = &source;
+        identity(&forwarded, input.forwardedVtable, input.forwardedTypeInfo);
+        input.forwardedSize = sizeof(forwarded);
+        input.forwardedSource = offset(&forwarded, &forwarded.source);
+        game.source = reinterpret_cast<Source *>(&forwarded);
+        handler.source = game.source;
+        assert(read() == 0 && output.source == reinterpret_cast<uintptr_t>(&source));
+        forwarded.source = &otherSource;
+        reject(ESTALE);
+        forwarded.source = &source;
+        handler.source = &source;
+        reject(ESTALE);
+        game.source = &otherSource;
+        reject(ENOTSUP);
+        game.source = &source;
+        config = direct;
+    }
     map.tick = 0;
     map.stopped = 255;
     map.paused = 1;

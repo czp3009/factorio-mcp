@@ -11,7 +11,7 @@ internal data class LocalisedRawCall(val function: Long, val output: Int, val re
             val bytes = image.functionBytes(function, 32768)
             val prefix = prefix(bytes)
             val end = prefix.last().let { it.offset + it.size }
-            val ranges = DwarfInlines(image).find(function, "str_raw", setOf("basic_string"))
+            val ranges = image.inlines.find(function, "str_raw", setOf("basic_string"))
                 .flatMap { it.ranges }.map { DwarfRanges.Range(it.start - function.address, it.end - function.address) }
                 .filter { it.start >= 0 && it.end <= end }
             return analyze(X64ControlFlow(prefix), function.address, ranges, string, text.size)

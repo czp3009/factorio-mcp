@@ -2,14 +2,14 @@
 #include "bridge.h"
 #include <array>
 
-class SpriteSnapshot {
+class IconReferences {
     const Symbols &symbols;
-    FmResult &result;
-    std::array<const void *, FM_MAX_SPRITES> sources{};
-    int observe(const void *sprite, unsigned depth);
+    unsigned count = 0;
+    std::array<const void *, FM_MAX_ICON_REFERENCES> sources{};
+    int observe(const void *sprite);
 
   public:
-    SpriteSnapshot(const Symbols &symbols, FmResult &result);
+    explicit IconReferences(const Symbols &symbols);
     void collect(void *widget, FmNode &node);
 };
 

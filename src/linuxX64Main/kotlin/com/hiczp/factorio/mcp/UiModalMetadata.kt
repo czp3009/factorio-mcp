@@ -73,7 +73,7 @@ internal data class UiModalMetadata(
             val function = image.symbol("_ZN4agui3Gui11handleHoverEv")
             val flow = X64ControlFlow.resolve(image, function)
             val inlines =
-                DwarfInlines(image).find(function, "handleHover", setOf("getModalWidget", "widgetIsModalChild"))
+                image.inlines.find(function, "handleHover", setOf("getModalWidget", "widgetIsModalChild"))
             val predicate = inlines.single { it.name == "widgetIsModalChild" }.ranges.single()
             val getter = inlines.filter {
                 it.name == "getModalWidget" && it.ranges.size == 1 &&

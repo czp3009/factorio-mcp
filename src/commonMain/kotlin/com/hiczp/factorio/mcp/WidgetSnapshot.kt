@@ -25,15 +25,23 @@ internal data class WidgetSnapshot(
 )
 
 /** Convert a bounded preorder forest without inventing missing parents or reordering siblings. */
-internal fun widgetsInPostorder(nodes: List<WidgetSnapshot>, parents: List<Int>): List<WidgetSnapshot> {
+internal fun widgetsInPostorder(
+    nodes: List<WidgetSnapshot>,
+    parents: List<Int>,
+): List<WidgetSnapshot> {
     require(nodes.size == parents.size) { "Widget parent count differs from node count" }
     val pending = ArrayDeque<Int>()
     return buildList(nodes.size) {
         nodes.forEachIndexed { index, node ->
             require(node.depth >= 0) { "Widget depth is negative" }
-            while (pending.isNotEmpty() && nodes[pending.last()].depth >= node.depth) add(nodes[pending.removeLast()])
+            while (pending.isNotEmpty() && nodes[pending.last()].depth >= node.depth) add(
+                nodes[pending.removeLast()]
+            )
             val parent = pending.lastOrNull() ?: -1
-            require(parents[index] == parent && node.depth == if (parent < 0) 0 else nodes[parent].depth + 1) {
+            require(
+                parents[index] == parent &&
+                    node.depth == if (parent < 0) 0 else nodes[parent].depth + 1
+            ) {
                 "Widget parent/depth does not describe a preorder forest"
             }
             pending.addLast(index)
@@ -43,7 +51,7 @@ internal fun widgetsInPostorder(nodes: List<WidgetSnapshot>, parents: List<Int>)
 }
 
 internal data class WidgetProperties(
-    val checkState: String? = null,
+    val checkState: Int? = null,
     val toggled: Boolean? = null,
     val selectedIndex: Int? = null,
     val slider: SliderProperties? = null,
@@ -70,24 +78,20 @@ internal data class WidgetQualityCondition(
     val qualityLookup: String = "null",
 )
 
-/** References use snapshot-local sprite indices; -1 is null and -2 is truncated. */
-internal data class WidgetIcons(val normal: Int, val hovered: Int, val disabled: Int)
-
-internal data class WidgetSprite(
-    val filename: String?,
-    val filenameTruncated: Boolean,
-    val intentionallyEmpty: Boolean,
-    val x: Int,
-    val y: Int,
-    val width: Int,
-    val height: Int,
-    val scale: Double,
-    val shiftX: Double,
-    val shiftY: Double,
-    val tint: List<Double>,
-    val next: Int,
-    val extra: Int,
+internal data class WidgetIcons(
+    val normal: WidgetIcon?,
+    val hovered: WidgetIcon?,
+    val disabled: WidgetIcon?,
 )
+
+/** An opaque reference valid only in this snapshot. */
+internal data class WidgetIcon(val reference: Int?, val truncated: Boolean = false)
+
+/** Native references never expose addresses; -1 is absent and -2 is a bounded omission. */
+internal fun widgetIconReference(value: Int): WidgetIcon? {
+    require(value in -2 until 512) { "Resident icon reference exceeds wire storage" }
+    return if (value == -1) null else WidgetIcon(value.takeIf { it >= 0 }, truncated = value == -2)
+}
 
 internal data class WidgetElement(
     val present: Boolean,

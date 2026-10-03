@@ -16,7 +16,7 @@ internal data class ChatPayloadType(val slot: Long, val typeInfo: Long, val type
                         image.virtualBytes(name.address, name.size).string(0, name.size.toInt()) == encoded
             )
             EhFrames(image).function(entry)
-            val pointers = ElfPointers(image)
+            val pointers = image.pointers
             return analyze(image.functionBytes(entry, 4096), entry.address, kind, type.address, name.address) {
                 pointers.words(it, 1).single().pointer()
             }

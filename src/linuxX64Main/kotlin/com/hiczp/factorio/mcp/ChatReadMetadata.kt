@@ -92,7 +92,7 @@ internal data class ChatReadMetadata(
                         player.index
                     )
                     val raw = LocalisedRawCall.resolve(image, string, localised)
-                    val reader = ElfPointers(image)
+                    val reader = image.pointers
                     for (type in listOf("10LuaContext", "6Player", "8GameView")) {
                         val identity = ItaniumType.resolve(image, type)
                         scalars[identity.addressPoint - 16] = 0

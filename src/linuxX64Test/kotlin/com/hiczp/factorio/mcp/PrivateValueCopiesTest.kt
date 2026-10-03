@@ -8,6 +8,32 @@ import kotlin.test.assertFails
 
 class PrivateValueCopiesTest {
     @Test
+    fun readsPackedCallResultOnlyBeforeItsFirstTerminalBorrow() {
+        fun analyze(middle: String, producerWidth: Int = 4, crop: Boolean = true): PrivateValueCopies.Read {
+            val full = X64ControlFlow(X64Instructions(machineCode(
+                "55 48 89 e5 53 48 83 ec 18 e8 00 01 00 00 89 45 f4 48 8d 5d f6 " +
+                        "$middle 48 89 df e8 00 02 00 00 48 83 c4 18 5b 5d c3"
+            )).all())
+            val calls = full.instructions.filter { it.operation == Operation.CALL }
+            val terminal = calls.last().offset
+            val flow = if (crop) full.reaching(terminal) else full
+            return PrivateValueCopies(flow, emptyMap(),
+                callResults = mapOf(calls.first().offset to PrivateValueCopies.Read(
+                    calls.first().offset, InlineArgumentFields.Field(0, producerWidth))),
+                terminalConsumer = terminal
+            ).terminalField(7, 2, 0, 2)
+        }
+        val plain = analyze("90")
+        assertEquals(InlineArgumentFields.Field(2, 2), plain.field)
+        assertEquals(plain, analyze("e8 00 03 00 00"))
+        assertFails { analyze("c6 45 f7 00") }
+        assertFails { analyze("48 89 df e8 00 03 00 00") }
+        assertFails { analyze("48 89 1f") }
+        assertFails { analyze("90", producerWidth = 2) }
+        assertFails { analyze("90", crop = false) }
+    }
+
+    @Test
     fun retainsCompleteScalarArgumentsOnlyInPrivateUnchangedStorage() {
         fun argument(middle: String, load: String = "8b 75 fc"): Int {
             val flow = X64ControlFlow(

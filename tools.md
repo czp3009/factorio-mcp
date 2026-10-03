@@ -16,8 +16,13 @@ resorting to slider dragging. Use `input` for world controls and held mouse gest
 `input_bindings`, including modifiers, instead of assuming default keys or mouse meanings. Control IDs name bindings;
 they are not directly accepted by `input` or `ui_action`.
 
-Actions report dispatch, not fulfillment of gameplay intent. Observe effects before dependent actions, especially in
-multiplayer; prefer a focused structured query. Do not blindly replay a mutation with an uncertain or lost result.
+Every action reports client dispatch/execution and cleanup. Completion does not confirm server acceptance, delivery
+or a gameplay outcome. Network latency and client prediction rollback can delay, change or undo visible effects;
+observations describe the state available at the time of the read. Actions do not wait for an outcome or retry to
+achieve one. Observe effects before dependent actions, preferably with a focused structured query. Do not blindly
+replay a mutation with an uncertain or lost result.
+All tools assume the player is not operating the game concurrently. Concurrent player actions can cause errors,
+failures or unexpected results; tools do not detect or compensate for that interference.
 Missing, null, unavailable and truncated data are distinct; interpret native values in their returned context.
 Human-readable text retains the game's language; localization expressions remain untranslated. Use stable IDs and
 structured values for programmatic operations, and preserve opaque values when passing them back.
@@ -26,7 +31,6 @@ structured values for programmatic operations, and preserve opaque values when p
 
 - `status` takes no arguments and never injects. It reports this MCP server's attachment and, when attached, its PID,
   observed game state and pause status. Unknown pause state is `null`.
-  Attached results also include `input_transfer`: see the cursor-state guidance below for its scope.
 - `attach` takes exactly one of `pid` (positive integer) or `process_name` (executable name, such as `factorio.exe`).
   It rejects ambiguous process names and initial game loading. Repeated attachment to the same process is supported;
   detach before selecting a different live process.
@@ -51,7 +55,7 @@ need rendering. UI availability is reported independently through `ui_ready`.
 they are truncated. Use its text, native types and available prototype identities to build a selector;
 node IDs apply only to that snapshot.
 For a selected-subtree read, optional property budgets apply only to the returned subtrees. Unrelated widgets do not
-consume their dropdown-option or sprite capacity. Selector discovery still requires a complete bounded tree; selecting
+consume their dropdown-option or icon-reference capacity. Selector discovery still requires a complete bounded tree; selecting
 a subtree does not bypass the node limit or make an incomplete search safe.
 The returned tree and properties describe native observations. MCP does not classify windows by purpose or infer
 gameplay meaning from their hierarchy or values; interpreting them and choosing actions is the agent's responsibility.
@@ -93,7 +97,7 @@ An abridged illustrative snapshot shape is:
       "properties": {
         "switch": {
           "state_value": 1,
-          "state": "Right",
+          "state": "right",
           "allow_none": false
         }
       }
@@ -118,9 +122,10 @@ Supported controls also expose `properties`: `check_state` for checkboxes/radio 
 `selected_index` for dropdowns, and slider `value`, `minimum`, `maximum` and `step`. Dropdown indices are zero-based;
 null means no selection. Missing properties are not false or empty values. When property decoding is unavailable,
 the snapshot includes a reason and retains the basic tree.
-`check_state` preserves an enum value without an available name as `unknown_<value>`; this is not a boolean.
+`check_state` is the original native enum integer on both platforms, preserving every state without converting it
+to a boolean or inventing a name. Do not assume a numeric mapping to state names.
 
-Progress widgets expose `properties.progress` with their raw `value`, native enum name `direction`, and `has_text`
+Progress widgets expose `properties.progress` with their raw `value`, lowercase native enum identifier `direction`, and `has_text`
 flag. Values are not clamped or converted to a completion percentage. Unknown directions use `unknown_<number>`;
 non-finite values become null with `value_non_finite: true`. An unavailable adapter is reported as
 `progress_unavailable_reason`. A slot's custom-painted health or durability bar is not necessarily a progress widget.
@@ -132,8 +137,8 @@ label truncation are independent. A selected index may lie outside the returned 
 be resolved, `options_unavailable_reason` is returned instead of an invented empty list. Reading options does not
 open or change the dropdown.
 
-Switch controls expose `properties.switch` with the raw `state_value`, its native `state` enum name, and `allow_none`.
-Known state names include `Left`, `Right` and `None`; unknown values retain their number and use `unknown_<value>`.
+Switch controls expose `properties.switch` with the raw `state_value`, its lowercase native `state` identifier, and `allow_none`.
+Known state identifiers include `left`, `right` and `none`; unknown values retain their number and use `unknown_<value>`.
 These are positions, not booleans or gameplay modes. Interpret neighboring labels in the returned tree, and use normal
 widget clicks to interact. `switch_unavailable_reason` reports unavailable adapter metadata.
 
@@ -154,8 +159,8 @@ no supported provider was observed. Base prototype and quality are independent o
 slots. This quality reference alone does not encode a comparison condition.
 
 Supported item-filter providers additionally expose `properties.quality_condition`: the native `quality_index`,
-`comparison_value` and `comparison` enum name (for example `GreaterOrEqual`). Unknown enum values retain their number
-and use `unknown_<value>` as the name. The condition's own `quality_name` is resolved from the current prototype
+`comparison_value` and `comparison`, the game's original comparison string (for example `≥`). Unknown enum values
+retain their number and use `unknown_<value>` as the string. The condition's own `quality_name` is resolved from the current prototype
 registry;
 `quality_lookup` distinguishes `present`, `null` and `index_out_of_range`. Names are limited to 255 UTF-8 bytes with
 `quality_name_truncated` when shortened. Indices are native data, not stable cross-session IDs or action handles.
@@ -175,21 +180,37 @@ Null `element` means a supported provider returned no object; an absent property
 observed. A stack's null `item` does not imply any health, durability or ammunition default. The observation never
 creates an item object to fill in missing data. `element_unavailable_reason` reports missing adapter metadata.
 
-Supported icon buttons expose `properties.icons` with independent `normal`, `hovered` and `disabled` references into
-the snapshot's `sprites` table. References are snapshot-local, not reusable handles. Null means no referenced sprite;
-a reference omitted because of a bound is also null, with `<field>_truncated: true`. The adapter does not choose a
-rendered state or
-substitute one icon for another. An absent `icons` property means no supported component was observed.
+Supported icon buttons expose `properties.icons` with independent `normal`, `hovered` and `disabled` values.
+Each non-null value contains an opaque `reference` and `identity_scope: "snapshot"`; equal references identify the
+same native resource within this response. They are not reusable action handles or file-download endpoints.
+Null means no referenced icon. An omitted reference because of the 512-resource bound has `reference: null` and
+`truncated: true`. The adapter preserves the widget's own references without choosing a rendered state or substituting
+one icon for another. An absent `icons` property means no supported component was observed; `icons_unavailable_reason`
+reports missing adapter metadata. Image pixels, filenames, crops, colors and render layers are not reconstructed.
+Use `screenshot` when missing visual information is needed.
 
-Sprite entries include `id`, `filename`, source `x`/`y`/`width`/`height`, raw `scale`, `shift_x`, `shift_y`, RGBA`tint`,
-`intentionally_empty` and `next`/`extra` sprite references. Source filenames are data, not MCP file-download endpoints
-or inferred button labels. A missing filename is null and an empty filename remains empty. Shared sprite references
-are deduplicated. Only entries reachable from returned widgets are included, preserving IDs and links, including cycles.
-The snapshot reads at most 512 distinct sprites and 16 new entries along a path; omitted links are marked separately
-from widget truncation. Filenames have a 511-byte UTF-8 limit and `filename_truncated` when shortened. Non-finite
-numeric
-fields are null with `<field>_non_finite: true`. `sprite_unavailable_reason` reports missing adapter metadata.
-This describes referenced source sprites, not reconstructed pixels, widget-level tint, layout, or every custom painter.
+For existing script GUI elements, `world_query` object inspection also reads the game's original `SpritePath` values,
+such as `item/iron-plate`. Follow `player.gui.screen` (or another existing GUI root) by element name or index, then
+request `sprite`, `hovered_sprite` and `clicked_sprite` where the element supports them. Empty configured strings
+remain empty strings; they are not filled from a rendered fallback. `clicked_sprite` is a Lua configuration field,
+not the native icon button's `disabled` reference. These observations do not provide a name for every native UI image
+or correlate Lua elements with snapshot-local widget IDs.
+
+```json
+{
+  "selection": {
+    "kind": "inspect",
+    "target": {"kind": "player"},
+    "path": [
+      {"property": "gui"},
+      {"property": "screen"},
+      {"index": "my_frame"},
+      {"index": "my_sprite_button"}
+    ]
+  },
+  "fields": ["sprite", "hovered_sprite", "clicked_sprite"]
+}
+```
 
 Supported numeric overlays return `properties.number`: `draw_requested`, `value`, and, when drawing is requested,
 `show_zero`, `unknown` and `infinite`. `value` is the raw numeric value before display formatting; its meaning follows
@@ -441,6 +462,18 @@ The default `detail: "grid"` aggregates cells. `detail: "entities"` returns indi
 references. This provides selected configuration information without reproducing the game's ALT overlay or inferring
 what should be drawn. Grid mode rejects `fields`/`include`; entity mode rejects `cell_size`.
 
+Grid grouping defaults to `group_by: ["name", "type", "quality"]`. Choose up to eight distinct entity fields;
+`group_by: []` produces one group per cell. Equal projected values group together regardless of table key order.
+Missing and failed grouping reads remain distinct in `read_status`.
+
+Numeric aggregation is opt-in, with up to eight distinct `{operation,field}` requests. Operations are `sum`, `min`
+and `max`; MCP applies the same calculation to any requested field without selecting rules by entity type.
+For example, `aggregates: [{"operation":"sum","field":"amount"}]` sums numeric observed amounts. Each result retains
+`operation`, `field`, `numeric_values`, `nil_values`, `read_errors`, `non_numeric_values` and `non_finite_values`.
+Excluded values do not enter the calculation. `value` is absent when no numeric values were observed; an unrepresentable
+calculated value is omitted with `value_non_finite:true`. These exclusions and scan truncation prevent an aggregate
+from being treated as a complete total. No field is summed automatically. Grouping and aggregates are grid-only.
+
 Both modes accept `name` and `type`, each a string or up to 64 distinct strings. Native types match mod entities too.
 Entries in one list are OR; name and type conditions combine with AND. No category is expanded automatically:
 `transport-belt`, `underground-belt` and `splitter` are separate native types. For example:
@@ -493,16 +526,15 @@ Areas are limited to 4096 tiles per side. If a greatly zoomed-out viewport excee
 16 columns. Explicit granularity must produce at most 256 cells. Partial edge cells retain their actual bounds.
 
 The row-major `objects` array contains cells with zero-based `row`/`column`, map `area`, `entity_groups`, a center
-`tile_sample`, and `coverage`. Entity groups retain prototype name, type, quality, count and resource amount where
-applicable. Spatial discovery uses collision candidates, then assigns only entities whose centers lie within the
-cell's half-open bounds. Groups sort by name, type and quality. The center tile is one sample, not the entire cell's
+`tile_sample`, and `coverage`. Each group contains the original grouping values in `attributes`, their `read_status`, `count` and requested `aggregates`. Spatial discovery uses collision candidates, then assigns only entities whose centers lie within the
+cell's half-open bounds. Groups sort by a structural key of the original grouping values and read statuses. The center tile is one sample, not the entire cell's
 terrain distribution. Coverage reports counts of intersecting chunks that are generated, charted and currently visible;
 the sample's availability remains explicit in ungenerated terrain. Reads do not generate chunks.
 
 `entity_limit` defaults to 64 and permits 1–512 candidates per cell. A request examines at most 4096 collision
 candidates in total, including lookahead used to detect truncation. `entity_scan` is `complete`, `partial` or
-`not_scanned`; per-cell and overall `truncated` flags identify incomplete enumeration. Group counts and amounts in a
-partial cell are lower bounds. Use smaller areas or finer cells to inspect omitted data. A cell may count a boundary
+`not_scanned`; per-cell and overall `truncated` flags identify incomplete enumeration. Group counts and numeric aggregates in a
+partial cell cover only observed members. Use smaller areas or finer cells to inspect omitted data. A cell may count a boundary
 candidate against the work budget even if its center belongs to another cell.
 
 Viewport coordinates use the game's conversion, including camera offsets and fixed-point rounding. `viewport.area`
@@ -862,17 +894,6 @@ the game's preview-read error until it becomes available. The admitted `is_bluep
 `get_blueprint_entity_count` methods can inspect a supported blueprint stack or record without expanding its entities.
 For example, append `{"method":"get_blueprint_entity_count"}` after the cursor property path step.
 
-The percentage displayed while importing a blueprint string is a separate client transfer state. `status` returns
-`input_transfer.source:"local_input_segment_queue"`, `available`, `client_present`, `queued_batches`, and
-`front_batch_blueprint_import`. The latter is either `null` or `{segment_index,total_segments}`: the native zero-based
-segment counter and total used by the import overlay. They describe outgoing transfer progress, not server acceptance,
-blueprint parsing completion or a successful imported item. `null` means no matching import in the front batch at that
-observation; it does not rule out later queued work. Without an active multiplayer client, `client_present` is false.
-If debug metadata or the live queue cannot be read, `available:false` includes a reason instead of reporting idle.
-This is a snapshot, so short transfers may finish between observations. Blueprint-library downloads and arbitrary
-mod progress are not covered by these counters; use record properties or UI, with screenshots for otherwise missing
-custom-painted information.
-
 Local `character`, `vehicle` and `physical_vehicle` selections follow the corresponding player references without
 coordinates. They use entity fields, including `health`, `max_health`, `speed`, `selected_gun_index` and
 `driver_is_gunner`. Missing references return `objects: []` and `availability: "nil"`; no character or vehicle is
@@ -1115,23 +1136,59 @@ and local player are required, including for prototype queries.
 
 ## Chat
 
-`chat_read` takes optional `limit` (1–128, default 64) and `after` (a cursor from this attachment). It reads the local
+`chat_read` takes optional `limit` (1–128, default 64), `offset` and `timeout` (nonnegative integer seconds, default 0).
+It reads the local
 client's retained console without opening chat UI, including received player messages, notifications and mod output.
 It is not a global server log, channel filter or lossless event subscription.
 
-Each message has an MCP observation `id`, native update `tick`, `storage` (`game_state` or `local`),
+Each message has a native update `tick`, zero-based `position_in_tick` within its storage, a continuation `offset`,
+`storage` (`game_state` or `local`),
 `player_index_raw`, `text`, `raw` and separate truncation flags. `player_index_raw` is the unmodified native unsigned
 index, not the one-based Lua player selector; non-player messages can carry a sentinel. No sender/channel is parsed
 from text. `text` is existing cached display text, which may be empty or stale. `raw` formats the localization
 expression without requesting translation. Each string is bounded to 4095 UTF-8 bytes without splitting a character.
 
-The initial read returns the latest requested observations. Pass `cursor` as the next call's `after`; follow
-`has_more` to drain additional observed records. The adapter captures at most 128 entries from each native storage
-list per read and retains at most 512 observations per attachment. `retained_counts` reports the native list counts;
-`snapshot_truncated` reports the capture bound. `history_lost` reports console replacement or an expired retained
-cursor. `missed_between_reads_possible` is always true: messages can disappear between reads, and the console may
-merge repeated output. Changing cached translations does not create a new message observation. Omit `after` after
-reattaching; cursors are attachment-local. Ordering is observation order, not a claim of total server chronology.
+Omit `offset` or use `0` to return the latest requested observations. A positive integer selects the native tick
+inclusively: its boundary messages are included so messages sharing a tick are not silently skipped. For exact
+continuation, pass the returned `next_offset` or a message `offset`: `{"tick":2412,"counts":[3,1]}` means three
+`game_state` records and one `local` record at tick 2412 have already been read. Later ticks start at zero counts.
+Follow `has_more` to drain further pages. Separate storage counts also admit a new synchronized message at an
+unchanged tick after local messages have been read, including in paused worlds. Reads do not acknowledge or remove
+messages, and concurrent readers can use their own offsets.
+
+The watermarks use native ticks and chronological retained-list positions, without process addresses, random
+attachment identifiers or MCP observation counters. They survive MCP restarts with unchanged native history.
+`offset_basis` is `native_tick_and_storage_position`. These are per-player console watermarks, not server-issued
+globally unique message IDs. Different players can receive different history and local notifications; carry offsets
+only between observations of the same player history in the same world. A native tick alone is the common boundary
+when reading another player's console; its messages may repeat. Identical messages at one tick retain separate
+positions instead of being merged by text.
+
+With `timeout` omitted or `0`, the tool returns the next safe-point observation immediately. A positive timeout
+waits while the selected history is empty, returning when messages appear or the wait expires. An expired wait
+returns an empty `messages` array and `next_offset`. A history-loss notification also returns immediately.
+Other tool calls can proceed between observations; detach or process exit aborts the wait. The timeout bounds
+waiting for new messages, not completion or cleanup of an already admitted safe-point observation. If rendering
+is suspended, even an immediate read can remain pending until its safe point resumes or the call is cancelled.
+
+```json
+{"offset": 0, "limit": 64}
+```
+
+Use the returned offset on the next call, for example:
+
+```json
+{"offset": {"tick": 2412, "counts": [3, 1]}, "timeout": 30, "limit": 64}
+```
+
+The adapter captures at most 128 entries from each native storage list per read. `retained_counts` reports the
+native list counts; `snapshot_truncated` reports the capture bound. `boundary_truncated` reports a tick group whose
+older entries are outside the capture bound; its counts cannot provide complete continuation through that group.
+`history_lost` reports observed console replacement, missing boundary positions or an incomplete requested boundary.
+It cannot detect every history edit or world change. `missed_between_reads_possible` is always true: messages can
+disappear between reads, and the console may merge repeated output. Changing cached translations does not create
+a new position. Reset `offset` after changing worlds or players, or after reported history loss. Messages are ordered
+by tick, storage and chronological list position, not a claim of global server message chronology.
 
 `chat_send` requires `text`: one nonblank line, at most 4096 UTF-8 bytes, with no NUL or slash commands (including
 after leading whitespace). It submits ordinary chat as the local player without opening or overwriting a draft UI.
@@ -1141,7 +1198,11 @@ player.
 
 ## Screenshots
 
-`screenshot` takes no arguments and returns PNG image content plus its width, height, UI frame and observed game state.
+`screenshot` accepts `action: "capture"` (default) or `action: "cancel"`. Capture returns PNG image content plus its
+width, height, UI frame and observed game state. Only one capture can be pending; another capture returns a busy error.
+Cancel stops the active capture, waits for cooperative cleanup and returns `{"dispatch":"completed","cancelled":true}`.
+It starts no new capture and returns `cancelled:false` when no capture is pending. Explicit MCP request cancellation
+also cancels capture. After cancellation finishes, a new capture can be submitted.
 It captures Factorio's DirectX output on Windows or OpenGL output in the Linux adapter, including UI and world,
 without activating the window. It excludes desktop and Steam overlays. The source field is `factorio_rendered_frame` on
 both platforms. Capture can wait for rendering to resume when minimized or suspended.
@@ -1154,11 +1215,13 @@ Actions acknowledge completed dispatch; their gameplay effects depend on the cur
 Observe the result before submitting a dependent action, especially in multiplayer. Do not replay an action whose
 response was lost: inspect current state first.
 
-Tool results normally carry JSON in an MCP text content block; screenshots additionally carry PNG image content.
-Rejected or failed tool calls use `isError: true` with an error description. An input's structured `status: "aborted"`
+Tool results carry a JSON object in `structuredContent` and an equivalent MCP text content block; screenshots
+additionally carry PNG image content. Rejected or failed tool calls use `isError: true` with `{"error":"description"}`.
+An input's structured `status: "aborted"`
 instead preserves partial progress. These are distinct from MCP transport/protocol errors.
 
 Tools have no execution deadline. Use explicit MCP cancellation to stop a pending call. HTTP socket closure alone is
 not guaranteed to cancel it. Single-phase requests and input admission share one attachment-wide queue; a waiting
-screenshot delays later calls until capture or cancellation. An admitted input sequence completes independently while
+screenshot delays later calls until capture or cancellation. `screenshot` with `action:"cancel"` bypasses that queue
+to stop the pending capture. An admitted input sequence completes independently while
 other calls proceed. `detach` cancels admitted input as well as active and queued requests.

@@ -107,7 +107,7 @@ internal data class EventSenderMetadata(
                     )
                     val pointers = mutableMapOf<Long, Long>()
                     val scalars = mutableMapOf<Long, Long>()
-                    val reader = ElfPointers(image)
+                    val reader = image.pointers
                     fun table(type: String): ItaniumVtable {
                         val symbol = image.symbol("_ZTV$type")
                         val table = ItaniumVtable.resolve(image, symbol.name)

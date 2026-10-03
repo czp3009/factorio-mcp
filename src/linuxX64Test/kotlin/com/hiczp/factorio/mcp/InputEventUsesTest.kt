@@ -13,6 +13,29 @@ import kotlin.test.assertTrue
 
 class InputEventUsesTest {
     @Test
+    fun prunesOnlyKnownKindsAndRequiresEveryPackedReadByte() {
+        // Event kind 7 copies a packed payload into InputState; every other kind returns without reading it.
+        val code = "83 3e 07 75 08 f3 0f 6f 46 10 0f 11 07 c3"
+        val header = EventHeader(48, 0, 8)
+        val flow = X64ControlFlow(X64Instructions(machineCode(code)).all(128))
+        val type = (0L until 4).toSet()
+        val payload = (16L until 32).toSet()
+        val cases = mapOf(3L to type, 7L to type + payload, 9L to type)
+        val proof = InputEventUses.postUpdate(flow, header, cases)
+        assertEquals(setOf(0L), proof.getValue(3).reads.map { it.offset }.toSet())
+        assertEquals(proof.getValue(3), proof.getValue(9))
+        assertTrue(proof.getValue(7).reads.any { it.offset == 16L && it.width == 16 })
+        assertTrue(proof.values.all { it.possibleArguments.isEmpty() })
+        assertFails { InputEventUses.postUpdate(flow, header, cases + (7L to (type + payload - 23L))) }
+        // A state-dependent condition cannot justify pruning either branch of the Event reader.
+        val unknown = X64ControlFlow(X64Instructions(machineCode(code.replace("83 3e 07", "83 3f 07"))).all(128))
+        assertFails { InputEventUses.postUpdate(unknown, header, cases) }
+        // Moving bytes into the borrowed Event is never a passive observation.
+        val mutation = X64ControlFlow(X64Instructions(machineCode(code.replace("0f 11 07", "0f 11 06"))).all(128))
+        assertFails { InputEventUses.postUpdate(mutation, header, cases) }
+    }
+
+    @Test
     fun followsPostUpdateKindsAndPreservesBorrowedEventChecks() {
         val valid = "53 48 89 f3 83 3b 07 75 0b 8b 73 10 e8 00 01 00 00 c6 00 00 5b c3"
         val update = InputStateKeyUpdate(

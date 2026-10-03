@@ -20,13 +20,21 @@ struct Widget {
 };
 
 struct Concrete : Widget {
-    Target *target() override { return value; }
-    std::uint32_t count() const override { return index; }
+    Target *target() override {
+        return value;
+    }
+
+    std::uint32_t count() const override {
+        return index;
+    }
 };
 
 struct Side {
     virtual ~Side() = default;
-    virtual unsigned side() { return 3; }
+
+    virtual unsigned side() {
+        return 3;
+    }
 };
 
 struct Combined : Concrete, Side {};
@@ -59,8 +67,8 @@ __attribute__((noinline)) void fixture_abort_wrapper() {
 
 int main() {
     fixture::widget.value = &fixture::target;
-    return fixture_function(fixture::widget.count()) == 34 &&
-                   fixture::widget.target()->identity == 42 && fixture::widget.mode == fixture::Mode::Ready
+    return fixture_function(fixture::widget.count()) == 34 && fixture::widget.target()->identity == 42 &&
+                   fixture::widget.mode == fixture::Mode::Ready
                ? 0
                : 1;
 }

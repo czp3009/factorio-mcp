@@ -17,7 +17,7 @@ internal data class MouseEventConstruction(
         fun resolve(image: ElfImage, fields: MouseEventFields): MouseEventConstruction {
             val function = image.symbol("_ZN4agui3Gui5logicEb")
             val flow = X64ControlFlow.resolve(image, function)
-            val constructors = DwarfInlines(image).find(function, "logic", setOf("MouseEvent"))
+            val constructors = image.inlines.find(function, "logic", setOf("MouseEvent"))
             val aggregate = LocalAggregate.resolve(image, function)
             val literals = mutableListOf<LocalAggregate.LiteralRange>()
             fun template(entry: String): Template {

@@ -32,6 +32,10 @@ typedef struct FmLinuxInputContextLayout {
     uint32_t handlerSource;
     uint32_t handlerCount;
     uint32_t handlers[FM_LINUX_INPUT_HANDLER_CANDIDATES];
+    uint64_t forwardedVtable;
+    uint64_t forwardedTypeInfo;
+    uint32_t forwardedSize;
+    uint32_t forwardedSource;
 } FmLinuxInputContextLayout;
 
 typedef struct FmLinuxInputContextConfig {

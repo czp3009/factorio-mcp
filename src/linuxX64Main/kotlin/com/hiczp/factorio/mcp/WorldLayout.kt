@@ -52,33 +52,18 @@ internal data class WorldLayout(
 
     companion object {
         fun resolve(image: ElfImage): WorldLayout {
-            val global = SysVGlobalAllocation.resolve(
-                image, "_ZN9MainTasks6createERK13ParsedOptions",
-                "_ZN13GlobalContextC2ERKN10Filesystem4PathES3_", "global"
-            )
-
-            fun owned(type: String) = SysVOwnedObjectSize.resolve(
-                image,
-                "_ZNSt10unique_ptrI${type}St14default_deleteIS0_EED2Ev", "_ZN${type}D2Ev"
-            ).size
-
-            val scenarioSize = owned("8Scenario")
-            val gameSize = owned("4Game")
-            val scenario = SysVGlobalMember.resolve(image, "_ZN8ScenarioD2Ev", "global", global.size, scenarioSize)
-            val noReturn = SysVNoReturn(image, setOf("abort", "__cxa_throw", "_ZSt20__throw_system_errori"))
-                .resolve("_Z19ReleaseAssertFailedPKcjS0_")
-            val game = SysVMemberCalls.direct(image, "_ZN8ScenarioD2Ev", "_ZN4GameD2Ev", scenarioSize, setOf(noReturn))
+            val references = WorldReferences.resolve(image)
             val contextSize = SysVObjectSize.resolve(image, "10LuaContext")
             val table = ItaniumVtable.resolve(image, "_ZTV10LuaContext")
             val destructor = table.method(image, "_ZN10LuaContextD0Ev")
             val caller = image.symbol("_ZN8ScenarioD2Ev")
             val contexts = SysVMemberCalls.virtual(
                 image.functionBytes(caller, 8192), caller.address,
-                destructor.slot, scenarioSize
+                destructor.slot, references.scenarioSize
             )
             return WorldLayout(
-                image.symbol("global").address, global.size, scenarioSize, gameSize, contextSize,
-                scenario, game, contexts, table.addressPoint, image.symbol("_ZTI10LuaContext").address
+                references.global, references.globalSize, references.scenarioSize, references.gameSize, contextSize,
+                references.scenario, references.game, contexts, table.addressPoint, image.symbol("_ZTI10LuaContext").address
             )
         }
     }

@@ -24,7 +24,7 @@ internal data class KeyEventFields(
 
     companion object {
         fun resolve(image: ElfImage): KeyEventFields {
-            val debug = DwarfInlines(image)
+            val debug = image.inlines
             val function = image.symbol("_ZN4agui7TextBox23textInputHandleKeyEventERKNS_8KeyEventE")
             val fields = InlineArgumentFields.resolve(
                 image, function, "textInputHandleKeyEvent", 6, 256,

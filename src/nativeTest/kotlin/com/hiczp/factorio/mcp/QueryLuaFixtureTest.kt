@@ -197,6 +197,57 @@ class QueryLuaFixtureTest {
     }
 
     @Test
+    fun overviewGroupsNativeValuesAndAggregatesOnlyExplicitNumericFields() {
+        val setup = """
+            surface.get_tile=function() return {name="fixture-tile"} end
+            local entries={}
+            for index=1,5 do
+              local position=index%2==0 and {x=1,y=1} or {y=1,x=1}
+              local fields={object_name="LuaEntity",name="same",type="fixture-" .. index,
+                position=position,surface=native_surface,amount=index}
+              fields.health=index==1 and 42 or index==2 and "opaque" or index==4 and math.huge or nil
+              local entity=native(fields)
+              if index==5 then
+                local gc=debug.getmetatable(entity).__gc
+                debug.setmetatable(entity,{__gc=gc,__index=function(_,field)
+                  if field=="health" then error("unreadable native field") end
+                  return fields[field]
+                end})
+              end
+              entries[#entries+1]=entity
+            end
+            surface.find_entities_filtered=function() return entries end
+        """.trimIndent()
+        val area = """"area":{"left_top":{"x":0,"y":0},"right_bottom":{"x":4,"y":4}},"cell_size":4"""
+        run(
+            parseWorldOverview(Json.parseToJsonElement("""{$area,"group_by":[],"aggregates":[]}""").jsonObject).arguments,
+            setup = setup,
+            assertions = """
+                local group=captured.objects[1].entity_groups[1]
+                assert(group.count==5 and next(group.attributes)==nil and #group.aggregates==0)
+                assert(group.amount==nil and group.name==nil and group.type==nil)
+            """.trimIndent(),
+        )
+        run(
+            parseWorldOverview(Json.parseToJsonElement("""{$area,"group_by":["position"],"aggregates":[
+              {"operation":"sum","field":"amount"},{"operation":"min","field":"amount"},
+              {"operation":"max","field":"amount"},{"operation":"sum","field":"health"}]}""").jsonObject).arguments,
+            setup = setup,
+            assertions = """
+                local groups=captured.objects[1].entity_groups
+                assert(#groups==1 and groups[1].count==5)
+                assert(groups[1].attributes.position.x==1 and groups[1].attributes.position.y==1)
+                local aggregates=groups[1].aggregates
+                assert(aggregates[1].value==15 and aggregates[1].numeric_values==5)
+                assert(aggregates[2].value==1 and aggregates[3].value==5)
+                local health=aggregates[4]
+                assert(health.value==42 and health.numeric_values==1 and health.nil_values==1)
+                assert(health.read_errors==1 and health.non_numeric_values==1 and health.non_finite_values==1)
+            """.trimIndent(),
+        )
+    }
+
+    @Test
     fun worldQueryPassesCombinedFiltersBeforeApplyingTheResultLimit() {
         run(
             query(

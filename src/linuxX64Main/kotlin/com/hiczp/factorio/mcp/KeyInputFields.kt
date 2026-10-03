@@ -24,7 +24,7 @@ internal data class KeyInputFields(
             // InlineMemberConstruction independently checks first-dispatch prefix closure for this same function.
             val flow = X64ControlFlow(complete.instructions.takeWhile { it.offset <= sink.offset })
             val values = ConstructorValues(flow, emptyMap())
-            val debug = DwarfInlines(image)
+            val debug = image.inlines
             val dequeue = debug.find(function, "logic", setOf("dequeueKeyboardInput"))
             val construction = debug.find(function, "logic", setOf("setKeyEvent"))
                 .minBy { it.ranges.minOf { range -> range.start } }

@@ -11,8 +11,7 @@
 .hidden fm_xsave_mode
 .hidden fm_xsave_low
 .hidden fm_xsave_high
-#include
-"hook_state.inc"
+#include "hook_state.inc"
 
 .type fm_evaluation_hook, @function
 fm_evaluation_hook:

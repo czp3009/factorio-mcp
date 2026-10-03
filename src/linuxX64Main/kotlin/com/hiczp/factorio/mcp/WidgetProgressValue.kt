@@ -8,7 +8,7 @@ internal object WidgetProgressValue {
         val function = image.symbol("_ZN17CustomProgressBar12createWidgetEv")
         val allocator = image.symbol("_Znwm")
         EhFrames(image).function(allocator)
-        val instances = DwarfInlines(image).find(function, "createWidget", setOf("setValue"))
+        val instances = image.inlines.find(function, "createWidget", setOf("setValue"))
         val offsets = instances.map { instance ->
             AllocatedInlineDoubleMember.analyze(
                 image.functionBytes(function, 4096), function.address,

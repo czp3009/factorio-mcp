@@ -23,21 +23,6 @@ internal fun GameSnapshot.uiJson(bounds: Boolean, filtered: Boolean = false): Js
         val parent = parents[index]
         selected[index] = !filtered || node.selected || (parent >= 0 && selected[parent])
     }
-    val spriteIds = mutableSetOf<Int>()
-    val pendingSprites = ArrayDeque<Int>()
-    nodes.forEachIndexed { index, node ->
-        if (selected[index])
-            node.properties?.icons?.let {
-                pendingSprites.addAll(listOf(it.normal, it.hovered, it.disabled))
-            }
-    }
-    while (pendingSprites.isNotEmpty()) {
-        val index = pendingSprites.removeFirst()
-        if (index < 0 || !spriteIds.add(index)) continue
-        val sprite = sprites[index]
-        pendingSprites.add(sprite.next)
-        pendingSprites.add(sprite.extra)
-    }
     return buildJsonObject {
         put("frame", frame)
         put("state", state)
@@ -50,17 +35,9 @@ internal fun GameSnapshot.uiJson(bounds: Boolean, filtered: Boolean = false): Js
         visibilityUnavailableReason?.let { put("visibility_unavailable_reason", it) }
         progressUnavailableReason?.let { put("progress_unavailable_reason", it) }
         elementUnavailableReason?.let { put("element_unavailable_reason", it) }
-        spriteUnavailableReason?.let { put("sprite_unavailable_reason", it) }
+        iconsUnavailableReason?.let { put("icons_unavailable_reason", it) }
         qualityConditionUnavailableReason?.let { put("quality_condition_unavailable_reason", it) }
         switchUnavailableReason?.let { put("switch_unavailable_reason", it) }
-        if (spriteIds.isNotEmpty()) {
-            put("sprite_identity_scope", "snapshot")
-            putJsonArray("sprites") {
-                sprites.forEachIndexed { index, sprite ->
-                    if (index in spriteIds) add(sprite.json(index))
-                }
-            }
-        }
         if (nodes.any { it.visible != null }) put("visibility_basis", "own_widget_flags")
         if (filtered) put("selector_nodes_omitted", selected.count { !it })
         putJsonArray("nodes") {
@@ -100,7 +77,7 @@ private fun WidgetProperties.json(): JsonObject = buildJsonObject {
     switch?.let {
         putJsonObject("switch") {
             put("state_value", it.stateValue)
-            put("state", it.state)
+            put("state", it.state.lowercase())
             put("allow_none", it.allowNone)
         }
     }
@@ -116,9 +93,9 @@ private fun WidgetProperties.json(): JsonObject = buildJsonObject {
     }
     icons?.let {
         putJsonObject("icons") {
-            spriteReference("normal", it.normal)
-            spriteReference("hovered", it.hovered)
-            spriteReference("disabled", it.disabled)
+            put("normal", it.normal?.json() ?: JsonNull)
+            put("hovered", it.hovered?.json() ?: JsonNull)
+            put("disabled", it.disabled?.json() ?: JsonNull)
         }
     }
     element?.let { element ->
@@ -138,7 +115,7 @@ private fun WidgetProperties.json(): JsonObject = buildJsonObject {
         putJsonObject("progress") {
             put("value", progress.value.takeIf { it.isFinite() }?.let(::JsonPrimitive) ?: JsonNull)
             if (!progress.value.isFinite()) put("value_non_finite", true)
-            put("direction", progress.direction)
+            put("direction", progress.direction.lowercase())
             put("has_text", progress.hasText)
         }
     }
@@ -193,36 +170,10 @@ private fun WidgetProperties.json(): JsonObject = buildJsonObject {
     }
 }
 
-private fun JsonObjectBuilder.spriteReference(name: String, value: Int) {
-    put(name, if (value >= 0) JsonPrimitive(value) else JsonNull)
-    if (value == -2) put("${name}_truncated", true)
-}
-
-private fun WidgetSprite.json(id: Int): JsonObject = buildJsonObject {
-    put("id", id)
-    put("filename", filename?.let(::JsonPrimitive) ?: JsonNull)
-    if (filenameTruncated) put("filename_truncated", true)
-    put("intentionally_empty", intentionallyEmpty)
-    put("x", x)
-    put("y", y)
-    put("width", width)
-    put("height", height)
-    fun number(name: String, value: Double) {
-        put(name, value.takeIf { it.isFinite() }?.let(::JsonPrimitive) ?: JsonNull)
-        if (!value.isFinite()) put("${name}_non_finite", true)
-    }
-    number("scale", scale)
-    number("shift_x", shiftX)
-    number("shift_y", shiftY)
-    putJsonObject("tint") {
-        listOf("r", "g", "b", "a").forEachIndexed { index, name ->
-            val value = tint[index]
-            put(name, value.takeIf { it.isFinite() }?.let(::JsonPrimitive) ?: JsonNull)
-            if (!value.isFinite()) put("${name}_non_finite", true)
-        }
-    }
-    spriteReference("next", next)
-    spriteReference("extra", extra)
+private fun WidgetIcon.json(): JsonObject = buildJsonObject {
+    put("reference", reference?.let(::JsonPrimitive) ?: JsonNull)
+    if (reference != null) put("identity_scope", "snapshot")
+    if (truncated) put("truncated", true)
 }
 
 private fun WidgetItem.json(): JsonObject = buildJsonObject {
@@ -244,7 +195,6 @@ internal fun GameSnapshot.statusJson(pid: Int): JsonObject = buildJsonObject {
     put("ui_ready", attached)
     put("frame", frame)
     put("paused", paused?.let(::JsonPrimitive) ?: JsonNull)
-    inputTransfer?.let { put("input_transfer", it.toJson()) }
 }
 
 internal fun detachedStatus() = buildJsonObject {

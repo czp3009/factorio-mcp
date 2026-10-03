@@ -4,7 +4,6 @@ package com.hiczp.factorio.mcp.offline
 
 import com.hiczp.factorio.mcp.ChatLayouts
 import com.hiczp.factorio.mcp.DebugTypes
-import com.hiczp.factorio.mcp.InputTransferLayouts
 import com.hiczp.factorio.mcp.RuntimeApi
 import com.hiczp.factorio.mcp.nativebridge.*
 import kotlinx.cinterop.*
@@ -42,11 +41,6 @@ class OfflineQueryMetadataTest {
             assertEquals(1u, layout.sendSupported)
             assertTrue(layout.actionBuffer + layout.stringSize <= layout.actionSize)
             assertTrue(layout.lists[0] != layout.lists[1])
-            val transfer = alloc<InputTransferLayout>()
-            InputTransferLayouts(DebugTypes(process, base)).write(transfer)
-            assertEquals(1u, transfer.supported)
-            assertTrue(transfer.blockSize > 0u)
-            assertTrue(transfer.segmentSize > transfer.totalSegments)
         } finally {
             SymCleanup(process)
         }

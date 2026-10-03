@@ -7,7 +7,10 @@ internal class ElfImage(private val file: BinaryView) {
 
     data class ReadonlyRange(val address: Long, val size: Long)
 
-    /** Non-executable, non-writable allocated file data. Relocated writable/RELRO pointers need separate checks. */
+    /**
+     * Non-executable, non-writable allocated file data. Relocated writable/RELRO pointers need
+     * separate checks.
+     */
     fun <T> withReadonlyEvidence(resolve: () -> T): Pair<T, List<ReadonlyRange>> {
         check(observedReadonly == null) { "Readonly evidence collection cannot be nested" }
         val ranges = mutableSetOf<ReadonlyRange>()
@@ -18,22 +21,29 @@ internal class ElfImage(private val file: BinaryView) {
             for (range in ranges.sortedBy { it.address }) {
                 val previous = merged.lastOrNull()
                 if (previous != null && range.address <= previous.address + previous.size) {
-                    merged[merged.lastIndex] = previous.copy(
-                        size = maxOf(
-                            previous.address + previous.size,
-                            range.address + range.size
-                        ) - previous.address
-                    )
+                    merged[merged.lastIndex] =
+                        previous.copy(
+                            size =
+                                maxOf(
+                                    previous.address + previous.size,
+                                    range.address + range.size,
+                                ) - previous.address
+                        )
                 } else merged += range
             }
-            require(merged.sumOf { it.size } <= 16 * 1024 * 1024) { "Readonly evidence exceeds byte bound" }
+            require(merged.sumOf { it.size } <= 16 * 1024 * 1024) {
+                "Readonly evidence exceeds byte bound"
+            }
             return result to merged
         } finally {
             observedReadonly = null
         }
     }
 
-    /** Records every function range consulted by a metadata resolver for subsequent live-code comparison. */
+    /**
+     * Records every function range consulted by a metadata resolver for subsequent live-code
+     * comparison.
+     */
     fun <T> withFunctionEvidence(resolve: () -> T): Pair<T, List<Symbol>> {
         check(observedFunctions == null) { "Function evidence collection cannot be nested" }
         val evidence = mutableSetOf<Symbol>()
@@ -66,7 +76,13 @@ internal class ElfImage(private val file: BinaryView) {
         val alignment: Long,
     )
 
-    data class Symbol(val name: String, val address: Long, val size: Long, val type: Int, val section: Int)
+    data class Symbol(
+        val name: String,
+        val address: Long,
+        val size: Long,
+        val type: Int,
+        val section: Int,
+    )
 
     val positionIndependent: Boolean
     val sections: List<Section>
@@ -75,90 +91,148 @@ internal class ElfImage(private val file: BinaryView) {
     init {
         file.range(0, 64)
         require(
-            file.unsigned(0, 4) == 0x464c457fL && file.unsigned(4, 1) == 2L &&
-                    file.unsigned(5, 1) == 1L && file.unsigned(6, 1) == 1L &&
-                    file.unsigned(18, 2) == 62L && file.unsigned(20, 4) == 1L &&
-                    file.unsigned(52, 2) == 64L
-        ) { "Expected a Linux x64 ELF image" }
+            file.unsigned(0, 4) == 0x464c457fL &&
+                file.unsigned(4, 1) == 2L &&
+                file.unsigned(5, 1) == 1L &&
+                file.unsigned(6, 1) == 1L &&
+                file.unsigned(18, 2) == 62L &&
+                file.unsigned(20, 4) == 1L &&
+                file.unsigned(52, 2) == 64L
+        ) {
+            "Expected a Linux x64 ELF image"
+        }
         val type = file.unsigned(16, 2)
         require(type == 2L || type == 3L) { "Expected an executable or shared ELF image" }
         positionIndependent = type == 3L
         val sectionOffset = file.unsigned(40, 8)
         require(file.unsigned(58, 2) == 64L) { "Unsupported ELF section header size" }
         file.range(sectionOffset, 64)
-        val sectionCount = file.unsigned(60, 2).let {
-            if (it == 0L) file.unsigned(sectionOffset + 32, 8) else it
-        }
+        val sectionCount =
+            file.unsigned(60, 2).let { if (it == 0L) file.unsigned(sectionOffset + 32, 8) else it }
         require(sectionCount in 1..65536) { "ELF section count exceeds bound" }
         file.range(sectionOffset, sectionCount * 64)
-        val namesIndex = file.unsigned(62, 2).let {
-            if (it == 65535L) file.unsigned(sectionOffset + 40, 4) else it
-        }
+        val namesIndex =
+            file.unsigned(62, 2).let {
+                if (it == 65535L) file.unsigned(sectionOffset + 40, 4) else it
+            }
         require(namesIndex in 1 until sectionCount) { "Invalid ELF section names index" }
         val namesHeader = sectionOffset + namesIndex * 64
         require(file.unsigned(namesHeader + 4, 4) == 3L) { "Missing ELF section name strings" }
-        val names = file.slice(file.unsigned(namesHeader + 24, 8), file.unsigned(namesHeader + 32, 8))
-        sections = List(sectionCount.toInt()) { index ->
-            val header = sectionOffset + index * 64
-            val section = Section(
-                names.string(file.unsigned(header, 4)),
-                file.unsigned(header + 4, 4),
-                file.unsigned(header + 8, 8),
-                file.unsigned(header + 16, 8),
-                file.unsigned(header + 24, 8),
-                file.unsigned(header + 32, 8),
-                file.unsigned(header + 40, 4).also {
-                    require(it < sectionCount) { "Invalid ELF linked section" }
-                }.toInt(),
-                file.unsigned(header + 56, 8),
-            )
-            require(section.size >= 0 && section.address >= 0) { "ELF section range exceeds bound" }
-            if (section.type != 8L && section.type != 0L) file.range(section.offset, section.size)
-            section
+        val names =
+            file.slice(file.unsigned(namesHeader + 24, 8), file.unsigned(namesHeader + 32, 8))
+        sections =
+            List(sectionCount.toInt()) { index ->
+                val header = sectionOffset + index * 64
+                val section =
+                    Section(
+                        names.string(file.unsigned(header, 4)),
+                        file.unsigned(header + 4, 4),
+                        file.unsigned(header + 8, 8),
+                        file.unsigned(header + 16, 8),
+                        file.unsigned(header + 24, 8),
+                        file.unsigned(header + 32, 8),
+                        file
+                            .unsigned(header + 40, 4)
+                            .also { require(it < sectionCount) { "Invalid ELF linked section" } }
+                            .toInt(),
+                        file.unsigned(header + 56, 8),
+                    )
+                require(section.size >= 0 && section.address >= 0) {
+                    "ELF section range exceeds bound"
+                }
+                if (section.type != 8L && section.type != 0L)
+                    file.range(section.offset, section.size)
+                section
+            }
+        val programCount =
+            file.unsigned(56, 2).let {
+                if (it == 65535L) file.unsigned(sectionOffset + 44, 4) else it
+            }
+        require(programCount in 1..65536 && file.unsigned(54, 2) == 56L) {
+            "Invalid ELF program headers"
         }
-        val programCount = file.unsigned(56, 2).let {
-            if (it == 65535L) file.unsigned(sectionOffset + 44, 4) else it
-        }
-        require(programCount in 1..65536 && file.unsigned(54, 2) == 56L) { "Invalid ELF program headers" }
         val programOffset = file.unsigned(32, 8)
         file.range(programOffset, programCount * 56)
-        segments = List(programCount.toInt()) { index ->
-            val header = programOffset + index * 56
-            Segment(
-                file.unsigned(header, 4), file.unsigned(header + 4, 4),
-                file.unsigned(header + 8, 8), file.unsigned(header + 16, 8),
-                file.unsigned(header + 32, 8), file.unsigned(header + 40, 8),
-                file.unsigned(header + 48, 8),
-            ).also {
-                file.range(it.offset, it.fileSize)
-                require(it.address >= 0 && it.memorySize >= 0 && it.memorySize <= Long.MAX_VALUE - it.address) {
-                    "Invalid ELF virtual range"
-                }
-                if (it.type == 1L) {
-                    require(it.fileSize <= it.memorySize) { "ELF load segment is smaller than file data" }
-                    require(
-                        it.alignment >= 0 && (it.alignment <= 1 ||
-                                (it.alignment and (it.alignment - 1) == 0L &&
-                                        it.address % it.alignment == it.offset % it.alignment))
-                    ) {
-                        "Invalid ELF load alignment"
+        segments =
+            List(programCount.toInt()) { index ->
+                val header = programOffset + index * 56
+                Segment(
+                        file.unsigned(header, 4),
+                        file.unsigned(header + 4, 4),
+                        file.unsigned(header + 8, 8),
+                        file.unsigned(header + 16, 8),
+                        file.unsigned(header + 32, 8),
+                        file.unsigned(header + 40, 8),
+                        file.unsigned(header + 48, 8),
+                    )
+                    .also {
+                        file.range(it.offset, it.fileSize)
+                        require(
+                            it.address >= 0 &&
+                                it.memorySize >= 0 &&
+                                it.memorySize <= Long.MAX_VALUE - it.address
+                        ) {
+                            "Invalid ELF virtual range"
+                        }
+                        if (it.type == 1L) {
+                            require(it.fileSize <= it.memorySize) {
+                                "ELF load segment is smaller than file data"
+                            }
+                            require(
+                                it.alignment >= 0 &&
+                                    (it.alignment <= 1 ||
+                                        (it.alignment and (it.alignment - 1) == 0L &&
+                                            it.address % it.alignment == it.offset % it.alignment))
+                            ) {
+                                "Invalid ELF load alignment"
+                            }
+                        }
                     }
-                }
             }
-        }
     }
 
     fun section(name: String): BinaryView {
-        val section = sections.singleOrNull { it.name == name } ?: error("Missing or ambiguous ELF section: $name")
+        val section =
+            sections.singleOrNull { it.name == name }
+                ?: error("Missing or ambiguous ELF section: $name")
         require(section.type == 1L || section.type == 3L) { "ELF section has no plain data: $name" }
         require(section.flags and 0x800 == 0L) { "Compressed ELF sections are unsupported: $name" }
         return file.slice(section.offset, section.size)
     }
 
-    // Resolution performs many independent symbol/RTTI/ABI lookups. Decode each table once per mapped image;
-    // this cache contains metadata only and never survives the owning image's resolution scope.
+    // Resolution performs many independent symbol/RTTI/ABI lookups. Decode each table once per
+    // mapped image;
+    // these metadata indexes belong to this image and are never shared between attachments.
     private val staticSymbols by lazy { readSymbols(false) }
     private val dynamicSymbols by lazy { readSymbols(true) }
+    val pointers: ElfPointers by lazy { ElfPointers(this) }
+    val inlines: DwarfInlines by lazy { DwarfInlines(this) }
+    private val staticNames by lazy { indexSymbols(staticSymbols) { it.name } }
+    private val dynamicNames by lazy { indexSymbols(dynamicSymbols) { it.name } }
+    private val functions by lazy {
+        indexSymbols(staticSymbols.filter { it.type == 2 && it.size > 0 }) { it.address }
+    }
+    val functionAddresses: Set<Long>
+        get() = functions.keys
+
+    val rttiSymbols: List<Symbol> by lazy {
+        staticSymbols.filter { it.type == 1 && it.name.startsWith("_ZTI") }
+    }
+    val rttiByAddress: Map<Long, List<Symbol>> by lazy { rttiSymbols.groupBy { it.address } }
+    val typeInfoAddresses: Set<Long> by lazy {
+        rttiSymbols.filter { it.size >= 16 }.map { it.address }.toSet()
+    }
+
+    private fun <K> indexSymbols(symbols: List<Symbol>, key: (Symbol) -> K): Map<K, Symbol?> {
+        val result = mutableMapOf<K, Symbol?>()
+        for (symbol in symbols) {
+            val identity = key(symbol)
+            if (identity !in result) result[identity] = symbol
+            else if (result[identity] != symbol) result[identity] = null
+        }
+        return result
+    }
+
     val unwindFrames: Map<Long, EhFrames.Frame?> by lazy {
         val frames = mutableMapOf<Long, EhFrames.Frame?>()
         var count = 0
@@ -193,71 +267,147 @@ internal class ElfImage(private val file: BinaryView) {
                 require(index < sections.size) { "Invalid ELF symbol section" }
                 val address = file.unsigned(offset + 8, 8)
                 val size = file.unsigned(offset + 16, 8)
-                require(address >= 0 && size >= 0 && size <= Long.MAX_VALUE - address) { "Invalid ELF symbol range" }
+                require(address >= 0 && size >= 0 && size <= Long.MAX_VALUE - address) {
+                    "Invalid ELF symbol range"
+                }
                 val name = names.string(nameOffset)
                 nameCharacters += name.length
-                require(nameCharacters <= 64 * 1024 * 1024) { "Decoded ELF symbol names exceed memory bound" }
-                output += Symbol(name, address, size, file.unsigned(offset + 4, 1).toInt() and 15, index)
+                require(nameCharacters <= 64 * 1024 * 1024) {
+                    "Decoded ELF symbol names exceed memory bound"
+                }
+                output +=
+                    Symbol(name, address, size, file.unsigned(offset + 4, 1).toInt() and 15, index)
             }
             offset += 24
         }
         return output
     }
 
-    fun symbol(name: String, dynamic: Boolean = false): Symbol =
-        symbols(dynamic).filter { it.name == name }.distinct().singleOrNull()
-            ?: error("Missing or ambiguous ELF symbol: $name")
+    fun findSymbol(name: String, dynamic: Boolean = false): Symbol? {
+        val names = if (dynamic) dynamicNames else staticNames
+        val symbol = names[name]
+        require(symbol != null || name !in names) { "Ambiguous ELF symbol: $name" }
+        return symbol
+    }
 
-    /** Identifies an imported PLT jump using its GOT relocation and dynamic symbol, never a display-name suffix. */
+    fun symbol(name: String, dynamic: Boolean = false): Symbol =
+        findSymbol(name, dynamic) ?: error("Missing ELF symbol: $name")
+
+    fun function(address: Long): Symbol =
+        functions[address] ?: error("ELF function is absent or ambiguous at address $address")
+
+    /**
+     * Identifies an imported PLT jump using its GOT relocation and dynamic symbol, never a
+     * display-name suffix.
+     */
     fun importedFunction(address: Long): String? {
-        val section = sections.singleOrNull {
-            it.name in setOf(".plt", ".plt.sec", ".plt.got") &&
-                    address >= it.address && address - it.address < it.size
-        } ?: return null
-        require(section.flags and 6L == 6L) { "PLT entry is not in an allocated executable section" }
-        val code = X64Instructions(virtualBytes(address, minOf(32, section.size - (address - section.address)), true))
+        val section =
+            sections.singleOrNull {
+                it.name in setOf(".plt", ".plt.sec", ".plt.got") &&
+                    address >= it.address &&
+                    address - it.address < it.size
+            } ?: return null
+        require(section.flags and 6L == 6L) {
+            "PLT entry is not in an allocated executable section"
+        }
+        val code =
+            X64Instructions(
+                virtualBytes(address, minOf(32, section.size - (address - section.address)), true)
+            )
         var jump = code.decode(0)
-        if (jump.operation == X64Instructions.Operation.ENDBR) jump = code.decode(jump.size.toLong())
+        if (jump.operation == X64Instructions.Operation.ENDBR)
+            jump = code.decode(jump.size.toLong())
         var resolverIndex: Long? = null
-        if (jump.operation == X64Instructions.Operation.MOV && jump.destination == X64Instructions.Register(11, 4)) {
-            resolverIndex = (jump.source as? X64Instructions.Immediate)?.value
-                ?: error("PLT resolver index is not constant")
+        if (
+            jump.operation == X64Instructions.Operation.MOV &&
+                jump.destination == X64Instructions.Register(11, 4)
+        ) {
+            resolverIndex =
+                (jump.source as? X64Instructions.Immediate)?.value
+                    ?: error("PLT resolver index is not constant")
             require(resolverIndex >= 0)
             jump = code.decode(jump.offset + jump.size)
         }
-        val target = jump.destination as? X64Instructions.Memory ?: error("PLT entry has no GOT operand")
-        require(jump.operation == X64Instructions.Operation.JMP && target.relative && target.index == null && target.width == 8)
+        val target =
+            jump.destination as? X64Instructions.Memory ?: error("PLT entry has no GOT operand")
+        require(
+            jump.operation == X64Instructions.Operation.JMP &&
+                target.relative &&
+                target.index == null &&
+                target.width == 8
+        )
         val next = address + jump.offset + jump.size
         require(target.displacement >= -next && target.displacement <= Long.MAX_VALUE - next)
         val got = next + target.displacement
+        return importedPointer(got, resolverIndex, setOf(6L, 7L), allowLocal = false)
+            ?: error("Missing imported function relocation")
+    }
+
+    /**
+     * Undefined function identity in an allocated pointer relocation; local pointers are resolved
+     * separately.
+     */
+    fun importedFunctionPointer(address: Long): String? =
+        importedPointer(address, null, setOf(1L, 6L, 7L), allowLocal = true)
+
+    private fun importedPointer(
+        address: Long,
+        resolverIndex: Long?,
+        types: Set<Long>,
+        allowLocal: Boolean,
+    ): String? {
+        require(address >= 8 && address % 8 == 0L && address <= Long.MAX_VALUE - 8)
         val names = mutableListOf<String>()
+        var matches = 0
+        var local = false
         for (relocations in sections.filter { it.type == 4L && it.flags and 2L != 0L }) {
-            require(relocations.entrySize == 24L && relocations.size % 24 == 0L && relocations.size / 24 <= 2_000_000)
+            require(
+                relocations.entrySize == 24L &&
+                    relocations.size % 24 == 0L &&
+                    relocations.size / 24 <= 2_000_000
+            )
             val entries = file.slice(relocations.offset, relocations.size).cursor()
             while (entries.remaining > 0) {
                 val relocationIndex = entries.position / 24
                 val location = entries.unsigned(8)
                 val info = entries.unsigned(8)
                 val addend = entries.unsigned(8)
-                if (location != got) continue
-                require(resolverIndex == null || resolverIndex == relocationIndex) { "PLT resolver index disagrees with its relocation" }
-                require(
-                    info and 0xffffffffL in setOf(
-                        6L,
-                        7L
-                    ) && addend == 0L
-                ) { "Unsupported imported function relocation" }
+                if (location < address - 7 || location >= address + 8) continue
+                require(location == address) {
+                    "Imported function relocation partially overlaps its pointer"
+                }
+                require(++matches == 1) { "Duplicate imported function pointer relocation" }
+                require(resolverIndex == null || resolverIndex == relocationIndex) {
+                    "PLT resolver index disagrees with its relocation"
+                }
+                if (allowLocal && info == 8L) {
+                    require(addend >= 0) { "Invalid local function pointer relocation" }
+                    local = true
+                    continue
+                }
+                require(info and 0xffffffffL in types && addend == 0L) {
+                    "Unsupported imported function relocation"
+                }
                 val table = sections[relocations.link]
                 val index = info ushr 32
-                require(table.type == 11L && table.entrySize == 24L && table.size % 24 == 0L && index in 1 until table.size / 24)
+                require(
+                    table.type == 11L &&
+                        table.entrySize == 24L &&
+                        table.size % 24 == 0L &&
+                        index in 1 until table.size / 24
+                )
                 val symbol = file.slice(table.offset + index * 24, 24)
                 val kind = symbol.unsigned(4, 1).toInt()
-                require(kind and 15 == 2 && kind ushr 4 in setOf(1, 2) && symbol.unsigned(6, 2) == 0L)
+                require(
+                    kind and 15 == 2 && kind ushr 4 in setOf(1, 2) && symbol.unsigned(6, 2) == 0L
+                )
                 val strings = sections[table.link]
                 require(strings.type == 3L)
-                names += file.slice(strings.offset, strings.size).string(symbol.unsigned(0, 4), 4096)
+                names +=
+                    file.slice(strings.offset, strings.size).string(symbol.unsigned(0, 4), 4096)
             }
         }
+        if (matches == 0 || local) return null
         return names.singleOrNull()?.takeIf { it.isNotEmpty() }
             ?: error("Missing or ambiguous imported function relocation")
     }
@@ -267,7 +417,9 @@ internal class ElfImage(private val file: BinaryView) {
         if (dynamic.isEmpty()) return null
         require(dynamic.size == 1) { "Ambiguous ELF dynamic section" }
         val section = dynamic.single()
-        require(section.entrySize == 16L && section.size % 16 == 0L && section.size / 16 in 1..65536) {
+        require(
+            section.entrySize == 16L && section.size % 16 == 0L && section.size / 16 in 1..65536
+        ) {
             "Invalid ELF dynamic table"
         }
         val strings = sections[section.link]
@@ -289,16 +441,27 @@ internal class ElfImage(private val file: BinaryView) {
 
     fun virtualBytes(address: Long, length: Long, executable: Boolean = false): BinaryView {
         require(address >= 0 && length > 0)
-        val segment = segments.singleOrNull {
-            it.type == 1L && (!executable || it.flags and 1 != 0L) && address >= it.address &&
-                    address - it.address <= it.fileSize && length <= it.fileSize - (address - it.address)
-        } ?: error("ELF address is outside a file-backed load segment")
+        val segment =
+            segments.singleOrNull {
+                it.type == 1L &&
+                    (!executable || it.flags and 1 != 0L) &&
+                    address >= it.address &&
+                    address - it.address <= it.fileSize &&
+                    length <= it.fileSize - (address - it.address)
+            } ?: error("ELF address is outside a file-backed load segment")
         observedReadonly?.let { evidence ->
-            if (!executable && sections.any { section ->
-                    section.flags and 7L == 2L && address >= section.address &&
-                            length <= section.size && address - section.address <= section.size - length
-                }) {
-                require(length <= 16 * 1024 * 1024 && evidence.size < 16384) { "Readonly evidence exceeds bounds" }
+            if (
+                !executable &&
+                    sections.any { section ->
+                        section.flags and 7L == 2L &&
+                            address >= section.address &&
+                            length <= section.size &&
+                            address - section.address <= section.size - length
+                    }
+            ) {
+                require(length <= 16 * 1024 * 1024 && evidence.size < 16384) {
+                    "Readonly evidence exceeds bounds"
+                }
                 evidence += ReadonlyRange(address, length)
             }
         }
@@ -306,10 +469,13 @@ internal class ElfImage(private val file: BinaryView) {
     }
 
     fun functionBytes(symbol: Symbol, maximum: Int): BinaryView {
-        require(symbol.type == 2 && symbol.size > 0 && maximum > 0) { "ELF symbol has no function range" }
+        require(symbol.type == 2 && symbol.size > 0 && maximum > 0) {
+            "ELF symbol has no function range"
+        }
         // Validate the entire range before copying a bounded prologue.
         val bytes =
-            virtualBytes(symbol.address, symbol.size, executable = true).slice(0, minOf(symbol.size, maximum.toLong()))
+            virtualBytes(symbol.address, symbol.size, executable = true)
+                .slice(0, minOf(symbol.size, maximum.toLong()))
         observedFunctions?.add(symbol)
         return bytes
     }

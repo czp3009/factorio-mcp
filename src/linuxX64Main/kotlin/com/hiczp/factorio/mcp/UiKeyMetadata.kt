@@ -26,18 +26,7 @@ internal data class UiKeyMetadata(
         capture.writeTo(output.capture, bias)
         modal.writeTo(output.modal)
         output.focus = address(focus)
-        val poll = event.poll
-        site.entry = address(poll.table + poll.slot * 8L)
-        site.original = address(poll.poll.address)
-        site.table = address(poll.table)
-        site.caller = address(poll.caller.address + poll.returnOffset)
-        site.pumpCaller = address(poll.pump.address + poll.pumpReturnOffset)
-        site.frameReturn = poll.callerReturnFromFrame.toUInt()
-        val local = poll.frame + poll.callerReturnFromFrame
-        require(local in -16384..16384)
-        site.eventFromFrame = local.toInt()
-        site.eventExtent = event.header.extent.toUInt()
-        site.protection = protection.toUInt()
+        event.poll.writeTo(site, event.header, protection, bias)
     }
 
     companion object {

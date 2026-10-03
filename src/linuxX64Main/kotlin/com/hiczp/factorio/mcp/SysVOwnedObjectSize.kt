@@ -17,21 +17,26 @@ internal object SysVOwnedObjectSize {
         image: ElfImage,
         ownerDestructor: String,
         objectDestructor: String,
-        deallocator: String = "_ZdlPvm"
+        deallocator: String = "_ZdlPvm",
+        ownerPrimaryTable: String? = null,
     ): OwnedObjectSize {
         val owner = image.symbol(ownerDestructor)
         val destroy = image.symbol(objectDestructor)
         val deallocate = image.symbol(deallocator)
         require(owner.size in 1..256)
         for (function in listOf(owner, destroy, deallocate)) EhFrames(image).function(function)
-        return analyze(image.functionBytes(owner, 256), owner.address, destroy.address, deallocate.address)
+        val table = ownerPrimaryTable?.let { ItaniumVtable.resolve(image, it).addressPoint }
+        return analyze(image.functionBytes(owner, 256), owner.address, destroy.address, deallocate.address, table)
     }
 
-    fun analyze(bytes: BinaryView, address: Long, destructor: Long, deallocate: Long): OwnedObjectSize {
+    fun analyze(
+        bytes: BinaryView, address: Long, destructor: Long, deallocate: Long, primaryTable: Long? = null
+    ): OwnedObjectSize {
         require(
             bytes.size in 1..256 && address >= 0 && address <= Long.MAX_VALUE - bytes.size &&
                     destructor >= 0 && deallocate >= 0 && destructor != deallocate
         )
+        require(primaryTable == null || primaryTable > 0 && primaryTable % 8 == 0L)
         val body = X64Instructions(bytes).all().associateBy { it.offset }
         fun path(present: Boolean): OwnedObjectSize {
             val registers = (0..15).associateWith<Int, Value> { Original(it) }.toMutableMap()
@@ -42,6 +47,7 @@ internal object SysVOwnedObjectSize {
             var zero: Boolean? = null
             var destroyed = false
             var size: Long? = null
+            var tableInitialized = false
             val visited = mutableSetOf<Long>()
             fun top() = (registers[4] as? Stack)?.offset ?: error("Unknown owner destructor frame")
             fun read(register: Register): Value {
@@ -91,6 +97,9 @@ internal object SysVOwnedObjectSize {
                             is Memory -> {
                                 val offset = member(source)
                                 require(pointer == null) { "Owner loads multiple pointer candidates" }
+                                require(primaryTable == null || tableInitialized && offset >= 8) {
+                                    "Owned pointer overlaps the verified primary table"
+                                }
                                 pointer = offset
                                 if (present) Object else Constant(0)
                             }
@@ -104,12 +113,31 @@ internal object SysVOwnedObjectSize {
                                     Constant(value.value and 0xffffffffL) else value
                             }
 
-                            is Memory -> require(member(target) == pointer && value == Constant(0) && (!present || size != null)) {
-                                "Owner destructor writes outside its cleared pointer member"
+                            is Memory -> {
+                                val offset = member(target)
+                                if (primaryTable != null && offset == 0L && value == Constant(primaryTable)) {
+                                    require(pointer == null && !tableInitialized)
+                                    tableInitialized = true
+                                } else require(offset == pointer && value == Constant(0) && (!present || size != null)) {
+                                    "Owner destructor writes outside its cleared pointer member"
+                                }
                             }
 
                             else -> error("Unsupported owner destination")
                         }
+                    }
+
+                    Operation.LEA -> {
+                        val target = instruction.destination as? Register ?: error("Owner table has no register")
+                        val source = instruction.source as? Memory ?: error("Owner table has no address")
+                        val next = address + instruction.offset + instruction.size
+                        require(primaryTable != null && target.width == 8 && target.number !in listOf(4, 5) &&
+                                source.relative && source.base == null && source.index == null &&
+                                source.displacement >= -next && source.displacement <= Long.MAX_VALUE - next &&
+                                next + source.displacement == primaryTable) {
+                            "Owner destructor address is not its verified primary table"
+                        }
+                        registers[target.number] = Constant(primaryTable)
                     }
 
                     Operation.ADD, Operation.SUB -> {
@@ -164,6 +192,7 @@ internal object SysVOwnedObjectSize {
                     }
 
                     Operation.RET -> {
+                        require(primaryTable == null || tableInitialized) { "Owner does not initialize its primary table" }
                         require(top() == 0L && stack.isEmpty() && listOf(3, 5, 12, 13, 14, 15).all {
                             registers[it] == Original(it)
                         }) { "Owner destructor does not restore the System V frame" }

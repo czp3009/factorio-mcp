@@ -22,6 +22,7 @@ internal data class InputContextMetadata(
     val stop: Long,
     val pause: InputPauseField,
     val evaluationCaller: Long,
+    val forwarded: ForwardedInputSource,
     private val functions: List<ElfImage.Symbol> = emptyList(),
     private val readonly: List<ElfImage.ReadonlyRange> = emptyList(),
     private val pointers: Map<Long, Long> = emptyMap(),
@@ -63,6 +64,10 @@ internal data class InputContextMetadata(
         input.handlerMap = pause.handlerMap.toUInt()
         input.handlerSource = pause.handlerSource.toUInt()
         input.handlerCount = handlers.size.toUInt()
+        input.forwardedVtable = address(forwarded.type.addressPoint)
+        input.forwardedTypeInfo = address(forwarded.type.typeInfo)
+        input.forwardedSize = forwarded.size.toUInt()
+        input.forwardedSource = forwarded.source.toUInt()
         handlers.forEachIndexed { index, member -> input.handlers[index] = member.toUInt() }
     }
 
@@ -102,10 +107,11 @@ internal data class InputContextMetadata(
                     val context = LuaContextLayout.resolve(image, script.size)
                     val source = InputSourceLayout.resolve(image, world.global, world.globalSize)
                     val gameSource = EventSenderStateCalls.sourceDispatch(image, source).gameSource
+                    val forwarded = ForwardedInputSource.resolve(image, source.evaluation.slot)
                     require(world.gameSize == source.gameSize && world.contextSize == context.size)
                     val types = listOf(
                         "17PlayerInputSource", "6Player", "8GameView", "17GameActionHandler",
-                        "10LuaContext", "13LuaGameScript", "11InputSource"
+                        "10LuaContext", "13LuaGameScript", "11InputSource", "19NetworkInputHandler"
                     ).associateWith { ItaniumType.resolve(image, it) }
                     val handlerType = types.getValue("17GameActionHandler")
                     val handlerSize = SysVObjectSize.resolve(image, "17GameActionHandler")
@@ -118,7 +124,7 @@ internal data class InputContextMetadata(
                         image,
                         "_ZN4GameC2ER3MapR8Scenario8LoadType9InputTypeP11InputSource", source.gameSize, handlerType
                     )
-                    val pointers = ElfPointers(image)
+                    val pointers = image.pointers
                     val words = mutableMapOf<Long, Long>()
                     for (type in types.values) {
                         words[type.addressPoint - 16] = 0
@@ -127,7 +133,7 @@ internal data class InputContextMetadata(
                     }
                     // Complete primary tables consulted for method-slot derivation. Multiple-table groups used
                     // only for concrete identity above do not imply any callable secondary slots.
-                    for (name in listOf("17PlayerInputSource", "11InputSource", "10LuaContext", "13LuaGameScript")) {
+                    for (name in listOf("17PlayerInputSource", "11InputSource", "10LuaContext", "13LuaGameScript", "19NetworkInputHandler")) {
                         val table = image.symbol("_ZTV$name")
                         ItaniumVtable.resolve(image, table.name)
                         pointers.words(table.address, (table.size / 8).toInt()).forEachIndexed { index, word ->
@@ -139,7 +145,7 @@ internal data class InputContextMetadata(
                         types.getValue("6Player"), types.getValue("8GameView"), handlerType,
                         handlerSize, handlers,
                         ScriptTickField.resolve(image, script.size, source.mapSize),
-                        MapStopField.resolve(image, source.mapSize), pause, evaluationCaller,
+                        MapStopField.resolve(image, source.mapSize), pause, evaluationCaller, forwarded,
                         pointers = words
                     )
                 }

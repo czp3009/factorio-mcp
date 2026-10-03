@@ -110,11 +110,10 @@ internal class ResolvedSymbols(
     val visibility: Result<VisibilityLayouts>,
     val progress: Result<ProgressLayouts>,
     val elements: Result<ElementLayouts>,
-    val sprites: Result<SpriteLayouts>,
+    val icons: Result<IconLayout>,
     val conditions: Result<QualityConditionLayouts>,
     val switches: Result<SwitchLayouts>,
     val chat: Result<ChatLayouts>,
-    val inputTransfer: Result<InputTransferLayouts>,
 ) {
     fun write(target: Symbols) {
         memset(target.ptr, 0, sizeOf<Symbols>().toULong())
@@ -135,11 +134,10 @@ internal class ResolvedSymbols(
         visibility.getOrNull()?.write(target.visibility)
         progress.getOrNull()?.write(target.progress)
         elements.getOrNull()?.write(target.elements)
-        sprites.getOrNull()?.write(target.sprites)
+        icons.getOrNull()?.write(target.icons)
         conditions.getOrNull()?.write(target.conditions)
         switches.getOrNull()?.write(target.switches)
         chat.getOrNull()?.write(target.chat)
-        inputTransfer.getOrNull()?.write(target.inputTransfer)
         if (world.isSuccess && controls.isSuccess && pauseOffsets != null)
             timedInput.getOrNull()?.write(target.timedInput)
         target.processEventsEnd = processEventsEnd
@@ -152,14 +150,14 @@ internal class ResolvedSymbols(
 }
 
 private class SymbolCollector {
-    val addresses = MutableList(symbolPrefixes.size) { 0uL }
-    val counts = IntArray(symbolPrefixes.size)
+    val symbols = PdbSymbolCandidates(symbolPrefixes.size)
     val providerTypes = mutableListOf<ULong>()
     val numberTypes = mutableListOf<ULong>()
     val progressTypes = mutableListOf<ULong>()
-    val spriteTypes = mutableListOf<ULong>()
+    val iconTypes = mutableListOf<ULong>()
     val conditionTypes = mutableListOf<ULong>()
     val qualityRegistries = mutableListOf<ULong>()
+    val comparisonStrings = mutableListOf<ULong>()
     val switchTypes = mutableListOf<ULong>()
     val elementTypes = mutableMapOf<String, MutableList<ULong>>()
 }
@@ -176,7 +174,7 @@ internal fun resolveSymbols(process: HANDLE, module: ProcessModule): ResolvedSym
     )
     check(
         SymInitializeW(process, module.path.substringBeforeLast('\\').wcstr.getPointer(this), 0) !=
-                0
+            0
     ) {
         "Cannot initialize Windows symbol reader"
     }
@@ -203,9 +201,10 @@ internal fun resolveSymbols(process: HANDLE, module: ProcessModule): ResolvedSym
                     process,
                     module.base,
                     null,
-                    staticCFunction { info: CPointer<SYMBOL_INFO>?,
-                                      _: UInt,
-                                      context: COpaquePointer? ->
+                    staticCFunction {
+                        info: CPointer<SYMBOL_INFO>?,
+                        _: UInt,
+                        context: COpaquePointer? ->
                         val result = context!!.asStableRef<SymbolCollector>().get()
                         val name = info!!.pointed.Name.toKString()
                         if (name == "??_R0?AVPrototypeProvider@@@8")
@@ -217,22 +216,24 @@ internal fun resolveSymbols(process: HANDLE, module: ProcessModule): ResolvedSym
                         if (name == "??_R0?AVSwitch@agui@@@8")
                             result.switchTypes.add(info.pointed.Address)
                         if (name == "??_R0?AVIconButton@@@8")
-                            result.spriteTypes.add(info.pointed.Address)
+                            result.iconTypes.add(info.pointed.Address)
+                        if (name == "?str@Comparison@@QEBAPEBDXZ")
+                            result.comparisonStrings.add(info.pointed.Address)
                         if (
                             name ==
-                            "?indexToPrototype@?\$PrototypeList@VQualityPrototype@@@@2V?\$vector@PEAVQualityPrototype@@V?\$allocator@PEAVQualityPrototype@@@std@@@std@@A"
+                                "?indexToPrototype@?\$PrototypeList@VQualityPrototype@@@@2V?\$vector@PEAVQualityPrototype@@V?\$allocator@PEAVQualityPrototype@@@std@@@std@@A"
                         )
                             result.qualityRegistries.add(info.pointed.Address)
                         if (
                             name ==
-                            "??_R0?AV?\$IDButtonProvider@V?\$IDWithQualityFilter@V?\$ID@VItemPrototype@@G@@@@@@@8"
+                                "??_R0?AV?\$IDButtonProvider@V?\$IDWithQualityFilter@V?\$ID@VItemPrototype@@G@@@@@@@8"
                         )
                             result.conditionTypes.add(info.pointed.Address)
                         if (
                             name.startsWith("??_R0?AV?\$ElemProvider@") ||
-                            name == "??_R0?AVItem@@@8" ||
-                            name == "??_R0?AVTool@@@8" ||
-                            name == "??_R0?AVAmmoItem@@@8"
+                                name == "??_R0?AVItem@@@8" ||
+                                name == "??_R0?AVTool@@@8" ||
+                                name == "??_R0?AVAmmoItem@@@8"
                         )
                             result.elementTypes
                                 .getOrPut(name) { mutableListOf() }
@@ -242,8 +243,7 @@ internal fun resolveSymbols(process: HANDLE, module: ProcessModule): ResolvedSym
                                 if (prefix == "SDL_GetTicks") name == prefix
                                 else name.startsWith(prefix)
                             ) {
-                                result.addresses[index] = info.pointed.Address
-                                result.counts[index]++
+                                result.symbols.add(index, info.pointed.Address)
                             }
                         }
                         1
@@ -256,7 +256,9 @@ internal fun resolveSymbols(process: HANDLE, module: ProcessModule): ResolvedSym
         } finally {
             reference.dispose()
         }
-        collector.counts.take(FmSymbol.ControlList.value.toInt()).forEachIndexed { index, count ->
+        val addresses = collector.symbols.addresses()
+        (0 until FmSymbol.ControlList.value.toInt()).forEach { index ->
+            val count = collector.symbols.count(index)
             check(count == 1) {
                 "Expected one PDB match for ${symbolPrefixes[index]}; found $count"
             }
@@ -266,45 +268,44 @@ internal fun resolveSymbols(process: HANDLE, module: ProcessModule): ResolvedSym
         info.SizeOfStruct = sizeOf<IMAGEHLP_MODULE64>().toUInt()
         check(
             SymGetModuleInfo64(process, module.base, info.ptr) != 0 &&
-                    info.SymType == SymPdb &&
-                    info.PdbUnmatched == 0
+                info.SymType == SymPdb &&
+                info.PdbUnmatched == 0
         ) {
             "Matching developer PDB is required"
         }
         val (guid, age) = image.debugIdentity()
         check(
             info.PdbSig70.ptr.reinterpret<ByteVar>().readBytes(16).contentEquals(guid) &&
-                    info.PdbAge.toInt() == age
+                info.PdbAge.toInt() == age
         ) {
             "Executable/PDB identity mismatch"
         }
 
         fun end(index: Int) =
-            module.base +
-                    image.functionEnd((collector.addresses[index] - module.base).toLong()).toULong()
+            module.base + image.functionEnd((addresses[index] - module.base).toLong()).toULong()
 
         val types = DebugTypes(process, module.base)
         val root = types.pointerMember("agui::Gui", "baseWidget", "agui::TopContainer")
         val pause =
             runCatching {
-                listOf(
-                    types.pointerMember("Game", "map", "Map"),
-                    types.byteMember("Map", "paused", true),
-                    types.byteMember("Map", "stopLevel", false),
-                )
-            }
+                    listOf(
+                        types.pointerMember("Game", "map", "Map"),
+                        types.byteMember("Map", "paused", true),
+                        types.byteMember("Map", "stopLevel", false),
+                    )
+                }
                 .getOrNull()
         val input = runCatching {
             for (index in
-            FmSymbol.NextEvent.value.toInt() until FmSymbol.ToggleButtonType.value.toInt()) {
-                check(collector.counts[index] == 1) {
+                FmSymbol.NextEvent.value.toInt() until FmSymbol.ToggleButtonType.value.toInt()) {
+                check(collector.symbols.count(index) == 1) {
                     "Frontend keyboard unavailable: missing or ambiguous ${symbolPrefixes[index]}"
                 }
             }
             FrontendInputLayouts(types) to end(FmSymbol.ProcessEvents.value.toInt())
         }
         ResolvedSymbols(
-            collector.addresses,
+            addresses,
             end(FmSymbol.Prepare.value.toInt()),
             end(FmSymbol.MainStep.value.toInt()),
             root,
@@ -313,8 +314,8 @@ internal fun resolveSymbols(process: HANDLE, module: ProcessModule): ResolvedSym
             types.pointerMember("agui::Widget", "parentWidget", "agui::Widget"),
             runCatching {
                 for (index in
-                FmSymbol.ControlList.value.toInt() until FmSymbol.NextEvent.value.toInt()) {
-                    check(collector.counts[index] == 1) {
+                    FmSymbol.ControlList.value.toInt() until FmSymbol.NextEvent.value.toInt()) {
+                    check(collector.symbols.count(index) == 1) {
                         "input_bindings unavailable: missing or ambiguous ${symbolPrefixes[index]}"
                     }
                 }
@@ -324,9 +325,9 @@ internal fun resolveSymbols(process: HANDLE, module: ProcessModule): ResolvedSym
             input.getOrNull()?.second ?: 0uL,
             runCatching {
                 for (index in
-                FmSymbol.ToggleButtonType.value.toInt() until
+                    FmSymbol.ToggleButtonType.value.toInt() until
                         FmSymbol.LocalPlayer.value.toInt()) {
-                    check(collector.counts[index] == 1) {
+                    check(collector.symbols.count(index) == 1) {
                         "Widget properties unavailable: missing or ambiguous ${symbolPrefixes[index]}"
                     }
                 }
@@ -334,9 +335,9 @@ internal fun resolveSymbols(process: HANDLE, module: ProcessModule): ResolvedSym
             },
             runCatching {
                 for (index in
-                FmSymbol.LocalPlayer.value.toInt() until
+                    FmSymbol.LocalPlayer.value.toInt() until
                         FmSymbol.EventDestructor.value.toInt()) {
-                    check(collector.counts[index] == 1) {
+                    check(collector.symbols.count(index) == 1) {
                         "World query unavailable: missing or ambiguous ${symbolPrefixes[index]}"
                     }
                 }
@@ -344,9 +345,9 @@ internal fun resolveSymbols(process: HANDLE, module: ProcessModule): ResolvedSym
             },
             runCatching {
                 for (index in
-                FmSymbol.EventDestructor.value.toInt() until
+                    FmSymbol.EventDestructor.value.toInt() until
                         FmSymbol.PlayerGameView.value.toInt()) {
-                    check(collector.counts[index] == 1) {
+                    check(collector.symbols.count(index) == 1) {
                         "Timed input unavailable: missing or ambiguous ${symbolPrefixes[index]}"
                     }
                 }
@@ -355,9 +356,9 @@ internal fun resolveSymbols(process: HANDLE, module: ProcessModule): ResolvedSym
             },
             runCatching {
                 for (index in
-                FmSymbol.PlayerGameView.value.toInt() until
+                    FmSymbol.PlayerGameView.value.toInt() until
                         FmSymbol.LocalisedRaw.value.toInt()) {
-                    check(collector.counts[index] == 1) {
+                    check(collector.symbols.count(index) == 1) {
                         "Viewport unavailable: missing or ambiguous ${symbolPrefixes[index]}"
                     }
                 }
@@ -386,7 +387,7 @@ internal fun resolveSymbols(process: HANDLE, module: ProcessModule): ResolvedSym
                     collector.elementTypes,
                 )
             },
-            runCatching { SpriteLayouts(types, collector.spriteTypes) },
+            runCatching { IconLayout(types, collector.iconTypes) },
             runCatching {
                 QualityConditionLayouts(
                     types,
@@ -395,18 +396,21 @@ internal fun resolveSymbols(process: HANDLE, module: ProcessModule): ResolvedSym
                     age,
                     collector.conditionTypes,
                     collector.qualityRegistries,
+                    collector.comparisonStrings,
+                    image,
+                    module,
+                    { rva, size -> readModule(process, module, rva, size) },
                 )
             },
             runCatching { SwitchLayouts(types, collector.switchTypes) },
             runCatching {
                 for (index in FmSymbol.LocalisedRaw.value.toInt() until symbolPrefixes.size) {
-                    check(collector.counts[index] == 1) {
+                    check(collector.symbols.count(index) == 1) {
                         "Chat unavailable: missing or ambiguous ${symbolPrefixes[index]}"
                     }
                 }
                 ChatLayouts(types)
             },
-            runCatching { InputTransferLayouts(types) },
         )
     } finally {
         SymCleanup(process)
@@ -456,9 +460,9 @@ internal fun frontendRunning(process: HANDLE, pid: UInt, symbols: ResolvedSymbol
                                                 val pc = frame.AddrPC.Offset
                                                 if (
                                                     pc >=
-                                                    symbols.addresses[
-                                                        FmSymbol.MainStep.value.toInt()] &&
-                                                    pc < symbols.mainEnd
+                                                        symbols.addresses[
+                                                                FmSymbol.MainStep.value.toInt()] &&
+                                                        pc < symbols.mainEnd
                                                 )
                                                     return true
                                                 if (

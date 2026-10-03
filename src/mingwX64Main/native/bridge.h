@@ -9,7 +9,7 @@ extern "C" {
 #endif
 #define FM_MAX_NODES 4096
 #define FM_MAX_OPTIONS 1024
-#define FM_MAX_SPRITES 512
+#define FM_MAX_ICON_REFERENCES 512
 #define FM_MAX_WIDGET_OPTIONS 64
 #define FM_MAX_INPUT_STEPS 256
 #define FM_MAX_INPUT_BUTTONS 8
@@ -22,12 +22,6 @@ extern "C" {
 #define FM_MAX_CONTROLS 1024
 #define FM_MAX_IMAGE (16 * 1024 * 1024)
 #define FM_MAX_CHAT 256
-
-typedef struct FmInputTransfer {
-    uint32_t available, clientPresent, importPresent, segmentIndex, totalSegments;
-    uint64_t queuedBatches;
-    char reason[256];
-} FmInputTransfer;
 
 typedef struct FmChatRecord {
     uint64_t identity, tick;
@@ -90,15 +84,6 @@ typedef struct FmNode {
     uint32_t switchState, switchAllowNone;
 } FmNode;
 
-typedef struct FmSprite {
-    uint32_t flags;
-    char filename[512];
-    int16_t x, y, width, height;
-    double scale, shiftX, shiftY;
-    float tint[4];
-    int32_t next, extra;
-} FmSprite;
-
 typedef struct FmOption {
     char text[512];
     uint32_t truncated;
@@ -126,13 +111,10 @@ typedef struct FmResult {
     FmNode nodes[FM_MAX_NODES];
     uint32_t optionCount;
     FmOption options[FM_MAX_OPTIONS];
-    uint32_t spriteCount;
-    FmSprite sprites[FM_MAX_SPRITES];
     unsigned char image[FM_MAX_IMAGE];
     uint32_t worldSize;
     char worldJson[FM_MAX_WORLD_JSON];
     FmChatSnapshot chat;
-    FmInputTransfer inputTransfer;
 } FmResult;
 
 typedef enum FmSymbol {
@@ -277,11 +259,10 @@ typedef struct ElementLayout {
     uint32_t supported, stackGetter, itemGetter, stackItem, count, health, durability, magazine;
 } ElementLayout;
 
-typedef struct SpriteLayout {
+typedef struct IconLayout {
     uint64_t type;
-    uint32_t supported, normal, hovered, disabled, filename;
-    uint32_t x, y, width, height, scale, shiftX, shiftY, tint[4], next, extra, empty;
-} SpriteLayout;
+    uint32_t supported, normal, hovered, disabled;
+} IconLayout;
 
 typedef struct WorldLayout {
     uint32_t supported, scenario, luaState, setupFinished, runningOnLoad, playerIndex;
@@ -344,12 +325,6 @@ typedef struct ChatLayout {
     uint32_t writeToConsole;
 } ChatLayout;
 
-typedef struct InputTransferLayout {
-    uint32_t supported, client, synchronizer, listener, queue;
-    uint32_t map, mapSize, first, count, blockSize, vectorSize, vectorBegin, vectorEnd;
-    uint32_t segmentSize, actionType, segmentIndex, totalSegments, importAction;
-} InputTransferLayout;
-
 typedef struct Symbols {
     uint64_t address[SymbolCount];
     uint64_t prepareEnd, mainEnd;
@@ -366,12 +341,11 @@ typedef struct Symbols {
     VisibilityLayout visibility;
     ProgressLayout progress;
     ElementLayout elements;
-    SpriteLayout sprites;
+    IconLayout icons;
     WorldLayout world;
     TimedInputLayout timedInput;
     ViewportLayout viewport;
     ChatLayout chat;
-    InputTransferLayout inputTransfer;
 } Symbols;
 
 typedef struct Shared {

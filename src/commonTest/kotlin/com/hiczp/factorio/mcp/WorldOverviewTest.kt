@@ -54,6 +54,26 @@ class WorldOverviewTest {
     }
 
     @Test
+    fun genericGroupingAndAggregationPreserveExplicitFields() {
+        val value = parse("""{"group_by":[],"aggregates":[{"operation":"sum","field":"amount"},{"operation":"max","field":"health"}]}""")
+        assertEquals(JsonArray(emptyList()), value.arguments["group_by"])
+        assertEquals(2, value.arguments.getValue("aggregates").jsonArray.size)
+        assertEquals(Json.parseToJsonElement("""["name","type","quality"]"""), parse("{}").arguments["group_by"])
+        for (text in listOf(
+            """{"detail":"entities","group_by":[]}""",
+            """{"detail":"entities","aggregates":[]}""",
+            """{"group_by":["name","name"]}""",
+            """{"group_by":["unobserved"]}""",
+            """{"aggregates":[{"operation":"count","field":"amount"}]}""",
+            """{"aggregates":[{"operation":"sum","field":"unobserved"}]}""",
+            """{"aggregates":[{"operation":"sum","field":"amount","extra":true}]}""",
+        )) assertFailsWith<IllegalArgumentException>(text) { parse(text) }
+        val groups = decodeWorldQuery("""{"objects":[{"entity_groups":[{"attributes":{},"read_status":{},"count":1,"aggregates":{}}]}]}""")
+        assertEquals(JsonArray(emptyList()), groups.getValue("objects").jsonArray.single().jsonObject
+            .getValue("entity_groups").jsonArray.single().jsonObject.getValue("aggregates"))
+    }
+
+    @Test
     fun rejectsAmbiguousUnboundedAndMalformedRequests() {
         for (text in
         listOf(

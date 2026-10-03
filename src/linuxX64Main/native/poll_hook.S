@@ -10,8 +10,7 @@
 .hidden fm_before_poll
 .hidden fm_after_empty_poll
 
-#include
-"hook_state.inc"
+#include "hook_state.inc"
 
 .type fm_poll_hook, @function
 fm_poll_hook:
@@ -32,7 +31,8 @@ save_hook_state
 movq -8(%rbp), %rdi
 movq -104(%rbp), %rsi
 movq 8(%rbp), %rdx
-movq 0(%rbp), %rcx
+// The caller's call-time RSP, independent of whether it keeps an RBP frame pointer.
+leaq 16(%rbp), %rcx
 call fm_before_poll
 testl %eax, %eax
 js .Lforward
@@ -58,7 +58,7 @@ jne .Lreturn
 movq -8(%rbp), %rdi
 movq -104(%rbp), %rsi
 movq 8(%rbp), %rdx
-movq 0(%rbp), %rcx
+leaq 16(%rbp), %rcx
 call fm_after_empty_poll
 movb %al, -24(%rbp)
 .Lreturn:

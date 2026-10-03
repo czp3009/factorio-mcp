@@ -9,21 +9,20 @@
 
 bool validKeyStateLayout(const FmLinuxMouseStateLayout &owner, const FmLinuxKeyStateLayout &layout) {
     if (!validMouseStateLayout(owner) || layout.map > owner.stateSize || layout.map % alignof(uintptr_t) ||
-        layout.stride < sizeof(int32_t) ||
-        layout.stride > 512 || layout.stride % alignof(uintptr_t) || !layout.valueSize ||
-        layout.valueSize > FM_LINUX_KEY_VALUE_BYTES || !fm::member(layout.key, sizeof(int32_t), layout.stride) ||
-        !fm::member(layout.value, layout.valueSize, layout.stride) ||
-        !fm::member(layout.held, 1, layout.valueSize) || !fm::member(layout.clear, 1, layout.valueSize) ||
-        layout.held == layout.clear || !(layout.key + sizeof(int32_t) <= layout.value ||
-            layout.value + layout.valueSize <= layout.key))
+        layout.stride < sizeof(int32_t) || layout.stride > 512 || layout.stride % alignof(uintptr_t) ||
+        !layout.valueSize || layout.valueSize > FM_LINUX_KEY_VALUE_BYTES ||
+        !fm::member(layout.key, sizeof(int32_t), layout.stride) ||
+        !fm::member(layout.value, layout.valueSize, layout.stride) || !fm::member(layout.held, 1, layout.valueSize) ||
+        !fm::member(layout.clear, 1, layout.valueSize) || layout.held == layout.clear ||
+        !(layout.key + sizeof(int32_t) <= layout.value || layout.value + layout.valueSize <= layout.key))
         return false;
     const auto size = owner.stateSize - layout.map;
     return fm::member(layout.begin, sizeof(uintptr_t), size) && fm::member(layout.end, sizeof(uintptr_t), size) &&
-        layout.begin % alignof(uintptr_t) == 0 && layout.end % alignof(uintptr_t) == 0 && layout.begin != layout.end;
+           layout.begin % alignof(uintptr_t) == 0 && layout.end % alignof(uintptr_t) == 0 && layout.begin != layout.end;
 }
 
-int readKeyState(const FmLinuxMouseStateLayout &owner, const FmLinuxKeyStateLayout &layout,
-                 int32_t code, InputStateObjects &objects, KeyStateValue &output) {
+int readKeyState(const FmLinuxMouseStateLayout &owner, const FmLinuxKeyStateLayout &layout, int32_t code,
+                 InputStateObjects &objects, KeyStateValue &output) {
     objects = {};
     output = {};
     if (!validKeyStateLayout(owner, layout))
@@ -35,8 +34,8 @@ int readKeyState(const FmLinuxMouseStateLayout &owner, const FmLinuxKeyStateLayo
     uintptr_t begin, end;
     if (!fm::read(map + layout.begin, begin) || !fm::read(map + layout.end, end))
         return EFAULT;
-    if ((!begin && end) || begin % alignof(uintptr_t) || end < begin ||
-        (end - begin) % layout.stride || (end - begin) / layout.stride > FM_LINUX_KEY_RECORDS)
+    if ((!begin && end) || begin % alignof(uintptr_t) || end < begin || (end - begin) % layout.stride ||
+        (end - begin) / layout.stride > FM_LINUX_KEY_RECORDS)
         return EPROTO;
     const auto count = (end - begin) / layout.stride;
     if (count && !fm::addressRange(begin, end - begin))
@@ -70,8 +69,8 @@ bool validKeyboardStateConfig(const FmLinuxMouseStateLayout &owner, const FmLinu
     if (!validKeyStateLayout(owner, config.layout) || config.press == config.release ||
         !fm::member(config.eventCode, sizeof(uint32_t), owner.eventSize))
         return false;
-    for (const auto field : {std::pair{owner.eventType, uint32_t(sizeof(uint32_t))},
-                            std::pair{owner.eventTime, uint32_t(sizeof(double))}})
+    for (const auto field :
+         {std::pair{owner.eventType, uint32_t(sizeof(uint32_t))}, std::pair{owner.eventTime, uint32_t(sizeof(double))}})
         if (!(config.eventCode + sizeof(uint32_t) <= field.first || field.first + field.second <= config.eventCode))
             return false;
     for (unsigned index = 0; index < 3; ++index) {
@@ -129,8 +128,6 @@ int KeyboardKeyOwnership::press(const FmLinuxMouseStateLayout &owner, const FmLi
     KeyStateValue value;
     if (const auto error = readKeyState(owner, config.layout, int32_t(code), objects, value))
         return record(error);
-    if (value.held || value.blocked)
-        return record(EBUSY);
     code_ = code;
     globalIdentity_ = objects.global;
     stateIdentity_ = objects.state;
@@ -139,10 +136,9 @@ int KeyboardKeyOwnership::press(const FmLinuxMouseStateLayout &owner, const FmLi
     if (!press_.updateEntered)
         owned_ = false;
     if (!failure_) {
-        // Newly inserted records must satisfy the modifier getter's extra predicate before GUI admission.
-        // This is one invariant check, not a retry or a wait for a gameplay effect.
+        // The dispatched update must leave a valid record in the same input service.
         record(readKeyState(owner, config.layout, int32_t(code_), objects, value));
-        if (!failure_ && (!matches(objects) || !value.present || value.blocked))
+        if (!failure_ && (!matches(objects) || !value.present))
             record(EPROTO);
     }
     return failure_;

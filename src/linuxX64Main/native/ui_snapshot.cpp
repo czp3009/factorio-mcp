@@ -1,5 +1,7 @@
 #include "ui_snapshot.h"
 #include "ui_reference.h"
+#include "ui_number.h"
+#include "ui_icons.h"
 #include "linux_ipc.h"
 #include "memory_read.h"
 #include "widget_text.h"
@@ -33,9 +35,8 @@ bool flag(uintptr_t object, const FmLinuxMemberFlag &layout, uint32_t &output) {
 bool typeName(uintptr_t object, FmLinuxUiNode &node) {
     uintptr_t table, type, name;
     // These are primary Itanium ABI table/RTTI fields, not game member locations.
-    if (!read(object, table) || table < sizeof(uintptr_t) ||
-        !read(table - sizeof(uintptr_t), type) || !type || type > INTPTR_MAX - sizeof(uintptr_t) ||
-        !read(type + sizeof(uintptr_t), name) || !name)
+    if (!read(object, table) || table < sizeof(uintptr_t) || !read(table - sizeof(uintptr_t), type) || !type ||
+        type > INTPTR_MAX - sizeof(uintptr_t) || !read(type + sizeof(uintptr_t), name) || !name)
         return false;
     if (name > INTPTR_MAX - FM_LINUX_TYPE_NAME)
         return false;
@@ -106,8 +107,8 @@ int dropdown(uintptr_t object, const FmLinuxUiLayout &layout, FmLinuxUiNode &nod
         node.dropdownAvailable = 1;
         node.optionTotal = (last - first) / item.stride;
         node.optionFirst = output.optionCount;
-        node.optionCount = std::min<uint32_t>({node.optionTotal, FM_LINUX_WIDGET_OPTIONS,
-            FM_LINUX_MAX_OPTIONS - output.optionCount});
+        node.optionCount =
+            std::min<uint32_t>({node.optionTotal, FM_LINUX_WIDGET_OPTIONS, FM_LINUX_MAX_OPTIONS - output.optionCount});
         for (uint32_t optionIndex = 0; optionIndex < node.optionCount; ++optionIndex) {
             uintptr_t button;
             if (!read(first + optionIndex * item.stride + item.button, button) || !button)
@@ -169,6 +170,21 @@ int rectangle(uintptr_t object, const FmLinuxUiLayout &layout, FmLinuxRectangle 
 } // namespace
 
 bool validUiLayout(const FmLinuxUiLayout &layout) {
+    if (!validNumberLayout(layout.number) || !validIconLayout(layout.icons) || !validIdentityLayout(layout.identity) ||
+        !validElementLayout(layout.elements) || !validQualityLayout(layout.quality))
+        return false;
+    if (layout.switchCount > 64)
+        return false;
+    for (uint32_t i = 0; i < layout.switchCount; ++i) {
+        const auto &item = layout.switches[i];
+        if (!item.table || item.objectSize < layout.widgetSize || item.objectSize > 16 * 1024 * 1024 ||
+            !member(item.state, 1, item.objectSize) || !member(item.allowNone, 1, item.objectSize) ||
+            item.state == item.allowNone)
+            return false;
+        for (uint32_t j = 0; j < i; ++j)
+            if (layout.switches[j].table == item.table)
+                return false;
+    }
     if (layout.dropdownCount > 64)
         return false;
     for (uint32_t i = 0; i < layout.dropdownCount; ++i) {
@@ -231,17 +247,17 @@ bool validUiLayout(const FmLinuxUiLayout &layout) {
             if (layout.checks[j].table == check.table)
                 return false;
     }
-    if (layout.toggle.function && (!layout.toggle.tableCount || layout.toggle.tableCount > 1024 ||
-        layout.toggle.slot > 4095 || layout.toggle.objectSize < layout.widgetSize ||
-        layout.toggle.objectSize > 16 * 1024 * 1024 || !member(layout.toggle.offset, 1, layout.toggle.objectSize) ||
-        !member(layout.toggle.modeOffset, 1, layout.toggle.objectSize)))
+    if (layout.toggle.function &&
+        (!layout.toggle.tableCount || layout.toggle.tableCount > 1024 || layout.toggle.slot > 4095 ||
+         layout.toggle.objectSize < layout.widgetSize || layout.toggle.objectSize > 16 * 1024 * 1024 ||
+         !member(layout.toggle.offset, 1, layout.toggle.objectSize) ||
+         !member(layout.toggle.modeOffset, 1, layout.toggle.objectSize)))
         return false;
     if (!layout.guiSize || !layout.widgetSize || layout.guiSize > 16 * 1024 * 1024 ||
-        layout.widgetSize > 16 * 1024 * 1024 || !member(layout.root, 8, layout.guiSize) ||
-        !layout.rangeCount || layout.rangeCount > FM_LINUX_MAX_CHILD_RANGES ||
-        !validFlag(layout.enabled, layout.widgetSize) || !validFlag(layout.destroying, layout.widgetSize) ||
-        !validFlag(layout.visible, layout.widgetSize) || !validFlag(layout.hiddenBySearch, layout.widgetSize) ||
-        !validFlag(layout.renderEnabled, layout.widgetSize) ||
+        layout.widgetSize > 16 * 1024 * 1024 || !member(layout.root, 8, layout.guiSize) || !layout.rangeCount ||
+        layout.rangeCount > FM_LINUX_MAX_CHILD_RANGES || !validFlag(layout.enabled, layout.widgetSize) ||
+        !validFlag(layout.destroying, layout.widgetSize) || !validFlag(layout.visible, layout.widgetSize) ||
+        !validFlag(layout.hiddenBySearch, layout.widgetSize) || !validFlag(layout.renderEnabled, layout.widgetSize) ||
         !layout.rectangle.function || !member(layout.rectangle.parent, 8, layout.widgetSize))
         return false;
     for (uint32_t index = 0; index < layout.rangeCount; ++index) {
@@ -282,8 +298,8 @@ static int readUi(void *gui, const FmLinuxUiLayout &layout, uint32_t limit, cons
         return ECANCELED;
     uintptr_t root;
     const auto guiAddress = reinterpret_cast<uintptr_t>(gui);
-    if (guiAddress > static_cast<uintptr_t>(INTPTR_MAX) - layout.guiSize ||
-        !read(guiAddress + layout.root, root) || !root)
+    if (guiAddress > static_cast<uintptr_t>(INTPTR_MAX) - layout.guiSize || !read(guiAddress + layout.root, root) ||
+        !root)
         return EFAULT;
     // No frame or widget pointer survives this callback; both depth and total work are bounded.
     std::array<Frame, 256> stack{};
@@ -299,8 +315,8 @@ static int readUi(void *gui, const FmLinuxUiLayout &layout, uint32_t limit, cons
         node.depth = depth;
         if (!flag(object, layout.enabled, node.enabled) || !flag(object, layout.destroying, node.destroying) ||
             !flag(object, layout.visible, node.visible) || !flag(object, layout.hiddenBySearch, node.hiddenBySearch) ||
-            !flag(object, layout.renderEnabled, node.renderEnabled) ||
-            !typeName(object, node) || !text(object, layout.text, node))
+            !flag(object, layout.renderEnabled, node.renderEnabled) || !typeName(object, node) ||
+            !text(object, layout.text, node) || collectIdentity(object, layout.identity, node.identity))
             return false;
         objects[output.count] = object;
         stack[depth++] = Frame{object, output.count++};
@@ -365,6 +381,11 @@ static int readUi(void *gui, const FmLinuxUiLayout &layout, uint32_t limit, cons
                 node.visible = source.visible != 0;
                 node.type = {fm::ui::terminated(source.type), true, source.typeTruncated != 0};
                 node.text = {{source.text, source.textSize}, source.textAvailable != 0, source.textTruncated != 0};
+                const auto &prototype = source.identity.prototype;
+                node.prototypeName = {
+                    {prototype.name, prototype.nameSize}, (prototype.flags & 1) != 0, (prototype.flags & 2) != 0};
+                node.prototypeType = {
+                    {prototype.type, prototype.typeSize}, (prototype.flags & 1) != 0, (prototype.flags & 4) != 0};
             }
             const fm::ui::Tree tree(nodes, !output.treeTruncated);
             std::vector<fm::ui::Step> path;
@@ -409,19 +430,32 @@ static int readUi(void *gui, const FmLinuxUiLayout &layout, uint32_t limit, cons
         }
     } catch (const fm::ui::Error &error) {
         switch (error.reason) {
-        case fm::ui::Failure::incomplete: return EOVERFLOW;
-        case fm::ui::Failure::workLimit: return E2BIG;
-        case fm::ui::Failure::canceled: return ECANCELED;
-        default: return EINVAL;
+        case fm::ui::Failure::incomplete:
+            return EOVERFLOW;
+        case fm::ui::Failure::workLimit:
+            return E2BIG;
+        case fm::ui::Failure::canceled:
+            return ECANCELED;
+        default:
+            return EINVAL;
         }
     } catch (...) {
         return ENOMEM;
     }
     output.truncated = output.treeTruncated;
+    UiIcons icons(layout.icons);
     for (int index : observed) {
         if (fm_ipc_load(cancel))
             return ECANCELED;
         auto &node = output.nodes[index];
+        if (const int error = collectNumber(objects[index], layout.number, node))
+            return error;
+        if (const int error = collectElement(objects[index], layout.elements, node.element))
+            return error;
+        if (const int error = collectQuality(objects[index], layout.quality, layout.identity, node.quality))
+            return error;
+        if (const int error = icons.collect(objects[index], node))
+            return error;
         if (const int error = rectangle(objects[index], layout, node.bounds))
             return error;
         if (layout.toggle.function) {
@@ -505,6 +539,22 @@ static int readUi(void *gui, const FmLinuxUiLayout &layout, uint32_t limit, cons
                 break;
             }
         }
+        for (uint32_t i = 0; i < layout.switchCount; ++i) {
+            const auto &item = layout.switches[i];
+            uintptr_t table;
+            if (!read(objects[index], table))
+                return EFAULT;
+            if (table == item.table) {
+                if (!fm::addressRange(objects[index], item.objectSize) ||
+                    !read(objects[index] + item.state, node.switchState) ||
+                    !read(objects[index] + item.allowNone, node.switchAllowNone))
+                    return EFAULT;
+                if (node.switchAllowNone > 1)
+                    return EPROTO;
+                node.switchAvailable = 1;
+                break;
+            }
+        }
         const auto dropdownResult = dropdown(objects[index], layout, node, output);
         if (dropdownResult)
             return dropdownResult;
@@ -523,8 +573,8 @@ int snapshotUi(void *gui, const FmLinuxUiLayout &layout, uint32_t limit, const u
     return readUi(gui, layout, limit, cancel, output, selector, nullptr);
 }
 
-int selectUiTarget(void *gui, const FmLinuxUiLayout &layout, const FmLinuxUiSelector &selector,
-                   const uint32_t *cancel, FmLinuxUiSnapshot &snapshot, UiTarget &output) {
+int selectUiTarget(void *gui, const FmLinuxUiLayout &layout, const FmLinuxUiSelector &selector, const uint32_t *cancel,
+                   FmLinuxUiSnapshot &snapshot, UiTarget &output) {
     output = {};
     if (!selector.count)
         return EINVAL;

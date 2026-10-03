@@ -12,6 +12,8 @@ internal fun parseWorldOverview(args: JsonObject): WorldQuery {
                         "cell_size",
                         "entity_limit",
                         "detail",
+                        "group_by",
+                        "aggregates",
                         "fields",
                         "include",
                         "name",
@@ -27,6 +29,30 @@ internal fun parseWorldOverview(args: JsonObject): WorldQuery {
         "fields/include require detail:entities; grid aggregation does not merge entity configuration"
     }
     require(detail == "grid" || "cell_size" !in args) { "cell_size is only valid for grid detail" }
+    require(detail == "grid" || args.keys.none { it in setOf("group_by", "aggregates") }) {
+        "group_by/aggregates require grid detail"
+    }
+    val groupBy = args["group_by"]?.let { value ->
+        val array = requireNotNull(value as? JsonArray) { "group_by must be an array" }
+        array.map { it.stringArgument() }.also { fields ->
+            require(fields.size <= 8 && fields.distinct().size == fields.size && fields.all { it in entityFields }) {
+                "group_by requires up to 8 distinct entity fields"
+            }
+        }
+    } ?: listOf("name", "type", "quality")
+    val aggregates = args["aggregates"]?.let { value ->
+        val array = requireNotNull(value as? JsonArray) { "aggregates must be an array" }
+        require(array.size <= 8 && array.distinct().size == array.size) { "aggregates requires up to 8 distinct operations" }
+        array.forEach { item ->
+            val aggregate = requireNotNull(item as? JsonObject) { "An aggregate must be an object" }
+            require(aggregate.keys == setOf("operation", "field")) { "An aggregate requires operation and field" }
+            require(aggregate.getValue("operation").stringArgument() in setOf("sum", "min", "max")) {
+                "Aggregate operation must be sum, min or max"
+            }
+            require(aggregate.getValue("field").stringArgument() in entityFields) { "Unsupported aggregate field" }
+        }
+        array
+    } ?: JsonArray(emptyList())
     val fields =
         args["fields"]?.jsonArray?.map { it.stringArgument() }
             ?: if (detail == "entities")
@@ -83,6 +109,10 @@ internal fun parseWorldOverview(args: JsonObject): WorldQuery {
             cell?.let { put("cell_size", it) }
             put("limit", limit)
             put("detail", detail)
+            if (detail == "grid") {
+                putJsonArray("group_by") { groupBy.forEach { add(it) } }
+                put("aggregates", aggregates)
+            }
             args["include"]?.let { put("include", it) }
             putJsonArray("fields") { fields.forEach { add(it) } }
         },
@@ -105,6 +135,49 @@ internal fun worldOverviewSchema() = buildJsonObject {
         )
     }
     put("include", entityIncludesSchema())
+    putJsonObject("group_by") {
+        put("type", "array")
+        put("maxItems", 8)
+        put("uniqueItems", true)
+        putJsonArray("default") {
+            add("name")
+            add("type")
+            add("quality")
+        }
+        putJsonObject("items") {
+            put("type", "string")
+            putJsonArray("enum") { entityFields.forEach { add(it) } }
+        }
+        put("description", "Grid only. Group by the original values of these fields within each cell; empty means one group per cell.")
+    }
+    putJsonObject("aggregates") {
+        put("type", "array")
+        put("maxItems", 8)
+        put("uniqueItems", true)
+        put("description", "Grid only. Numeric calculations requested explicitly; count is always included. Missing, failed, non-numeric and non-finite reads are excluded and counted.")
+        putJsonObject("items") {
+            put("type", "object")
+            put("additionalProperties", false)
+            putJsonArray("required") {
+                add("operation")
+                add("field")
+            }
+            putJsonObject("properties") {
+                putJsonObject("operation") {
+                    put("type", "string")
+                    putJsonArray("enum") {
+                        add("sum")
+                        add("min")
+                        add("max")
+                    }
+                }
+                putJsonObject("field") {
+                    put("type", "string")
+                    putJsonArray("enum") { entityFields.forEach { add(it) } }
+                }
+            }
+        }
+    }
     putJsonObject("fields") {
         put("type", "array")
         put("minItems", 1)

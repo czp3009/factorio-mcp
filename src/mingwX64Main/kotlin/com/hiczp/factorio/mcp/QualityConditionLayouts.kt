@@ -12,6 +12,10 @@ internal class QualityConditionLayouts(
     age: Int,
     descriptors: List<ULong>,
     registries: List<ULong>,
+    strings: List<ULong>,
+    image: PeImage,
+    module: ProcessModule,
+    read: (Int, Int) -> ByteArray,
 ) {
     private val type = descriptors.single()
     private val idType = "IDWithQualityFilter<ID<ItemPrototype,unsigned short> >"
@@ -60,8 +64,19 @@ internal class QualityConditionLayouts(
                     types.aggregateSize("Comparison"),
                 ) +
                 types.namedMember("Comparison", "value", "Comparison::Enum", 1uL)
-    private val comparisons =
-        types.enumValues("Comparison::Enum").entries.associate { it.value to it.key }
+    private val comparisons = run {
+        val address = strings.single()
+        require(address >= module.base && address - module.base < module.size)
+        val rva = (address - module.base).toLong()
+        val end = image.functionEnd(rva)
+        require(end - rva in 1..4096)
+        fun verified(offset: Int, size: Int): ByteArray = image.readonlyBytes(offset, size).also {
+            require(read(offset, size).contentEquals(it)) { "Loaded comparison accessor differs from the selected image" }
+        }
+        ComparisonStrings.analyze(BinaryView(verified(rva.toInt(), (end - rva).toInt())), rva,
+            types.namedMember("Comparison", "value", "Comparison::Enum", 1uL).toLong(),
+            types.aggregateSize("Comparison").toLong(), types.enumValues("Comparison::Enum").values.toSet(), ::verified)
+    }
     private val registryType = "std::vector<QualityPrototype *,std::allocator<QualityPrototype *> >"
     private val registry =
         registries.single().also {

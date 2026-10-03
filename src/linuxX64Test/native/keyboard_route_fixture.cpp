@@ -12,12 +12,32 @@
 #include <vector>
 
 namespace {
-struct Value { uint8_t held = 0, blocked = 0; };
-struct Record { int32_t code = 42; Value value; uint16_t padding = 0; };
-struct State { uint64_t buttons = 0; Record *begin = nullptr, *end = nullptr; };
-struct Global { State *state; };
-struct Event { uint32_t type, code; double time; };
+struct Value {
+    uint8_t held = 0, blocked = 0;
+};
+
+struct Record {
+    int32_t code = 42;
+    Value value;
+    uint16_t padding = 0;
+};
+
+struct State {
+    uint64_t buttons = 0;
+    Record *begin = nullptr, *end = nullptr;
+};
+
+struct Global {
+    State *state;
+};
+
+struct Event {
+    uint32_t type, code;
+    double time;
+};
+
 bool failClock = false;
+
 uint32_t ticks() {
     if (failClock)
         throw std::runtime_error("fixture clock");
@@ -42,11 +62,28 @@ struct Fixture {
     explicit Fixture(EventUpdateOrder order = EventUpdateOrder::BeforeSource) {
         for (unsigned index = 0; index < 9; ++index)
             records[index].code = 42 + index;
-        config.owner = {reinterpret_cast<uintptr_t>(&root), sizeof(Global), offsetof(Global, state), sizeof(State),
-            offsetof(State, buttons), sizeof(Event), offsetof(Event, type), offsetof(Event, time),
-            offsetof(Event, code), 3, 4, {1, 2, 3}, {2, 4, 8}};
-        config.keys = {0, offsetof(State, begin), offsetof(State, end), sizeof(Record), offsetof(Record, code),
-            offsetof(Record, value), sizeof(Value), offsetof(Value, held), offsetof(Value, blocked)};
+        config.owner = {reinterpret_cast<uintptr_t>(&root),
+                        sizeof(Global),
+                        offsetof(Global, state),
+                        sizeof(State),
+                        offsetof(State, buttons),
+                        sizeof(Event),
+                        offsetof(Event, type),
+                        offsetof(Event, time),
+                        offsetof(Event, code),
+                        3,
+                        4,
+                        {1, 2, 3},
+                        {2, 4, 8}};
+        config.keys = {0,
+                       offsetof(State, begin),
+                       offsetof(State, end),
+                       sizeof(Record),
+                       offsetof(Record, code),
+                       offsetof(Record, value),
+                       sizeof(Value),
+                       offsetof(Value, held),
+                       offsetof(Value, blocked)};
         config.event.extent = sizeof(Event);
         config.event.type = offsetof(Event, type);
         config.event.time = offsetof(Event, time);
@@ -56,24 +93,29 @@ struct Fixture {
         config.clock = {reinterpret_cast<uintptr_t>(ticks), 1000};
         config.pressOrder = config.releaseOrder = order;
     }
+
     KeyboardRouteKey key() {
         return KeyboardRouteKey(config, functions, getpid(), getpid(), pressReceiver, releaseReceiver, this);
     }
+
     KeyboardRouteKeys keys() {
         return KeyboardRouteKeys(config, functions, getpid(), getpid(), pressReceiver, releaseReceiver, this);
     }
+
     static int pressReceiver(EventRouteStage stage, void *context, void *&receiver) noexcept {
         auto &self = *static_cast<Fixture *>(context);
         ++self.pressResolves;
         receiver = context;
         return self.rejectDown || self.rejectStage == static_cast<unsigned>(stage) ? ESTALE : 0;
     }
+
     static int releaseReceiver(EventRouteStage stage, void *context, void *&receiver) noexcept {
         auto &self = *static_cast<Fixture *>(context);
         ++self.releaseResolves;
         receiver = context;
         return self.rejectStage == static_cast<unsigned>(stage) ? ESTALE : 0;
     }
+
     void entered(EventRouteStage stage) {
         const auto id = static_cast<unsigned>(stage);
         calls.push_back(id);
@@ -85,29 +127,35 @@ struct Fixture {
             throw std::runtime_error("fixture entered native stage");
         }
     }
+
     static Event event(const void *bytes) {
         Event value;
         std::memcpy(&value, bytes, sizeof(value));
         assert(value.code >= 42 && value.code <= 50 && value.time == 1.234 && (value.type == 1 || value.type == 2));
         return value;
     }
+
     static uint8_t source(void *self, const void *bytes) {
         event(bytes);
         auto &fixture = *static_cast<Fixture *>(self);
         fixture.entered(EventRouteStage::Source);
         return fixture.sourceResult;
     }
+
     static void guiEvent(void *self, const void *bytes) {
         event(bytes);
         static_cast<Fixture *>(self)->entered(EventRouteStage::GuiEvent);
     }
+
     static void guiLogic(void *self, bool value) {
         assert(!value);
         static_cast<Fixture *>(self)->entered(EventRouteStage::GuiLogic);
     }
+
     static void evaluate(void *self) {
         static_cast<Fixture *>(self)->entered(EventRouteStage::Evaluation);
     }
+
     static void update(void *self, const void *bytes) {
         auto &fixture = *static_cast<Fixture *>(self);
         const auto &value = event(bytes);
@@ -115,16 +163,18 @@ struct Fixture {
             fixture.records[value.code - 42].value.held = value.type == 1;
         fixture.entered(EventRouteStage::Update);
     }
+
     static void post(void *self, const void *bytes) {
         event(bytes);
         static_cast<Fixture *>(self)->entered(EventRouteStage::PostUpdate);
     }
 };
-}
+} // namespace
 
 class SequenceEmitter final : public InputEmitter {
-public:
+  public:
     explicit SequenceEmitter(KeyboardRouteKeys &keys) : keys_(keys) {}
+
     void button(InputButton button, bool down) override {
         assert(button.device == InputDevice::Keyboard);
         if (keys_.button(button.code, down))
@@ -138,7 +188,8 @@ public:
     void wheel(int32_t) override {
         throw std::runtime_error("unexpected fixture wheel");
     }
-private:
+
+  private:
     KeyboardRouteKeys &keys_;
 };
 
@@ -162,7 +213,10 @@ int main() {
         f.records[1].value.blocked = 1;
         InputSequence sequence({InputStep{1, {{InputDevice::Keyboard, 42}, {InputDevice::Keyboard, 43}}, {}, 0, {}}});
         sequence.beforeTick(1, emitter);
-        assert(sequence.state() == InputSequenceState::Aborted);
+        assert(sequence.hasHeldInput() && keys.owned());
+        sequence.afterTick(1);
+        sequence.beforeTick(2, emitter);
+        assert(sequence.state() == InputSequenceState::Succeeded);
         assert(!sequence.hasHeldInput() && !keys.owned() && !f.record.value.held);
         assert(f.records[1].value.blocked && !f.records[1].value.held);
     }
@@ -271,7 +325,8 @@ int main() {
         Fixture f;
         auto key = f.key();
         f.record.value.held = 1;
-        assert(key.press(42) == EBUSY && !key.owned() && f.calls.empty());
+        assert(key.press(42) == 0 && key.owned());
+        assert(key.release() == 0 && !key.owned() && !f.record.value.held);
     }
     {
         Fixture f;

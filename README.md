@@ -10,7 +10,7 @@ connected to a multiplayer server.
 **To operate the client, factorio-mcp injects code into the Factorio process. This may be considered cheating in
 some contexts. If you are uncomfortable with this, do not use factorio-mcp.**
 
-Currently, it supports **Windows x64**, with stdio and Streamable HTTP transports.
+Supports **Linux x64 and Windows x64**, with stdio and Streamable HTTP transports.
 
 ![I'm not even touching it](images/im-not-even-touching-it.jpg)
 
@@ -123,6 +123,14 @@ HTTP listens only on localhost. If you change the port, update both the startup 
 
 Start Factorio and wait for initial loading to finish before use.
 
+On Linux, run MCP and Factorio as the same user and allow process debugging. If Yama blocks attachment to a
+Steam-launched client, `sudo sysctl kernel.yama.ptrace_scope=0` allows same-user attachment until reboot. This changes
+the system-wide ptrace policy; restore its previous value when finished. See the
+[Linux kernel's Yama documentation](https://docs.kernel.org/admin-guide/LSM/Yama.html).
+
+Keep the game's debug information: the matching `factorio.pdb` beside `factorio.exe` on Windows, and the original
+unstripped executable on Linux.
+
 After updating factorio-mcp or moving its files, **restart Factorio before using MCP again**.
 
 For source builds, a compatible JDK, CMake, Ninja and the platform C++ build tools and SDK are required.
@@ -132,7 +140,7 @@ See [development instructions](https://github.com/czp3009/factorio-mcp/blob/mast
 
 | Tool             | Purpose                                                                          |
 |------------------|----------------------------------------------------------------------------------|
-| `status`         | Check attachment, game state and available blueprint import transfer progress.   |
+| `status`         | Check attachment, game state and pause status.                                  |
 | `attach`         | Connect to an existing client by PID or process name.                            |
 | `detach`         | Disconnect and cancel pending tools without closing the game.                    |
 | `ui_read`        | Read UI structure, text, flags and supported control values.                     |
@@ -141,26 +149,31 @@ See [development instructions](https://github.com/czp3009/factorio-mcp/blob/mast
 | `input_bindings` | Map native/mod control IDs to current keyboard/mouse bindings.                   |
 | `input`          | Execute finite keyboard/mouse combinations, including held mouse motion.         |
 | `world_query`    | Inspect world objects and related properties, players, inventories and catalogs. |
-| `world_overview` | Survey an area as a grid or filtered entities with selected details.             |
-| `chat_read`      | Read retained local chat and notifications, with observation cursors.            |
+| `world_overview` | Summarize an area by native properties or read filtered entities with selected details. |
+| `chat_read`      | Read retained local chat and notifications, with offsets and optional waiting.   |
 | `chat_send`      | Submit a plain chat message as the local player.                                 |
 
 See [tools.md](tools.md) for arguments, examples, output semantics and cancellation.
 
 ## Practical limits
 
+- Avoid operating the game while tools are in use. Concurrent player actions can cause errors or unexpected results.
 - Clients connected to the same MCP process share its game attachment; `detach` cancels their pending tools.
   Closing an HTTP session does not detach the game. UI actions can activate normal menu commands, including Quit.
-- Action completion means input was dispatched, not that a gameplay objective succeeded. Observe the result before
-  a dependent action, especially in multiplayer.
+- Action completion reports client execution, including chat submission. It does not confirm server acceptance or
+  gameplay success; network latency and prediction rollback can delay or undo effects. Observe the result before
+  a dependent action.
 - UI and world reads are bounded and report incomplete data. UI properties are supported selectively; custom-painted
   pixels are not reconstructed as structured controls. World reads can include hidden objects and do not reproduce
   remembered map contents. Visibility flags do not account for UI occlusion.
+- UI images are structured references, without image contents or render layers. Script GUI elements' original icon
+  names can be read with `world_query` object inspection.
 - `input` requires a running world. Use `ui_action` for menus and paused UI. Direct widget dragging/scrolling and
   controller input are unsupported; offscreen options can be selected directly, and running-world mouse input provides
   a dragging fallback. Wheel routing over UI is not reliable in all tested states.
-- Windows screenshots require DirectX and exclude desktop/Steam overlays. Minimized or suspended rendering can leave a
-  screenshot pending and delay other tools; cancel it if needed. Frequent capture can reduce game performance.
+- Screenshots require DirectX on Windows or OpenGL on Linux and exclude desktop/Steam overlays. Minimized or suspended
+  rendering can leave a screenshot pending and delay other tools. Only one capture runs at a time;
+  use `screenshot` with `action:"cancel"` to stop it. Frequent capture can reduce game performance.
 - Tools have no execution deadline. Explicit MCP cancellation is supported; automatic cancellation on HTTP socket
   closure is not guaranteed.
 - Some states or properties may be unavailable. Game updates can require an MCP update; tested interfaces do not

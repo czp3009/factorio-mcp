@@ -8,6 +8,8 @@ import platform.posix.*
 /** An open proc directory pins process identity so PID reuse cannot retarget later reads. */
 internal class ProcessHandle(val pid: Int) : AutoCloseable {
     private var directory: Int
+    private var executableMapping: MappedBinary? = null
+    private var executableImage: ElfImage? = null
 
     init {
         require(pid > 0) { "Expected a positive process ID" }
@@ -33,12 +35,20 @@ internal class ProcessHandle(val pid: Int) : AutoCloseable {
 
     fun <T> withExecutable(action: (ElfImage) -> T): T {
         // Opening via this proc descriptor reads the loaded inode even after path replacement.
-        return MappedBinary("/proc/self/fd/${descriptor()}/exe").use { action(ElfImage(it.view)) }
+        val path = procPath("exe")
+        val mapping = executableMapping ?: MappedBinary(path).also { executableMapping = it }
+        check(BinaryFileIdentity.read(path) == mapping.identity) {
+            "Selected executable changed; detach before attaching again"
+        }
+        val image = executableImage ?: ElfImage(mapping.view).also { executableImage = it }
+        return action(image)
     }
 
     fun <T> withMappedFile(mapping: ProcMapping, action: (ElfImage) -> T): T {
         val path = checkNotNull(mapping.path) { "Mapped module has no file path" }
-        require(path.startsWith('/') && !path.endsWith(" (deleted)")) { "Mapped module file is unavailable" }
+        require(path.startsWith('/') && !path.endsWith(" (deleted)")) {
+            "Mapped module file is unavailable"
+        }
         val file = open(procPath("root$path"), O_RDONLY or O_CLOEXEC)
         check(file >= 0) { "Cannot open mapped module: $path (errno $errno)" }
         try {
@@ -49,9 +59,12 @@ internal class ProcessHandle(val pid: Int) : AutoCloseable {
                 val major = ((device shr 8) and 0xfffu) or ((device shr 32) and 0xfffff000u)
                 val minor = (device and 0xffu) or ((device shr 12) and 0xffffff00u)
                 require(
-                    mapping.deviceMajor.toULong() == major && mapping.deviceMinor.toULong() == minor &&
-                            mapping.inode.toULong() == info.st_ino
-                ) { "Mapped module's path now identifies a different file" }
+                    mapping.deviceMajor.toULong() == major &&
+                        mapping.deviceMinor.toULong() == minor &&
+                        mapping.inode.toULong() == info.st_ino
+                ) {
+                    "Mapped module's path now identifies a different file"
+                }
             }
             return MappedBinary("/proc/self/fd/$file").use { action(ElfImage(it.view)) }
         } finally {
@@ -61,20 +74,27 @@ internal class ProcessHandle(val pid: Int) : AutoCloseable {
 
     fun mappings(): List<ProcMapping> = ProcMapping.parse(readText("maps", 16 * 1024 * 1024))
 
-    fun executableMappings(): List<ProcMapping> {
+    fun executableMappings(mappings: List<ProcMapping> = mappings()): List<ProcMapping> {
         val executable = open(procPath("exe"), O_RDONLY or O_CLOEXEC)
         check(executable >= 0) { "Cannot open loaded executable (errno $errno)" }
         try {
             return memScoped {
                 val info = alloc<stat>()
-                check(fstat(executable, info.ptr) == 0) { "Cannot identify loaded executable (errno $errno)" }
+                check(fstat(executable, info.ptr) == 0) {
+                    "Cannot identify loaded executable (errno $errno)"
+                }
                 val device = info.st_dev
                 val major = ((device shr 8) and 0xfffu) or ((device shr 32) and 0xfffff000u)
                 val minor = (device and 0xffu) or ((device shr 12) and 0xffffff00u)
-                mappings().filter {
-                    it.deviceMajor.toULong() == major && it.deviceMinor.toULong() == minor &&
+                mappings
+                    .filter {
+                        it.deviceMajor.toULong() == major &&
+                            it.deviceMinor.toULong() == minor &&
                             it.inode.toULong() == info.st_ino
-                }.also { require(it.isNotEmpty()) { "Loaded executable has no process mappings" } }
+                    }
+                    .also {
+                        require(it.isNotEmpty()) { "Loaded executable has no process mappings" }
+                    }
             }
         } finally {
             close(executable)
@@ -94,7 +114,9 @@ internal class ProcessHandle(val pid: Int) : AutoCloseable {
             val status = readText(descriptor, 65536)
             // comm can contain spaces, parentheses and newlines; the final ')' terminates it.
             val delimiter = status.lastIndexOf(')')
-            require(delimiter >= 0 && delimiter + 3 < status.length && status[delimiter + 1] == ' ') {
+            require(
+                delimiter >= 0 && delimiter + 3 < status.length && status[delimiter + 1] == ' '
+            ) {
                 "Invalid process stat record"
             }
             return status[delimiter + 2]
@@ -106,13 +128,21 @@ internal class ProcessHandle(val pid: Int) : AutoCloseable {
     fun readMemory(address: Long, size: Int): ByteArray {
         require(address >= 0 && size in 1..(16 * 1024 * 1024) && address <= Long.MAX_VALUE - size)
         val memory = open(procPath("mem"), O_RDONLY or O_CLOEXEC)
-        check(memory >= 0) { "Cannot read process memory; Linux ptrace permission is required (errno $errno)" }
+        check(memory >= 0) {
+            "Cannot read process memory; Linux ptrace permission is required (errno $errno)"
+        }
         try {
             val output = ByteArray(size)
             output.usePinned { bytes ->
                 var offset = 0
                 while (offset < size) {
-                    val count = pread(memory, bytes.addressOf(offset), (size - offset).toULong(), address + offset)
+                    val count =
+                        pread(
+                            memory,
+                            bytes.addressOf(offset),
+                            (size - offset).toULong(),
+                            address + offset,
+                        )
                     if (count < 0 && errno == EINTR) continue
                     check(count > 0) { "Incomplete process memory read (errno $errno)" }
                     offset += count.toInt()
@@ -126,10 +156,22 @@ internal class ProcessHandle(val pid: Int) : AutoCloseable {
 
     /** Bootstrap scratch storage only. Never bypass read-only or executable mapping protections. */
     fun writeData(address: Long, data: ByteArray) {
-        require(address >= 0 && data.size in 1..(16 * 1024 * 1024) && address <= Long.MAX_VALUE - data.size)
-        require(mappings().any {
-            it.readable && it.writable && !it.executable && address >= it.start && address + data.size <= it.end
-        }) { "Remote data write must fit a readable, writable, non-executable mapping" }
+        require(
+            address >= 0 &&
+                data.size in 1..(16 * 1024 * 1024) &&
+                address <= Long.MAX_VALUE - data.size
+        )
+        require(
+            mappings().any {
+                it.readable &&
+                    it.writable &&
+                    !it.executable &&
+                    address >= it.start &&
+                    address + data.size <= it.end
+            }
+        ) {
+            "Remote data write must fit a readable, writable, non-executable mapping"
+        }
         val memory = open(procPath("mem"), O_WRONLY or O_CLOEXEC)
         check(memory >= 0) { "Cannot open process data for bootstrap (errno $errno)" }
         try {
@@ -137,7 +179,12 @@ internal class ProcessHandle(val pid: Int) : AutoCloseable {
                 var offset = 0
                 while (offset < data.size) {
                     val count =
-                        pwrite(memory, bytes.addressOf(offset), (data.size - offset).toULong(), address + offset)
+                        pwrite(
+                            memory,
+                            bytes.addressOf(offset),
+                            (data.size - offset).toULong(),
+                            address + offset,
+                        )
                     if (count < 0 && errno == EINTR) continue
                     check(count > 0) { "Incomplete bootstrap data write (errno $errno)" }
                     offset += count.toInt()
@@ -150,9 +197,14 @@ internal class ProcessHandle(val pid: Int) : AutoCloseable {
 
     fun shadowStackEnabled(): Boolean {
         val features =
-            readText("status", 65536).lineSequence().filter { it.startsWith("x86_Thread_features:") }.toList()
+            readText("status", 65536)
+                .lineSequence()
+                .filter { it.startsWith("x86_Thread_features:") }
+                .toList()
         require(features.size <= 1) { "Ambiguous Linux thread features" }
-        return features.singleOrNull()?.substringAfter(':')?.split(' ', '\t')?.any { it == "shstk" } == true
+        return features.singleOrNull()?.substringAfter(':')?.split(' ', '\t')?.any {
+            it == "shstk"
+        } == true
     }
 
     private fun readText(name: String, maximum: Int): String {
@@ -188,6 +240,11 @@ internal class ProcessHandle(val pid: Int) : AutoCloseable {
     }
 
     override fun close() {
+        executableMapping?.let {
+            it.close()
+            executableMapping = null
+            executableImage = null
+        }
         if (directory < 0) return
         // Linux releases the descriptor even when close reports EINTR; never retry a reused number.
         val file = directory
@@ -197,7 +254,9 @@ internal class ProcessHandle(val pid: Int) : AutoCloseable {
 }
 
 internal fun discoverProcesses(name: String): List<Int> {
-    require(name.isNotBlank() && '/' !in name && '\u0000' !in name) { "Expected an executable base name" }
+    require(name.isNotBlank() && '/' !in name && '\u0000' !in name) {
+        "Expected an executable base name"
+    }
     val directory = checkNotNull(opendir("/proc")) { "Cannot enumerate /proc (errno $errno)" }
     try {
         val result = mutableListOf<Int>()
@@ -210,11 +269,14 @@ internal fun discoverProcesses(name: String): List<Int> {
             }
             val pid = entry.pointed.d_name.toKString().toIntOrNull() ?: continue
             // Other users' processes and exits during discovery are ordinary nonmatches.
-            val matches = runCatching {
-                ProcessHandle(pid).use { process ->
-                    process.executablePath().substringAfterLast('/') == name && process.alive()
-                }
-            }.getOrDefault(false)
+            val matches =
+                runCatching {
+                        ProcessHandle(pid).use { process ->
+                            process.executablePath().substringAfterLast('/') == name &&
+                                process.alive()
+                        }
+                    }
+                    .getOrDefault(false)
             if (matches) result += pid
         }
         return result.sorted()

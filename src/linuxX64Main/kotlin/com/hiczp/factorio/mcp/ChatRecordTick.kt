@@ -22,7 +22,7 @@ internal data class ChatRecordTick(val offset: Long, val consolePlayer: Long, va
             EhFrames(image).function(allocate)
             val construction =
                 "construct_at<OutputConsole::Item, MapTick &, const LocalisedString &, const Player *&, const Color &, std::vector<SavedSpecialItemReference, std::allocator<SavedSpecialItemReference> > >"
-            val instances = DwarfInlines(image).find(function, "add", setOf("Item", construction))
+            val instances = image.inlines.find(function, "add", setOf("Item", construction))
             val copies = instances.filter { it.name == "Item" }.flatMap { it.ranges }
             val arguments = instances.filter { it.name == construction }.flatMap { it.ranges }
             require(copies.all { copy -> arguments.any { it.contains(copy) } })

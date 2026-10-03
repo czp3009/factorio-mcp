@@ -462,7 +462,14 @@ internal fun decodeWorldQuery(text: String): JsonObject {
             val attributes = objectValue["attributes"]?.jsonObject
             if ("entity_groups" in objectValue)
                 JsonObject(
-                    objectValue + ("entity_groups" to array(objectValue.getValue("entity_groups")))
+                    objectValue +
+                            ("entity_groups" to
+                                    JsonArray(
+                                        array(objectValue.getValue("entity_groups")).map { entry ->
+                                            val group = entry.jsonObject
+                                            JsonObject(group + ("aggregates" to array(group.getValue("aggregates"))))
+                                        }
+                                    ))
                 )
             else if (
                 attributes == null ||

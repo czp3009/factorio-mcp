@@ -11,56 +11,22 @@ template <class T> T read(const void *object, unsigned offset) {
 }
 } // namespace
 
-SpriteSnapshot::SpriteSnapshot(const Symbols &symbols, FmResult &result) : symbols(symbols), result(result) {
-    result.spriteCount = 0;
-}
+IconReferences::IconReferences(const Symbols &symbols) : symbols(symbols) {}
 
-int SpriteSnapshot::observe(const void *sprite, unsigned depth) {
+int IconReferences::observe(const void *sprite) {
     if (!sprite)
         return -1;
-    for (unsigned i = 0; i < result.spriteCount; ++i)
-        if (sources[i] == sprite)
-            return static_cast<int>(i);
-    if (depth >= 16 || result.spriteCount == FM_MAX_SPRITES)
+    for (unsigned index = 0; index < count; ++index)
+        if (sources[index] == sprite)
+            return static_cast<int>(index);
+    if (count == sources.size())
         return -2;
-    const unsigned index = result.spriteCount++;
-    sources[index] = sprite;
-    auto &out = result.sprites[index];
-    out = {};
-    const auto &layout = symbols.sprites;
-    const void *filename = read<const void *>(sprite, layout.filename);
-    if (filename) {
-        out.flags |= 1;
-        const auto size = reinterpret_cast<size_t (*)(const void *)>(symbols.address[StringSize])(filename);
-        const char *data = reinterpret_cast<const char *(*)(const void *)>(symbols.address[StringData])(filename);
-        require(size <= 65536 && !memchr(data, 0, size), "Invalid sprite filename");
-        size_t count = std::min(size, sizeof(out.filename) - 1);
-        if (count != size) {
-            out.flags |= 2;
-            while (count && (static_cast<unsigned char>(data[count]) & 0xc0) == 0x80)
-                --count;
-        }
-        memcpy(out.filename, data, count);
-        out.filename[count] = 0;
-    }
-    if (read<bool>(sprite, layout.empty))
-        out.flags |= 4;
-    out.x = read<int16_t>(sprite, layout.x);
-    out.y = read<int16_t>(sprite, layout.y);
-    out.width = read<int16_t>(sprite, layout.width);
-    out.height = read<int16_t>(sprite, layout.height);
-    out.scale = read<double>(sprite, layout.scale);
-    out.shiftX = read<double>(sprite, layout.shiftX);
-    out.shiftY = read<double>(sprite, layout.shiftY);
-    for (unsigned i = 0; i < 4; ++i)
-        out.tint[i] = read<float>(sprite, layout.tint[i]);
-    out.next = observe(read<const void *>(sprite, layout.next), depth + 1);
-    out.extra = observe(read<const void *>(sprite, layout.extra), depth + 1);
-    return static_cast<int>(index);
+    sources[count] = sprite;
+    return static_cast<int>(count++);
 }
 
-void SpriteSnapshot::collect(void *widget, FmNode &node) {
-    const auto &layout = symbols.sprites;
+void IconReferences::collect(void *widget, FmNode &node) {
+    const auto &layout = symbols.icons;
     if (!layout.supported)
         return;
     auto *receiver = reinterpret_cast<void *(*)(void *, long, void *, void *, int)>(symbols.address[DynamicCast])(
@@ -68,9 +34,9 @@ void SpriteSnapshot::collect(void *widget, FmNode &node) {
     if (!receiver)
         return;
     node.properties |= 2048;
-    node.iconNormal = observe(read<const void *>(receiver, layout.normal), 0);
-    node.iconHovered = observe(read<const void *>(receiver, layout.hovered), 0);
-    node.iconDisabled = observe(read<const void *>(receiver, layout.disabled), 0);
+    node.iconNormal = observe(read<const void *>(receiver, layout.normal));
+    node.iconHovered = observe(read<const void *>(receiver, layout.hovered));
+    node.iconDisabled = observe(read<const void *>(receiver, layout.disabled));
 }
 
 void collectVisibility(const Symbols &symbols, void *widget, FmNode &node) {

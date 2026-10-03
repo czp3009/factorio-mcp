@@ -23,13 +23,22 @@ internal data class ItaniumClass(val typeInfo: Long, val bases: List<Base>) {
         load: (Long) -> ItaniumClass
     ): Long {
         require(objectSize > 0 && baseExtent in 1..objectSize)
+        return displacement(base, objectSize, load).also {
+            require(it <= objectSize - baseExtent) { "Base field exceeds concrete object bounds" }
+        }
+    }
+
+    /** RTTI association only. This displacement does not establish complete-object storage bounds. */
+    fun baseDisplacement(base: ItaniumClass, load: (Long) -> ItaniumClass): Long =
+        displacement(base, 64 * 1024 * 1024L, load)
+
+    private fun displacement(base: ItaniumClass, objectSize: Long, load: (Long) -> ItaniumClass): Long {
         val matches = mutableListOf<Long>()
         var visited = 0
         fun visit(type: ItaniumClass, offset: Long, path: Set<Long>) {
             require(++visited <= 256 && path.size < 32 && type.typeInfo !in path) { "Class ancestry exceeds its acyclic bound" }
             require(offset in 0 until objectSize)
             if (type.typeInfo == base.typeInfo) {
-                require(offset <= objectSize - baseExtent) { "Base field exceeds concrete object bounds" }
                 matches += offset
                 return
             }
@@ -48,11 +57,11 @@ internal data class ItaniumClass(val typeInfo: Long, val bases: List<Base>) {
 
     companion object {
         /** Relocation references are candidates only; each ancestry edge is checked against decoded RTTI. */
-        fun descendants(image: ElfImage, encodedType: String): List<String> {
-            val pointers = ElfPointers(image)
+        fun descendants(image: ElfImage, encodedType: String, limit: Int = 64): List<String> {
+            require(limit in 1..1024)
+            val pointers = image.pointers
             val root = resolve(image, encodedType, pointers)
-            val types = image.symbols().filter { it.type == 1 && it.name.startsWith("_ZTI") && it.size >= 16 }
-                .distinctBy { it.name }.toList()
+            val types = image.rttiSymbols.filter { it.size >= 16 }.distinctBy { it.name }
             require(types.size <= 65536)
             val pending = ArrayDeque<Long>()
             val found = linkedMapOf<Long, String>()
@@ -73,7 +82,7 @@ internal data class ItaniumClass(val typeInfo: Long, val bases: List<Base>) {
                     require(child.typeInfo != root.typeInfo) { "Cyclic class descendants" }
                     if (child.typeInfo !in found) {
                         found[child.typeInfo] = name
-                        require(found.size <= 64) { "Class descendants exceed observation layout capacity" }
+                        require(found.size <= limit) { "Class descendants exceed the selected capacity" }
                         pending.add(child.typeInfo)
                     }
                 }
@@ -86,7 +95,7 @@ internal data class ItaniumClass(val typeInfo: Long, val bases: List<Base>) {
             "N10__cxxabiv120__si_class_type_infoE", "N10__cxxabiv121__vmi_class_type_infoE"
         )
 
-        fun resolve(image: ElfImage, encodedType: String, pointers: ElfPointers = ElfPointers(image)): ItaniumClass {
+        fun resolve(image: ElfImage, encodedType: String, pointers: ElfPointers = image.pointers): ItaniumClass {
             require(encodedType.isNotEmpty())
             val type = image.symbol("_ZTI$encodedType")
             val name = image.symbol("_ZTS$encodedType")
@@ -102,7 +111,7 @@ internal data class ItaniumClass(val typeInfo: Long, val bases: List<Base>) {
                 "Class RTTI name differs from the requested type"
             }
             val addressPoint = words[0].pointer()
-            val tables = image.symbols().filter { it.name in kinds.map { kind -> "_ZTV$kind" } }.distinct().toList()
+            val tables = kinds.mapNotNull { image.findSymbol("_ZTV$it") }
             val kind = tables.singleOrNull { it.type == 1 && it.size >= 24 && it.address + 16 == addressPoint }
                 ?.name?.removePrefix("_ZTV") ?: error("Class RTTI uses an unsupported or nonlocal metaclass")
             val table = image.symbol("_ZTV$kind")
@@ -139,8 +148,7 @@ internal data class ItaniumClass(val typeInfo: Long, val bases: List<Base>) {
                     }
                 }
             }
-            val knownTypes = image.symbols().filter { it.type == 1 && it.size >= 16 && it.name.startsWith("_ZTI") }
-                .map { it.address }.toSet()
+            val knownTypes = image.typeInfoAddresses
             require(bases.all { it.typeInfo != type.address && it.typeInfo in knownTypes }) {
                 "Class RTTI has a self or unresolved base reference"
             }

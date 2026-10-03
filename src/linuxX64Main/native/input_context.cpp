@@ -83,6 +83,13 @@ bool validInputContextConfig(const FmLinuxInputContextConfig &config) {
                 return false;
         }
     }
+    if (input.forwardedVtable &&
+        (!table(input.forwardedVtable, input.forwardedTypeInfo) || input.forwardedSize < 16 ||
+         input.forwardedSize > 64 * 1024 * 1024 || input.forwardedSource < 8 ||
+         !pointerMember(input.forwardedSource, input.forwardedSize)))
+        return false;
+    if (!input.forwardedVtable && (input.forwardedTypeInfo || input.forwardedSize || input.forwardedSource))
+        return false;
     return true;
 }
 
@@ -106,8 +113,18 @@ int readInputContext(const FmLinuxInputContextConfig &config, const uint32_t *ca
     uintptr_t gameSource;
     if (!fm::read(found.game + layout.gameSource, gameSource))
         return EFAULT;
-    if (gameSource != found.source)
-        return ESTALE;
+    if (gameSource != found.source) {
+        if (!layout.forwardedVtable || !gameSource)
+            return ESTALE;
+        if (const int error = identity(gameSource, layout.forwardedSize, layout.forwardedVtable,
+                                       layout.forwardedTypeInfo))
+            return error;
+        uintptr_t forwarded;
+        if (!fm::read(gameSource + layout.forwardedSource, forwarded))
+            return EFAULT;
+        if (forwarded != found.source)
+            return ESTALE;
+    }
     if (!fm::read(found.source + layout.sourcePlayer, found.player))
         return EFAULT;
     if (const int error = identity(found.player, layout.playerSize, layout.playerVtable, layout.playerTypeInfo))
@@ -157,7 +174,7 @@ int readInputContext(const FmLinuxInputContextConfig &config, const uint32_t *ca
     uintptr_t handlerMap, handlerSource;
     if (!fm::read(handler + layout.handlerMap, handlerMap) || !fm::read(handler + layout.handlerSource, handlerSource))
         return EFAULT;
-    if (handlerMap != found.map || handlerSource != found.source)
+    if (handlerMap != found.map || handlerSource != gameSource)
         return ESTALE;
     uint8_t paused;
     if (!fm::read(found.map + layout.mapTick, found.tick) || !fm::read(found.map + layout.mapStop, found.stopped) ||

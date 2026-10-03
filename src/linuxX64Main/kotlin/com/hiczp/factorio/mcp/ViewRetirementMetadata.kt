@@ -63,7 +63,7 @@ internal class ViewRetirementMetadata private constructor(
             val (resolved, readonly) = image.withReadonlyEvidence {
                 image.withFunctionEvidence {
                     val layout = ViewRetirementLayout.resolve(image, gameSize, viewSize, member)
-                    val pointers = ElfPointers(image)
+                    val pointers = image.pointers
                     val words = mutableMapOf<Long, Word>()
                     fun capture(address: Long, count: Int, isPointer: (Int) -> Boolean) {
                         pointers.words(address, count).forEachIndexed { index, word ->

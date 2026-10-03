@@ -35,10 +35,8 @@ struct UiCaptureProgress {
 struct UiCapture : UiCaptureProgress {
     uintptr_t gui = 0;
     uintptr_t root = 0;
-    uintptr_t initial = 0;
     uintptr_t released = 0;
     const UiTargetReference *rootReference = nullptr;
-    const TargetReference *initialReference = nullptr;
     UiTargetReference *recipientReference = nullptr;
 };
 
@@ -49,6 +47,6 @@ int beginUiCapture(uintptr_t guiInstance, const FmLinuxUiLayout &ui, const FmLin
 // The absolute point is the original gesture point, independent of the original widget's subsequent lifetime.
 int finishUiCapture(uintptr_t guiInstance, const FmLinuxUiLayout &ui, const FmLinuxCaptureLayout &layout,
                     const FmLinuxMouseEventLayout &event, const FmLinuxInputClockLayout &clock,
-                    void (*up)(void *, const void *), const UiMouseRequest &request,
-                    int64_t absoluteX, int64_t absoluteY, uintptr_t alreadyReleased, UiCapture &state);
+                    void (*up)(void *, const void *), const UiMouseRequest &request, int64_t absoluteX,
+                    int64_t absoluteY, uintptr_t alreadyReleased, UiCapture &state);
 #endif

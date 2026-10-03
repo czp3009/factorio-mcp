@@ -32,8 +32,8 @@ class UiKeyMetadataAcceptanceTest {
                     metadata.writeTo(event, site, bias)
                     assertEquals((metadata.event.poll.poll.address + bias).toULong(), site.original)
                     assertEquals(
-                        (metadata.event.poll.frame + metadata.event.poll.callerReturnFromFrame).toInt(),
-                        site.eventFromFrame
+                        (metadata.event.poll.eventFromEntry + metadata.event.poll.callerReturnFromStack).toUInt(),
+                        site.eventFromStack
                     )
                 }
                 println("factorio-mcp live keyboard metadata: loaded evidence and runtime configuration verified")

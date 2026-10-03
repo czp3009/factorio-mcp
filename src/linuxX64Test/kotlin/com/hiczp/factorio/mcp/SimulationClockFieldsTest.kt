@@ -73,6 +73,7 @@ class SimulationClockFieldsTest {
         fun increment(value: String = code, size: Long = 64) =
             MapStopField.increment(X64ControlFlow(X64Instructions(machineCode(value)).all()), 0x100, size)
         assertEquals(32L, increment())
+        assertEquals(32L, increment(code.replace("fe 43 20", "90 48 89 d8 90 fe 43 20")))
         assertFails { increment(code.replace("48 89 de", "48 89 fe")) }
         assertFails { increment(code.replace("48 8d 7d e0", "48 89 df 90")) }
         assertFails { increment(code.replace("fe 43 20", "fe 47 20")) }
@@ -94,6 +95,8 @@ class SimulationClockFieldsTest {
         fun resolve(value: String = code, handlerSize: Long = 64, mapSize: Long = 64, slot: Int = 3) =
             InputPauseField.analyze(machineCode(value), 0x1000, 128, handlerSize, mapSize, slot)
         assertEquals(InputPauseField(32, 40, 48), resolve())
+        assertEquals(InputPauseField(32, 40, 48), resolve(code.replace("30 01 75", "30 01 90 48 89 da 75")))
+        assertFails { resolve(code.replace("30 01 75", "30 01 85 d2 75")) }
         assertEquals(InputPauseField(32, 40, 48), resolve(code.replace("30 01 75", "30 00 74")))
         for (changed in listOf(
             code.replace("48 8b 47 20", "48 8b 46 20"),

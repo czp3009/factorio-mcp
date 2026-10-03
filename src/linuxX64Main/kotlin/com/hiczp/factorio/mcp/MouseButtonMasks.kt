@@ -18,7 +18,7 @@ internal data class MouseButtonMasks(val values: Map<SdlButtonAdmission.Button, 
                 })
             val function = image.symbol("_ZN4agui3Gui5logicEb")
             val flow = X64ControlFlow.resolve(image, function)
-            val locals = DwarfInlines(image).find(function, "logic", setOf("dequeueMouseInput")).map { inline ->
+            val locals = image.inlines.find(function, "logic", setOf("dequeueMouseInput")).map { inline ->
                 InlineFrameCopy.resolve(flow, inline.ranges.map {
                     DwarfRanges.Range(it.start - function.address, it.end - function.address)
                 }, input.queue.extent)

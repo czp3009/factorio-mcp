@@ -5,8 +5,8 @@
 #include <unistd.h>
 
 KeyboardRouteKey::KeyboardRouteKey(const KeyboardRouteConfig &config, const EventRouteFunctions &functions,
-                                 pid_t inputThread, pid_t cleanupThread, EventRoute::Resolve pressResolver,
-                                 EventRoute::Resolve releaseResolver, void *context)
+                                   pid_t inputThread, pid_t cleanupThread, EventRoute::Resolve pressResolver,
+                                   EventRoute::Resolve releaseResolver, void *context)
     : config_(config), functions_(functions), inputThread_(inputThread), cleanupThread_(cleanupThread),
       pressResolver_(pressResolver), releaseResolver_(releaseResolver), context_(context) {}
 
@@ -53,23 +53,24 @@ int KeyboardRouteKey::resolve(EventRouteStage stage, void *context, void *&recei
 
 int KeyboardRouteKey::dispatch(bool down, EventRouteProgress &progress) {
     dispatching_ = true;
+
     struct Reset {
         bool &value;
-        ~Reset() { value = false; }
+
+        ~Reset() {
+            value = false;
+        }
     } reset{dispatching_};
+
     down_ = down;
     KeyStateValue value;
     if (const int error = current(value))
         return error;
-    if (down && (value.held || value.blocked))
-        return EBUSY;
     double timestamp;
     if (const int error = readEventClock(config_.clock, timestamp))
         return error;
     if (const int error = current(value))
         return error;
-    if (down && (value.held || value.blocked))
-        return EBUSY;
     KeyboardEventStorage event;
     if (const int error = event.prepare(config_.event, code_, down, timestamp))
         return error;
@@ -84,21 +85,21 @@ int KeyboardRouteKey::press(uint32_t code) {
     if (started_)
         return EALREADY;
     started_ = true;
-    if (cleanupThread_ <= 0 || !pressResolver_ || !releaseResolver_ || !functions_.source ||
-        !functions_.guiEvent || !functions_.guiLogic || !functions_.evaluate || !functions_.update ||
-        !functions_.postUpdate || !validKeyStateLayout(config_.owner, config_.keys) ||
-        !validKeyboardEventLayout(config_.event) || config_.owner.eventSize != config_.event.extent ||
-        config_.owner.eventType != config_.event.type || config_.owner.eventTime != config_.event.time ||
-        (config_.pressOrder != EventUpdateOrder::BeforeSource && config_.pressOrder != EventUpdateOrder::AfterEvaluation) ||
-        (config_.releaseOrder != EventUpdateOrder::BeforeSource && config_.releaseOrder != EventUpdateOrder::AfterEvaluation) ||
+    if (cleanupThread_ <= 0 || !pressResolver_ || !releaseResolver_ || !functions_.source || !functions_.guiEvent ||
+        !functions_.guiLogic || !functions_.evaluate || !functions_.update || !functions_.postUpdate ||
+        !validKeyStateLayout(config_.owner, config_.keys) || !validKeyboardEventLayout(config_.event) ||
+        config_.owner.eventSize != config_.event.extent || config_.owner.eventType != config_.event.type ||
+        config_.owner.eventTime != config_.event.time ||
+        (config_.pressOrder != EventUpdateOrder::BeforeSource &&
+         config_.pressOrder != EventUpdateOrder::AfterEvaluation) ||
+        (config_.releaseOrder != EventUpdateOrder::BeforeSource &&
+         config_.releaseOrder != EventUpdateOrder::AfterEvaluation) ||
         !code || code > static_cast<uint32_t>(std::numeric_limits<int32_t>::max()))
         return record(EINVAL);
     InputStateObjects objects;
     KeyStateValue value;
     if (const int error = readKeyState(config_.owner, config_.keys, static_cast<int32_t>(code), objects, value))
         return record(error);
-    if (value.held || value.blocked)
-        return record(EBUSY);
     code_ = code;
     global_ = objects.global;
     state_ = objects.state;
@@ -141,8 +142,8 @@ int KeyboardRouteKey::release() {
 }
 
 KeyboardRouteKeys::KeyboardRouteKeys(const KeyboardRouteConfig &config, const EventRouteFunctions &functions,
-                                   pid_t inputThread, pid_t cleanupThread, EventRoute::Resolve pressResolver,
-                                   EventRoute::Resolve releaseResolver, void *context)
+                                     pid_t inputThread, pid_t cleanupThread, EventRoute::Resolve pressResolver,
+                                     EventRoute::Resolve releaseResolver, void *context)
     : config_(config), functions_(functions), inputThread_(inputThread), cleanupThread_(cleanupThread),
       pressResolver_(pressResolver), releaseResolver_(releaseResolver), context_(context) {}
 
@@ -172,13 +173,19 @@ int KeyboardRouteKeys::button(uint32_t code, bool down) {
             return ENOSPC;
         selected = empty;
         selected->code = code;
-        selected->key.emplace(config_, functions_, inputThread_, cleanupThread_, pressResolver_, releaseResolver_, context_);
+        selected->key.emplace(config_, functions_, inputThread_, cleanupThread_, pressResolver_, releaseResolver_,
+                              context_);
     }
     dispatching_ = true;
+
     struct Reset {
         bool &value;
-        ~Reset() { value = false; }
+
+        ~Reset() {
+            value = false;
+        }
     } reset{dispatching_};
+
     const int error = down ? selected->key->press(code) : selected->key->release();
     if (!selected->key->owned()) {
         selected->key.reset();

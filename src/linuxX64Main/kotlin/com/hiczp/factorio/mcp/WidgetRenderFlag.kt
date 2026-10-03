@@ -29,7 +29,7 @@ internal data class WidgetRenderFlag(
                     val function =
                         image.symbol("_ZN4agui6Widget30recursivePaintChildrenInternalEbPNS_8GraphicsERKNS_5PointE")
                     val predicates =
-                        DwarfInlines(image).find(function, "recursivePaintChildrenInternal", setOf("shouldRender"))
+                        image.inlines.find(function, "recursivePaintChildrenInternal", setOf("shouldRender"))
                     val method = ItaniumVtable.resolve(image, "_ZTVN4agui6WidgetE")
                         .method(image, "_ZNK4agui6Widget11getLocationEv")
                     val bytes = image.functionBytes(function, 32768)

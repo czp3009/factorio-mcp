@@ -10,7 +10,7 @@ uintptr_t UiCapture::target() const {
 }
 
 UiCapture::UiCapture(const Symbols &symbols, void *gui, std::function<bool()> current, std::function<bool(void *)> live)
-    : symbols(symbols), gui(gui), current(std::move(current)), live(std::move(live)), initial(target()) {}
+    : symbols(symbols), gui(gui), current(std::move(current)), live(std::move(live)) {}
 
 void UiCapture::release(const void *absoluteEvent, void *alreadyReleased) {
     if (finished)
@@ -19,8 +19,7 @@ void UiCapture::release(const void *absoluteEvent, void *alreadyReleased) {
     if (!current())
         return;
     const auto captured = target();
-    // Do not release a capture that predates this gesture.
-    if (!captured || captured == initial)
+    if (!captured)
         return;
     std::exception_ptr failure;
     try {

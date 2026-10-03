@@ -73,14 +73,25 @@ int main() {
     global.state = &state;
     root = &global;
     replacement.state = &replacementState;
-    const FmLinuxMouseStateLayout layout{
-        reinterpret_cast<uintptr_t>(&root), sizeof(Global), offsetof(Global, state), sizeof(State), offsetof(State, held),
-        sizeof(Event), offsetof(Event, type), offsetof(Event, time), offsetof(Event, code), 31, 47, {1, 3, 2}, {2, 8, 4}};
+    const FmLinuxMouseStateLayout layout{reinterpret_cast<uintptr_t>(&root),
+                                         sizeof(Global),
+                                         offsetof(Global, state),
+                                         sizeof(State),
+                                         offsetof(State, held),
+                                         sizeof(Event),
+                                         offsetof(Event, type),
+                                         offsetof(Event, time),
+                                         offsetof(Event, code),
+                                         31,
+                                         47,
+                                         {1, 3, 2},
+                                         {2, 8, 4}};
     const InputStateFunctions functions{update, post};
     assert(validMouseStateLayout(layout));
     InputStateObjects objects;
     assert(readInputState(layout, objects) == 0);
-    assert(objects.global == reinterpret_cast<uintptr_t>(&global) && objects.state == reinterpret_cast<uintptr_t>(&state));
+    assert(objects.global == reinterpret_cast<uintptr_t>(&global) &&
+           objects.state == reinterpret_cast<uintptr_t>(&state));
     InputDispatch progress;
     state.held = 1u << 7;
     for (const auto code : layout.codes) {
@@ -93,7 +104,8 @@ int main() {
     const auto before = updates;
     assert(dispatchMouseState(layout, functions, objects, 9, true, 0, progress) == EINVAL);
     assert(!progress.updateEntered && !progress.postEntered && updates == before);
-    assert(dispatchMouseState(layout, functions, objects, 1, true, std::numeric_limits<double>::quiet_NaN(), progress) == EINVAL);
+    assert(dispatchMouseState(layout, functions, objects, 1, true, std::numeric_limits<double>::quiet_NaN(),
+                              progress) == EINVAL);
     assert(dispatchMouseState(layout, functions, objects, 1, true, -1, progress) == EINVAL);
     assert(dispatchMouseState(layout, {nullptr, post}, objects, 1, true, 0, progress) == EINVAL);
     ignoreUpdate = true;
@@ -167,11 +179,11 @@ int main() {
         assert(button.release(layout, functions, 5) == 0 && updates == settled && state.held == (1u << 7));
     }
     state.held |= 2;
-    MouseButtonOwnership foreign;
-    const auto foreignBefore = updates;
-    assert(foreign.press(layout, functions, 1, 3) == EBUSY && !foreign.owned() && updates == foreignBefore);
-    assert(foreign.release(layout, functions, 4) == EBUSY && (state.held & 2) && updates == foreignBefore);
-    state.held &= ~2u;
+    MouseButtonOwnership existing;
+    const auto existingBefore = updates;
+    assert(existing.press(layout, functions, 1, 3) == 0 && existing.owned() && updates == existingBefore + 1);
+    assert(existing.release(layout, functions, 4) == 0 && !existing.owned() && !(state.held & 2) &&
+           updates == existingBefore + 2);
     MouseButtonOwnership throwingPress;
     failUpdate = true;
     assert(throwingPress.press(layout, functions, 1, 3) == EIO && throwingPress.owned() && (state.held & 2));
@@ -196,8 +208,8 @@ int main() {
     root = &replacement;
     replacementState.held = 2;
     const auto replacementBefore = updates;
-    assert(replaced.release(layout, functions, 4) == ESTALE && !replaced.owned() &&
-        replacementState.held == 2 && updates == replacementBefore);
+    assert(replaced.release(layout, functions, 4) == ESTALE && !replaced.owned() && replacementState.held == 2 &&
+           updates == replacementBefore);
     root = &global;
     state.held &= ~2u;
     MouseButtonOwnership unavailable;

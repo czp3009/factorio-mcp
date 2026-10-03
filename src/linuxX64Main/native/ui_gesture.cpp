@@ -10,12 +10,12 @@ int record(UiMouseGesture &state, int error) {
     return state.failure;
 }
 
-int dispatch(const UiGestureContext &context, UiMouseGesture &state,
-             void (*entry)(void *, const void *), uint32_t type, UiMouseDispatch &progress) {
+int dispatch(const UiGestureContext &context, UiMouseGesture &state, void (*entry)(void *, const void *), uint32_t type,
+             UiMouseDispatch &progress) {
     auto request = state.request;
     request.type = type;
-    const int error = dispatchUiMouseAt(context.guiInstance, context.ui, context.event, context.clock,
-        entry, state.target, request, state.x, state.y, progress);
+    const int error = dispatchUiMouseAt(context.guiInstance, context.ui, context.event, context.clock, entry,
+                                        state.target, request, state.x, state.y, progress);
     // Disappearance after admission is a normal outcome. A throwing callback still retains its own error.
     return (error == ENOENT || error == ESTALE) && error == progress.targetStatus ? 0 : error;
 }
@@ -24,15 +24,14 @@ int dispatch(const UiGestureContext &context, UiMouseGesture &state,
 bool validMouseGesture(const UiGestureContext &context) {
     const auto &flag = context.gesture.clickOnDown;
     return validUiLayout(context.ui) && validMouseEventLayout(context.event) && context.event.hasPrevious &&
-        validInputClockLayout(context.clock) && context.clock.guiSize == context.ui.guiSize &&
-        validCaptureLayout(context.capture, context.ui) &&
-        fm::member(context.gesture.previousTarget, sizeof(uintptr_t), context.ui.guiSize) &&
-        fm::member(context.gesture.widgetTargetable, sizeof(uintptr_t), context.ui.widgetSize) &&
-        (flag.width == 1 || flag.width == 2 || flag.width == 4 || flag.width == 8) &&
-        fm::member(flag.offset, flag.width, context.ui.widgetSize) && flag.mask && !(flag.mask & (flag.mask - 1)) &&
-        flag.shift < flag.width * 8 && flag.mask == (uint64_t{1} << flag.shift) &&
-        context.functions.enter && context.functions.down && context.functions.click &&
-        context.functions.up && context.functions.leave;
+           validInputClockLayout(context.clock) && context.clock.guiSize == context.ui.guiSize &&
+           validCaptureLayout(context.capture, context.ui) &&
+           fm::member(context.gesture.previousTarget, sizeof(uintptr_t), context.ui.guiSize) &&
+           fm::member(context.gesture.widgetTargetable, sizeof(uintptr_t), context.ui.widgetSize) &&
+           (flag.width == 1 || flag.width == 2 || flag.width == 4 || flag.width == 8) &&
+           fm::member(flag.offset, flag.width, context.ui.widgetSize) && flag.mask && !(flag.mask & (flag.mask - 1)) &&
+           flag.shift < flag.width * 8 && flag.mask == (uint64_t{1} << flag.shift) && context.functions.enter &&
+           context.functions.down && context.functions.click && context.functions.up && context.functions.leave;
 }
 
 int finishUiMouseGesture(const UiGestureContext &context, UiMouseGesture &state) {
@@ -51,7 +50,8 @@ int finishUiMouseGesture(const UiGestureContext &context, UiMouseGesture &state)
     auto release = state.request;
     release.type = context.gesture.upType;
     record(state, finishUiCapture(context.guiInstance, context.ui, context.capture, context.event, context.clock,
-        context.functions.up, release, state.absoluteX, state.absoluteY, state.released, state.capture));
+                                  context.functions.up, release, state.absoluteX, state.absoluteY, state.released,
+                                  state.capture));
     // Capture cleanup may have delivered the only up after the original up failed before entry.
     if (state.capture.released == state.target.widget) {
         state.released = state.target.widget;
@@ -68,35 +68,27 @@ int finishUiMouseGesture(const UiGestureContext &context, UiMouseGesture &state)
         if (state.target.reference && liveUiTarget(context.guiInstance, context.ui, state.target))
             released = 0;
         record(state, finishUiCapture(context.guiInstance, context.ui, context.capture, context.event, context.clock,
-            context.functions.up, release, state.absoluteX, state.absoluteY, released, state.finalCapture));
+                                      context.functions.up, release, state.absoluteX, state.absoluteY, released,
+                                      state.finalCapture));
     }
     state.finished = !state.upPending && !state.leavePending && state.capture.finished &&
-        (!state.leaveCleanupPending || state.finalCapture.finished);
+                     (!state.leaveCleanupPending || state.finalCapture.finished);
     return state.failure;
 }
 
-int runUiMouseGesture(const UiGestureContext &context, const UiTarget &target,
-                       const UiMouseRequest &request, UiMouseGesture &state) {
+int runUiMouseGesture(const UiGestureContext &context, const UiTarget &target, const UiMouseRequest &request,
+                      UiMouseGesture &state) {
     if (state.started)
         return EALREADY;
-    if (!validMouseGesture(context) || !request.button || request.previous ||
-        !std::isfinite(request.x) || !std::isfinite(request.y) ||
-        request.x < 0 || request.x > 1 || request.y < 0 || request.y > 1 ||
+    if (!validMouseGesture(context) || !request.button || request.previous || !std::isfinite(request.x) ||
+        !std::isfinite(request.y) || request.x < 0 || request.x > 1 || request.y < 0 || request.y > 1 ||
         target.bounds.width <= 0 || target.bounds.height <= 0)
         return EINVAL;
     UiCapture capture;
     if (const int error = beginUiCapture(context.guiInstance, context.ui, context.capture, target, capture))
         return error;
     capture.rootReference = target.reference;
-    capture.initialReference = context.initialCapture;
     capture.recipientReference = context.captureRecipient;
-    if (context.initialCapture) {
-        uintptr_t initial;
-        if (const int error = context.initialCapture->borrow(initial))
-            return error;
-        if (initial != capture.initial)
-            return ESTALE;
-    }
     uintptr_t previous;
     if (!fm::read(target.gui + context.gesture.previousTarget, previous))
         return EFAULT;

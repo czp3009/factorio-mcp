@@ -4,9 +4,9 @@ package com.hiczp.factorio.mcp
 
 import com.hiczp.factorio.mcp.X64Instructions.Operation
 import com.hiczp.factorio.mcp.X64Instructions.Register
+import kotlin.test.*
 import kotlinx.cinterop.toKString
 import platform.posix.getenv
-import kotlin.test.*
 
 class VirtualMemberRetirementTest {
     @Test
@@ -15,10 +15,14 @@ class VirtualMemberRetirementTest {
         fun receiver(value: String) = SysVReceiverFlow(machineCode(value), 0x1000, 64).call(18)[7]
         assertEquals(SysVReceiverFlow.Pointer(SysVReceiverFlow.Receiver(), 24, 6), receiver(code))
         val repeated = SysVReceiverFlow(machineCode(code.replace("75 fb", "75 f7")), 0x1000, 64)
-        // A new load can establish a fresh member expression, but a value carried to the next iteration
+        // A new load can establish a fresh member expression, but a value carried to the next
+        // iteration
         // must not identify the previous iteration's object before that load executes.
         assertFalse(repeated.before(6)[3] is SysVReceiverFlow.Pointer)
-        assertEquals(SysVReceiverFlow.Pointer(SysVReceiverFlow.Receiver(), 24, 6), repeated.call(18)[7])
+        assertEquals(
+            SysVReceiverFlow.Pointer(SysVReceiverFlow.Receiver(), 24, 6),
+            repeated.call(18)[7],
+        )
     }
 
     @Test
@@ -47,35 +51,57 @@ class VirtualMemberRetirementTest {
         val body = X64Instructions(bytes, allowAtomicExchangeAdd = true).all()
         assertEquals(Operation.ATOMIC_EXCHANGE_ADD, body.first().operation)
         assertEquals(Register(0, 4), body.first().source)
-        assertFails { SysVArgumentFlow(X64ControlFlow(body)) }
-        assertFails { X64JumpTables.resolve(body, 0x1000) { _, _ -> error("No table read expected") } }
-        assertFails { X64Instructions(machineCode("f0 0f c1 c0"), allowAtomicExchangeAdd = true).all() }
+        assertEquals(null, SysVArgumentFlow(X64ControlFlow(body)).register(body.last().offset, 0))
+        assertEquals(
+            0,
+            X64JumpTables.resolve(body, 0x1000) { _, _ -> error("No table read expected") }.size,
+        )
+        assertFails {
+            X64Instructions(machineCode("f0 0f c1 c0"), allowAtomicExchangeAdd = true).all()
+        }
     }
 
     @Test
     fun derivesGuardedRetirementAcrossLoopsAndSpilledPointers() {
         val directory = checkNotNull(getenv("FACTORIO_MCP_TEST_NATIVE")).toKString()
-        val members = listOf(1, 23).map { padding ->
-            MappedBinary("$directory/view_lifetime_fixture_$padding").use { file ->
-                val image = ElfImage(file.view)
-                assertFails { image.symbol("_ZTV18GarbageCollectable") }
-                fun field(name: String) =
-                    image.symbol("fixture_$name").let { image.virtualBytes(it.address, 8).unsigned(0, 8) }
+        val members =
+            listOf(1, 23).map { padding ->
+                MappedBinary("$directory/view_lifetime_fixture_$padding").use { file ->
+                    val image = ElfImage(file.view)
+                    assertFails { image.symbol("_ZTV18GarbageCollectable") }
+                    fun field(name: String) =
+                        image.symbol("fixture_$name").let {
+                            image.virtualBytes(it.address, 8).unsigned(0, 8)
+                        }
 
-                val method = ItaniumVtable.resolve(image, "_ZTV8GameView")
-                    .method(image, "_ZN18GarbageCollectable13flagForDeleteEv")
-                val member = field("game_view")
-                val proof = VirtualMemberRetirement.resolve(image, "_ZN4GameD2Ev", field("game_size"), member, method)
-                assertEquals(member, proof.member)
-                assertTrue(proof.call < proof.boundary)
-                val metadata = ViewRetirementMetadata.resolve(image, field("game_size"), field("view_size"), member)
-                assertEquals(proof, metadata.layout.owner)
-                metadata.verify(image, 0) { address, length ->
-                    image.virtualBytes(address, length.toLong()).bytes(0, length)
+                    val method =
+                        ItaniumVtable.resolve(image, "_ZTV8GameView")
+                            .method(image, "_ZN18GarbageCollectable13flagForDeleteEv")
+                    val member = field("game_view")
+                    val proof =
+                        VirtualMemberRetirement.resolve(
+                            image,
+                            "_ZN4GameD2Ev",
+                            field("game_size"),
+                            member,
+                            method,
+                        )
+                    assertEquals(member, proof.member)
+                    assertTrue(proof.call < proof.boundary)
+                    val metadata =
+                        ViewRetirementMetadata.resolve(
+                            image,
+                            field("game_size"),
+                            field("view_size"),
+                            member,
+                        )
+                    assertEquals(proof, metadata.layout.owner)
+                    metadata.verify(image, 0) { address, length ->
+                        image.virtualBytes(address, length.toLong()).bytes(0, length)
+                    }
+                    member
                 }
-                member
             }
-        }
         assertNotEquals(members[0], members[1])
     }
 }

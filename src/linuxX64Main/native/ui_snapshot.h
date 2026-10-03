@@ -1,4 +1,7 @@
 #pragma once
+#include "ui_elements.h"
+#include "ui_identity.h"
+#include "ui_quality.h"
 #include <stdint.h>
 
 #define FM_LINUX_MAX_NODES 4096
@@ -10,6 +13,7 @@
 #define FM_LINUX_MAX_OPTIONS 1024
 #define FM_LINUX_WIDGET_OPTIONS 64
 #define FM_LINUX_OPTION_TEXT 512
+#define FM_LINUX_MAX_ICON_REFERENCES 512
 
 typedef struct FmLinuxUiStep {
     int32_t child;
@@ -116,6 +120,30 @@ typedef struct FmLinuxUiOption {
     char text[FM_LINUX_OPTION_TEXT];
 } FmLinuxUiOption;
 
+typedef struct FmLinuxSwitchLayout {
+    uint64_t table;
+    uint32_t objectSize;
+    uint32_t state;
+    uint32_t allowNone;
+} FmLinuxSwitchLayout;
+
+typedef struct FmLinuxNumberLayout {
+    uint64_t widgetType;
+    uint64_t type;
+    uint32_t count;
+    uint32_t draw;
+    uint32_t zero;
+    uint32_t unknown;
+    uint32_t infinite;
+} FmLinuxNumberLayout;
+
+typedef struct FmLinuxIconLayout {
+    uint64_t widgetType;
+    uint64_t type;
+    uint32_t iconSize;
+    uint32_t normal, hovered, disabled;
+} FmLinuxIconLayout;
+
 typedef struct FmLinuxUiLayout {
     uint32_t guiSize;
     uint32_t widgetSize;
@@ -138,6 +166,13 @@ typedef struct FmLinuxUiLayout {
     FmLinuxProgressLayout progress[64];
     uint32_t dropdownCount;
     FmLinuxDropdownLayout dropdowns[64];
+    uint32_t switchCount;
+    FmLinuxSwitchLayout switches[64];
+    FmLinuxNumberLayout number;
+    FmLinuxIdentityLayout identity;
+    FmLinuxElementLayout elements;
+    FmLinuxQualityLayout quality;
+    FmLinuxIconLayout icons;
 } FmLinuxUiLayout;
 
 typedef struct FmLinuxUiNode {
@@ -174,6 +209,17 @@ typedef struct FmLinuxUiNode {
     uint32_t optionFirst;
     uint32_t optionCount;
     uint32_t optionTotal;
+    uint32_t switchAvailable;
+    uint8_t switchState;
+    uint8_t switchAllowNone;
+    uint32_t numberAvailable;
+    uint32_t numberFlags;
+    double numberValue;
+    uint32_t iconsAvailable;
+    FmLinuxUiIdentity identity;
+    FmLinuxUiElement element;
+    FmLinuxUiQuality quality;
+    int32_t iconNormal, iconHovered, iconDisabled;
 } FmLinuxUiNode;
 
 typedef struct FmLinuxUiSnapshot {
@@ -187,6 +233,7 @@ typedef struct FmLinuxUiSnapshot {
 
 #ifdef __cplusplus
 class UiTargetReference;
+
 // Borrowed only within one frontend callback. Never store these addresses in IPC or across frames.
 struct UiTarget {
     uintptr_t gui = 0;
@@ -200,8 +247,8 @@ bool validUiLayout(const FmLinuxUiLayout &layout);
 int snapshotUi(void *gui, const FmLinuxUiLayout &layout, uint32_t limit, const uint32_t *cancel,
                FmLinuxUiSnapshot &output, const FmLinuxUiSelector *selector = nullptr);
 // Selects exactly one widget from a complete traversal and checks its ancestors before action admission.
-int selectUiTarget(void *gui, const FmLinuxUiLayout &layout, const FmLinuxUiSelector &selector,
-                   const uint32_t *cancel, FmLinuxUiSnapshot &snapshot, UiTarget &output);
+int selectUiTarget(void *gui, const FmLinuxUiLayout &layout, const FmLinuxUiSelector &selector, const uint32_t *cancel,
+                   FmLinuxUiSnapshot &snapshot, UiTarget &output);
 // Reacquires the authoritative GUI/root and traverses fresh child ranges after a callback.
 // Returns ENOENT for a removed/destroying widget and ESTALE when its GUI/root was replaced.
 int liveUiTarget(uintptr_t guiInstance, const FmLinuxUiLayout &layout, const UiTarget &target);

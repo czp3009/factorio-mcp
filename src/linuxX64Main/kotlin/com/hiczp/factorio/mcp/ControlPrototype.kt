@@ -10,7 +10,7 @@ internal data class ControlPrototype(
     val cutscene: Long,
 ) {
     companion object {
-        fun resolve(image: ElfImage, controlSize: Long, debug: DwarfInlines = DwarfInlines(image)): ControlPrototype {
+        fun resolve(image: ElfImage, controlSize: Long, debug: DwarfInlines = image.inlines): ControlPrototype {
             val size = SysVObjectSize.resolve(image, "20CustomInputPrototype")
             val table = ItaniumVtable.resolve(image, "_ZTV20CustomInputPrototype")
             table.method(image, "_ZN20CustomInputPrototypeD0Ev")

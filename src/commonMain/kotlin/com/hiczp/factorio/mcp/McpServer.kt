@@ -3,11 +3,17 @@ package com.hiczp.factorio.mcp
 import io.modelcontextprotocol.kotlin.sdk.server.Server
 import io.modelcontextprotocol.kotlin.sdk.server.ServerOptions
 import io.modelcontextprotocol.kotlin.sdk.types.*
+import kotlin.io.encoding.Base64
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
 import kotlinx.serialization.json.*
-import kotlin.io.encoding.Base64
+
+private fun toolResult(value: JsonObject, error: Boolean = false) = CallToolResult(
+    content = listOf(TextContent(Json.encodeToString(JsonObject.serializer(), value))),
+    structuredContent = value,
+    isError = if (error) true else null,
+)
 
 internal fun createServer(game: GameSession): Server {
     val server =
@@ -17,11 +23,12 @@ internal fun createServer(game: GameSession): Server {
             instructions =
                 """
                 Attach to an existing, fully loaded Factorio client; this server never launches it.
-                Prefer direct structured reads: world_overview for spatial surveys, world_query for native objects and related state, chat_read for retained messages, and ui_read for interface state or information without a supported direct reader. Use inspect member discovery and bounded paths instead of opening individual machine windows. Narrow filters, fields and pages to limit context. Use screenshot only for missing visual information, verification or requested images; do not capture after every action.
-                Prefer ui_action with live selectors for UI, including offscreen controls. Prefer set_text on an available text field over dragging a slider. Use input for world controls or held mouse gestures; discover current bindings with input_bindings instead of assuming default keys or mouse meanings.
-                Interpret native values and hierarchy yourself: missing, null and unavailable are distinct, widget flags are local, and controller context can differ from the physical character. Check truncation before treating results as complete.
-                Action completion confirms dispatch, not a game outcome. Observe effects before dependent actions, especially in multiplayer. Do not blindly repeat a mutation whose result was lost or uncertain.
+                Prefer structured reads: world_query for objects, properties and collections, world_overview for spatial observations, chat_read for retained messages, and ui_read for interface state. Discover inspect members and use bounded paths, filters, fields and pages. Use screenshot for missing visual information, verification or requested images.
+                Use ui_action with live selectors for widgets and input for finite keyboard/mouse sequences. Discover current bindings with input_bindings. Use set_text for editable text.
+                Interpret native values, text, repetitions and hierarchy yourself. Missing, null and unavailable are distinct, widget flags are local, and controller context can differ from the physical character. Check truncation before treating results as complete.
+                Every action, including chat, reports client dispatch/execution and cleanup. Completion does not confirm server acceptance, delivery or gameplay success. Network latency and prediction rollback can delay, change or undo effects; reads observe current state. Actions do not wait for a resulting state. Observe effects before dependent actions. Do not blindly repeat a mutation whose result was lost or uncertain.
                 Tools have no execution timeout. Send explicit MCP cancellation to stop unwanted work; HTTP disconnection alone is not guaranteed to cancel. All clients share this server's attachment.
+                All tools assume the player is not operating the game concurrently. Errors or unexpected results from concurrent player actions are outside the tool contract; tools do not detect or compensate for that interference.
                 """
                     .trimIndent(),
         )
@@ -44,15 +51,9 @@ internal fun createServer(game: GameSession): Server {
                 operation(args)
             } catch (failure: CancellationException) {
                 if (!currentCoroutineContext().isActive) throw failure
-                CallToolResult(
-                    content = listOf(TextContent(failure.message ?: "Tool aborted")),
-                    isError = true,
-                )
+                toolResult(buildJsonObject { put("error", failure.message ?: "Tool aborted") }, error = true)
             } catch (failure: Exception) {
-                CallToolResult(
-                    content = listOf(TextContent(failure.message ?: "Operation failed")),
-                    isError = true,
-                )
+                toolResult(buildJsonObject { put("error", failure.message ?: "Operation failed") }, error = true)
             }
         }
     }
@@ -65,13 +66,13 @@ internal fun createServer(game: GameSession): Server {
         operation: suspend (JsonObject) -> JsonObject,
     ) {
         register(name, description, properties, required) { args ->
-            CallToolResult(content = listOf(TextContent(operation(args).toString())))
+            toolResult(operation(args))
         }
     }
 
     tool(
         "status",
-        "Check this server's attachment, PID, observed game state, ui_ready and pause status. Takes no arguments; never searches for or attaches to a process. A null paused value means unknown, not running. State does not guarantee tool availability; each call checks its own prerequisites. Detected process exit clears the attachment. input_transfer observes the local outgoing queue and the front batch blueprint import segment counters; absence is not import success. Use world_query for held item/ghost/record state.",
+        "Observe attachment, PID, game state and pause status without attaching or searching for a process. Null paused means unknown. Each tool checks its own prerequisites; status is not a capability guarantee. Detected exit clears the attachment.",
     ) {
         game.status()
     }
@@ -115,7 +116,7 @@ internal fun createServer(game: GameSession): Server {
     }
     tool(
         "ui_read",
-        "Inspect the live UI in menus, paused worlds and gameplay; prefer this over screenshots for UI discovery. Optionally select subtrees to reduce output. Returns native types, text, own flags and properties in postorder (children before parents), with snapshot-local IDs and parent links. IDs cannot target actions; a missing parent can indicate a root, selected root or truncated ancestor. Properties may include check_state, toggled, selected_index/options, slider/progress, switch, prototype/quality/quality_condition, element stack/item fields, numeric overlays and icon references into sprites. Options and selected_index are zero-based; null selection means none. Missing properties are unsupported or unavailable, not false or empty; inspect unavailable reasons and truncation flags. Null quality does not encode a filter condition; read quality_condition separately. Own visibility/enabled flags and bounds do not establish effective visibility, clipping, occlusion or action eligibility; hidden widgets may retain stale values. Native values are not interpreted as gameplay state. Sprite references are snapshot-local metadata, not rendered images; custom-painted content may require screenshot.",
+        "Read interface structure and native properties in menus, paused worlds and gameplay. Returns postorder nodes with text, own flags, parent links and snapshot-local IDs; actions require live selectors. Selected subtrees narrow output, while selector resolution requires a complete bounded traversal. Missing properties mean unsupported or unavailable; inspect reasons and truncation. Flags and bounds do not establish effective visibility or action eligibility. Options and selected_index are zero-based. Icon references are opaque and snapshot-local; original script GUI icon names are readable through world_query inspection. Interpret native values and hierarchy yourself. Use screenshot for missing visual information.",
         buildJsonObject {
             putJsonObject("max_nodes") {
                 put("type", "integer")
@@ -205,14 +206,14 @@ internal fun createServer(game: GameSession): Server {
     }
     tool(
         "world_overview",
-        "Survey the viewport or a map area, optionally filtered by native entity types or prototype names. Choose grid summaries or individual entities with selected fields and recipe/fluid/filter details; use world_query for deeper inspection. Requires a loaded world/local player; supports pause, open UI and normal/remote views. Returns viewport/controller context and bounded live observations, which may include hidden data. UI occlusion is ignored. Check truncation, unscanned cells and coverage; tile samples are not all tiles. Does not move the camera or generate chunks.",
+        "Summarize entities in the viewport or an explicit area with group_by and optional numeric aggregates, or read individual entities with selected fields. Requires a loaded world/local player; works while paused or covered by UI. Returns bounded observations and viewport/controller context, including hidden data; UI occlusion is ignored. Check truncation, coverage and excluded aggregate values. Grouping and calculations use observed properties without interpreting gameplay. Does not move the camera or generate chunks.",
         worldOverviewSchema(),
     ) { args ->
         game.query(parseWorldOverview(args))
     }
     tool(
         "world_query",
-        "Read live objects directly without opening their UI. Includes entity recipe/fluid/filter details, players, inventories and catalogs. Requires a loaded world/local player; works while paused or covered by UI. players lists current-world players; player defaults to self or selects a name/index. Controller and physical positions can differ. Player cursor_stack, cursor_ghost and cursor_record are distinct; inspect the relevant cursor reference for item condition or blueprint properties. Discover inventories before reading slots; quickbar is filters, not stock. Use inspect members to discover native attributes and admitted read methods, values for properties, and path/entries for related objects or collections; bounded references are not complete contents. Prototype definitions and force recipes/technologies preserve native availability, not inferred craftability. Narrow spatial queries by types/names and catalogs by names/search/recipe relations. Missing, nil and read errors remain distinct. Reads may expose hidden data; localized strings stay untranslated. Check truncation; pages are fresh observations, with no stable entity ordering.",
+        "Read native objects, properties, inventories, catalogs and related collections without opening UI. Requires a loaded world/local player; works while paused. Use inspect members for discoverable properties and passive methods, values for selected properties, and path/entries for related objects or collections. Discover inventory references before reading slots. Narrow selections, fields and pages. Missing, nil and read errors remain distinct; localized expressions stay untranslated. Reads may include hidden data. Check truncation; pages are fresh observations and entity ordering is not stable.",
         worldQuerySchema(),
         listOf("selection"),
     ) { args ->
@@ -220,10 +221,11 @@ internal fun createServer(game: GameSession): Server {
     }
     tool(
         "chat_read",
-        "Read chat and notifications retained by the local client's output console without opening UI. Requires a loaded world. text is the existing cached display text and may be empty/stale; raw preserves the localization expression. No sender/channel inference. Optional cursor returns later observations in this attachment; this is not a lossless subscription or server-wide log. Check history_lost, has_more and truncation. Messages unseen and evicted between reads cannot be recovered.",
+        "Read retained local chat and notifications without opening UI; optionally wait for later messages. Requires a loaded world. Pass next_offset to continue the same player's history, including multiple messages at one native tick. Watermarks survive MCP restarts with unchanged history; reset them on world/player changes. text is existing cached display text and may be empty/stale; raw preserves the localization expression. Check history_lost, has_more and boundary/snapshot truncation. This is bounded observation, not a lossless subscription or server-wide log; unseen evicted messages cannot be recovered.",
         chatReadSchema(),
     ) { args ->
-        game.readChat(args["after"]?.stringArgument(), args["limit"]?.intArgument() ?: 64)
+        val request = parseChatRead(args)
+        game.readChat(request.offset, request.limit, request.timeout)
     }
     tool(
         "chat_send",
@@ -243,8 +245,24 @@ internal fun createServer(game: GameSession): Server {
     }
     register(
         "screenshot",
-        "Capture a PNG of the next rendered game+UI frame for information unavailable through structured tools, visual verification or an explicitly requested image. Prefer ui_read/world_overview/world_query; avoid routine screenshots after actions. Works in menus and paused worlds without focusing the game. Requires DirectX on Windows or OpenGL on Linux, with active rendering; minimized/suspended rendering can leave this call pending and block other queued tools until cancellation. Excludes desktop and OS/Steam overlays. Returns image plus dimensions, state and frame metadata; frequent captures can reduce performance.",
-    ) {
+        "Capture the next rendered game+UI frame as PNG, or cancel the active capture and wait for cleanup. Only one capture may be pending; another capture fails while busy. Prefer structured reads; use images for missing visual information, verification or requested images. Requires active rendering (DirectX on Windows, OpenGL on Linux); suspended rendering may leave capture pending and block queued tools. Excludes desktop and OS/Steam overlays. Cancellation also works through MCP request cancellation.",
+        buildJsonObject {
+            putJsonObject("action") {
+                put("type", "string")
+                putJsonArray("enum") {
+                    add("capture")
+                    add("cancel")
+                }
+                put("default", "capture")
+                put("description", "Cancel stops the current capture without starting another; repeatable when idle.")
+            }
+        },
+    ) { args ->
+        val action = args["action"]?.stringArgument() ?: "capture"
+        require(action == "capture" || action == "cancel") { "action must be capture or cancel" }
+        if (action == "cancel") {
+            return@register toolResult(game.cancelScreenshot())
+        }
         val snapshot = game.screenshot()
         val metadata = buildJsonObject {
             put("source", "factorio_rendered_frame")
@@ -255,9 +273,10 @@ internal fun createServer(game: GameSession): Server {
             put("height", snapshot.imageHeight)
         }
         CallToolResult(
+            structuredContent = metadata,
             content =
                 listOf(
-                    TextContent(metadata.toString()),
+                    TextContent(Json.encodeToString(JsonObject.serializer(), metadata)),
                     ImageContent(Base64.encode(checkNotNull(snapshot.image)), "image/png"),
                 )
         )

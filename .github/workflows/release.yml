@@ -1,0 +1,162 @@
+name: Release implementation
+
+on:
+  workflow_call:
+    inputs:
+      github:
+        type: boolean
+        default: false
+      npm:
+        type: boolean
+        default: false
+    secrets:
+      NPM_TOKEN:
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Check publication inputs
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check destinations and required credentials
+        shell: bash
+        env:
+          FACTORIO_MCP_PUBLISH_GITHUB: ${{ inputs.github }}
+          FACTORIO_MCP_PUBLISH_NPM: ${{ inputs.npm }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ "$FACTORIO_MCP_PUBLISH_GITHUB" != true && "$FACTORIO_MCP_PUBLISH_NPM" != true ]]; then
+            echo 'Select at least one publication destination.' >&2
+            exit 1
+          fi
+          if [[ "$FACTORIO_MCP_PUBLISH_NPM" == true && -z "$NODE_AUTH_TOKEN" ]]; then
+            echo 'Configure the NPM_TOKEN repository secret before publishing npm packages.' >&2
+            exit 1
+          fi
+
+  build:
+    needs: validate
+    uses: ./.github/workflows/build.yml
+    with:
+      github: ${{ inputs.github }}
+      npm: ${{ inputs.npm }}
+
+  npm:
+    name: Publish npm packages
+    if: inputs.npm
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - uses: actions/download-artifact@v8.0.1
+        with:
+          pattern: npm-runtime-*
+          path: packages/runtime
+          merge-multiple: true
+
+      - uses: actions/download-artifact@v8.0.1
+        with:
+          name: npm-main
+          path: packages/main
+
+      - name: Publish platform packages, then the launcher
+        shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          FACTORIO_MCP_BUILD_VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          main=(./packages/main/*.tgz)
+          platforms=(./packages/runtime/*.tgz)
+          test "${#main[@]}" -eq 1
+          test "${#platforms[@]}" -gt 0
+          launcher="$(tar -xOf "${main[0]}" package/package.json)"
+          expected_names="$(jq -ce '.kotlinNativeNpmPublishing.platformPackages | [.[]] | sort' <<< "$launcher")"
+          version="$(jq -er '.version' <<< "$launcher")"
+          test "$version" = "$FACTORIO_MCP_BUILD_VERSION"
+          # Build tasks already verified each tarball. Check the handoff is complete and has one version.
+          actual=()
+          for archive in "${platforms[@]}"; do
+            metadata="$(tar -xOf "$archive" package/package.json)"
+            actual+=("$(jq -er --arg version "$version" 'select(.version == $version) | .name' <<< "$metadata")")
+          done
+          actual_names="$(printf '%s\n' "${actual[@]}" | jq -Rsc 'split("\n")[:-1] | sort')"
+          if [[ "$actual_names" != "$expected_names" ]]; then
+            echo "Runtime package set does not match the launcher dependencies." >&2
+            exit 1
+          fi
+          release_version="${version%%+*}"
+          distribution_tag=latest
+          if [[ "$release_version" == *-* ]]; then distribution_tag=next; fi
+          for archive in "${platforms[@]}" "${main[@]}"; do
+            npm publish "$archive" --access public --tag "$distribution_tag" --registry https://registry.npmjs.org
+          done
+
+  github:
+    name: Publish GitHub Release
+    if: inputs.github
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      FACTORIO_MCP_RELEASE_VERSION: ${{ needs.build.outputs.version }}
+      FACTORIO_MCP_BUILD_MATRIX: ${{ needs.build.outputs.matrix }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Download all successful builds
+        uses: actions/download-artifact@v8.0.1
+        with:
+          pattern: runtime-*
+          path: artifacts
+          merge-multiple: true
+
+      - name: Package one ZIP per platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          while IFS= read -r platform; do
+            directory="$RUNNER_TEMP/package-$platform"
+            mkdir -p "$directory"
+            tar -xf "artifacts/runtime-$platform.tar" -C "$directory"
+            (cd "$directory" && zip -r "$GITHUB_WORKSPACE/dist/factorio-mcp-$FACTORIO_MCP_RELEASE_VERSION-$platform.zip" .)
+          done < <(jq -r '.include[].id' <<< "$FACTORIO_MCP_BUILD_MATRIX")
+
+      - name: Create GitHub Release
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="v$FACTORIO_MCP_RELEASE_VERSION"
+          args=()
+          release_version="${FACTORIO_MCP_RELEASE_VERSION%%+*}"
+          if [[ "$release_version" == *-* ]]; then args+=(--prerelease --latest=false); fi
+          refs="$(gh api "repos/$GH_REPO/git/matching-refs/tags/$tag")"
+          if jq -e --arg ref "refs/tags/$tag" 'any(.[]; .ref == $ref)' <<< "$refs" > /dev/null; then
+            commit="$(gh api "repos/$GH_REPO/commits/$tag" --jq .sha)"
+            if [[ "$commit" != "$GITHUB_SHA" ]]; then
+              echo "Tag $tag does not point to the selected release commit." >&2
+              exit 1
+            fi
+            args+=(--verify-tag)
+          fi
+          gh release create "$tag" dist/*.zip \
+            --repo "$GH_REPO" \
+            --target "$GITHUB_SHA" \
+            --title "$tag" \
+            --generate-notes "${args[@]}"

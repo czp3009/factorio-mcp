@@ -8,11 +8,16 @@
 #include "memory_read.h"
 #include "pointer_hook.h"
 #include "frame_hook.h"
+#include "evaluation_hook.h"
+#include "input_task_session.h"
+#include "pump_input.h"
 #include <atomic>
 #include <cerrno>
 #include <fcntl.h>
 #include <linux/memfd.h>
 #include <optional>
+#include <cmath>
+#include <stdexcept>
 #include <sys/mman.h>
 #include <sys/syscall.h>
 #include <unistd.h>
@@ -22,12 +27,20 @@ __attribute__((visibility("default"))) FmLinuxResidentInfo fm_linux_resident{0, 
 uint64_t fm_poll_original = 0;
 uint64_t fm_view_retire_original = 0;
 uint64_t fm_frame_original = 0;
+uint64_t fm_worker_completion_original = 0;
+uint64_t fm_evaluation_original = 0;
 }
 
 static std::atomic_flag initializing = ATOMIC_FLAG_INIT;
 static PointerHook hook(mprotect);
 static PointerHook pollHook(mprotect);
 static PointerHook retirementHook(mprotect);
+static PointerHook workerHook(mprotect);
+static PointerHook evaluationHook(mprotect);
+static FmLinuxInputEvaluationConfig evaluationBound{};
+static FmLinuxWorkerCompletionConfig workerBound{};
+static std::optional<WorkerCompletion> workerCompletion;
+static std::atomic<bool> workerObserving{false};
 static FrameHookOwner frameHook(mprotect, fm_frame_original);
 static FmLinuxRetirementConfig retirementBound{};
 static ViewLifetime viewLifetime;
@@ -39,6 +52,29 @@ static std::optional<UiKeyCommand> key;
 static std::optional<ChatSubmitCommand> chat;
 static std::optional<ChatReadCommand> chatRead;
 static EventPump eventPump;
+static InputTaskSession input(viewLifetime);
+static FmLinuxInputDispatchConfig inputDispatch{};
+static std::optional<PumpInputEmitter> inputEmitter;
+
+static int serviceInput(FmLinuxShared *shared, bool cancel = false) {
+    if (cancel)
+        input.cancel();
+    const int error = input.frontend();
+    fm_ipc_store(&shared->inputOwned, input.owned());
+    if (!input.owned())
+        inputEmitter.reset();
+    return error;
+}
+
+static void inputPump(void *) {
+    const int result = reinterpret_cast<int (*)(bool)>(inputDispatch.pump)(inputDispatch.pumpArgument != 0);
+    if (result)
+        throw std::runtime_error("Native event pump requested an application transition");
+}
+
+static int inputGuard(void *) {
+    return input.validateContext();
+}
 
 static void publishAction(FmLinuxShared *shared) {
     if (click && click->finished())
@@ -68,6 +104,9 @@ static int cleanupAction(FmLinuxShared *shared) {
     const int readResult = chatRead ? chatRead->finish() : 0;
     if (!result)
         result = readResult;
+    const int inputResult = serviceInput(shared, true);
+    if (!result)
+        result = inputResult;
     publishAction(shared);
     return result;
 }
@@ -88,13 +127,24 @@ static FmLinuxShared *storage() {
 
 static void publishOwnership(FmLinuxShared *shared) {
     fm_ipc_store(&shared->pointerOwned, hook.ownsPointer());
-    fm_ipc_store(&shared->protectionOwned, hook.ownsProtection() || pollHook.ownsProtection() || retirementHook.ownsProtection() || frameHook.ownsProtection());
-    fm_ipc_store(&shared->attached, hook.hasOwnership() || pollHook.hasOwnership() || retirementHook.hasOwnership() || frameHook.hasOwnership());
+    fm_ipc_store(&shared->protectionOwned, hook.ownsProtection() || pollHook.ownsProtection() ||
+        retirementHook.ownsProtection() || frameHook.ownsProtection() || workerHook.ownsProtection() ||
+        evaluationHook.ownsProtection());
+    fm_ipc_store(&shared->attached, hook.hasOwnership() || pollHook.hasOwnership() ||
+        retirementHook.hasOwnership() || frameHook.hasOwnership() || workerHook.hasOwnership() ||
+        evaluationHook.hasOwnership());
 }
 
 static int removeHooks() {
-    if (viewLifetime.owned())
+    if (viewLifetime.owned() || input.owned())
         return EBUSY;
+    if (const int error = evaluationHook.remove())
+        return error;
+    workerObserving.store(false, std::memory_order_release);
+    if (const int error = workerHook.remove()) {
+        workerObserving.store(workerHook.ownsPointer(), std::memory_order_release);
+        return error;
+    }
     if (const int error = frameHook.remove())
         return error;
     if (const int error = retirementHook.remove())
@@ -121,15 +171,69 @@ static int installRetirement(FmLinuxShared *shared) {
     return result;
 }
 
+static bool sameWorkerConfig(const FmLinuxWorkerCompletionConfig &a, const FmLinuxWorkerCompletionConfig &b) {
+    return a.entry == b.entry && a.original == b.original && a.protection == b.protection &&
+        a.layout.listenerVtable == b.layout.listenerVtable && a.layout.listenerTypeInfo == b.layout.listenerTypeInfo &&
+        a.layout.caller == b.layout.caller && a.layout.workerSize == b.layout.workerSize &&
+        a.layout.listenerMember == b.layout.listenerMember;
+}
+
+static int installWorker(FmLinuxShared *shared) {
+    const auto config = shared->workerConfig;
+    if (!config.entry || config.entry % alignof(uintptr_t) || !config.original ||
+        (config.protection != PROT_READ && config.protection != (PROT_READ | PROT_WRITE)))
+        return EINVAL;
+    if (fm_worker_completion_original && !sameWorkerConfig(workerBound, config))
+        return ESTALE;
+    if (workerHook.hasOwnership())
+        return workerHook.ownsPointer() && !workerHook.ownsProtection() ? 0 : EBUSY;
+    if (!workerCompletion) {
+        workerCompletion.emplace(config.layout);
+        WorkerIdentity identity;
+        if (workerCompletion->identity(identity) != ENOENT) {
+            workerCompletion.reset();
+            return EINVAL;
+        }
+        workerBound = config;
+        fm_worker_completion_original = config.original;
+    }
+    const int result = workerHook.install(config.entry, config.original,
+        reinterpret_cast<uintptr_t>(&fm_worker_completion_hook), sysconf(_SC_PAGESIZE), config.protection);
+    workerObserving.store(workerHook.ownsPointer(), std::memory_order_release);
+    publishOwnership(shared);
+    return result;
+}
+
+extern "C" void fm_before_worker_completion(void *listener, void *worker, uintptr_t caller) noexcept {
+    PreserveErrno preserve;
+    if (!workerObserving.load(std::memory_order_acquire) || caller != workerBound.layout.caller)
+        return;
+    auto *shared = storage();
+    if (!shared || !workerCompletion)
+        return;
+    const int result = workerCompletion->observe(reinterpret_cast<uintptr_t>(listener),
+        reinterpret_cast<uintptr_t>(worker), caller);
+    if (result == EAGAIN || result == EPERM)
+        return;
+    WorkerIdentity identity;
+    const int read = result ? result : workerCompletion->identity(identity);
+    if (read == EAGAIN)
+        return;
+    if (read) {
+        fm_ipc_store(&shared->workerFailure, read);
+        return;
+    }
+    fm_ipc_store(&shared->workerThread, static_cast<uint32_t>(identity.thread));
+}
+
 extern "C" void fm_before_view_retire(void *receiver) noexcept {
     PreserveErrno preserve;
     // No borrowed object is read, and late wrapper callers remain valid after hook removal.
     viewLifetime.retired(reinterpret_cast<uintptr_t>(receiver));
 }
 
-static int installPoll(FmLinuxShared *shared) {
-    const auto config = shared->pollConfig;
-    if (!validPollSite(config) || config.eventExtent != shared->keyConfig.event.extent)
+static int installPoll(FmLinuxShared *shared, const FmLinuxPollHookConfig &config, uint32_t extent) {
+    if (!validPollSite(config) || config.eventExtent != extent)
         return EINVAL;
     if (fm_poll_original && !samePollSite(pollBound, config))
         return ESTALE;
@@ -141,6 +245,87 @@ static int installPoll(FmLinuxShared *shared) {
                                        sysconf(_SC_PAGESIZE), config.protection);
     publishOwnership(shared);
     return result;
+}
+
+static int installEvaluation(FmLinuxShared *shared) {
+    const auto config = shared->inputEvaluation;
+    if (!config.entry || config.entry % alignof(uintptr_t) || !config.original || !config.caller ||
+        !config.thread || config.thread != fm_ipc_load(&shared->workerThread) ||
+        fm_ipc_load(&shared->workerFailure) ||
+        (config.protection != PROT_READ && config.protection != (PROT_READ | PROT_WRITE)))
+        return EINVAL;
+    if (fm_evaluation_original && (config.entry != evaluationBound.entry ||
+        config.original != evaluationBound.original || config.caller != evaluationBound.caller ||
+        config.protection != evaluationBound.protection || config.thread != evaluationBound.thread))
+        return ESTALE;
+    if (evaluationHook.hasOwnership())
+        return evaluationHook.ownsPointer() && !evaluationHook.ownsProtection() ? 0 : EBUSY;
+    evaluationBound = config;
+    fm_evaluation_original = config.original;
+    const int result = evaluationHook.install(config.entry, config.original,
+        reinterpret_cast<uintptr_t>(&fm_evaluation_hook), sysconf(_SC_PAGESIZE), config.protection);
+    publishOwnership(shared);
+    return result;
+}
+
+static int startInput(FmLinuxShared *shared) {
+    if (input.owned())
+        return EBUSY;
+    const auto &config = shared->inputDispatch;
+    if (!validPollSite(config.site) || !validMouseStateLayout(config.owner) ||
+        !validKeyStateLayout(config.owner, config.keys) || !validKeyboardEventLayout(config.keyboard) ||
+        !validPointerStateLayout(config.owner, config.pointerState) || !validPointerEventLayout(config.pointer) ||
+        config.site.eventExtent != config.keyboard.extent || config.keyboard.extent != config.pointer.extent ||
+        !fm::addressRange(config.pump, 1) || config.pumpArgument != 0 || !config.clock.ticks ||
+        !std::isfinite(config.clock.divisor) || config.clock.divisor <= 0)
+        return EINVAL;
+    int result = installRetirement(shared);
+    if (!result)
+        result = installPoll(shared, config.site, config.keyboard.extent);
+    if (!result)
+        result = installEvaluation(shared);
+    if (result)
+        return result;
+    inputDispatch = config;
+    const KeyboardPumpConfig keyboard{config.site, config.owner, config.keys, config.keyboard, config.clock};
+    const PointerPumpConfig pointer{config.site, config.owner, config.pointerState, config.pointer, config.clock};
+    inputEmitter.emplace(eventPump, keyboard, pointer, inputPump, nullptr, inputGuard, nullptr,
+                         static_cast<pid_t>(shared->inputEvaluation.thread));
+    result = input.start(shared->inputContextConfig, static_cast<pid_t>(shared->inputOwner),
+        shared->inputDescriptor, static_cast<pid_t>(shared->inputEvaluation.thread),
+        shared->inputEvaluation.caller, *inputEmitter);
+    fm_ipc_store(&shared->inputOwned, input.owned());
+    if (!input.owned())
+        inputEmitter.reset();
+    return result;
+}
+
+extern "C" uint64_t fm_before_input_evaluation(void *receiver, uintptr_t caller) noexcept {
+    PreserveErrno preserve;
+    try {
+        return input.before(reinterpret_cast<uintptr_t>(receiver), caller);
+    } catch (...) {
+        input.cancel();
+        return 0;
+    }
+}
+
+extern "C" void fm_after_input_evaluation(void *receiver, uint64_t cookie) noexcept {
+    PreserveErrno preserve;
+    try {
+        input.after(reinterpret_cast<uintptr_t>(receiver), cookie);
+    } catch (...) {
+        input.cancel();
+    }
+}
+
+extern "C" void fm_abort_input_evaluation(void *receiver, uint64_t cookie) noexcept {
+    PreserveErrno preserve;
+    try {
+        input.aborted(reinterpret_cast<uintptr_t>(receiver), cookie);
+    } catch (...) {
+        input.cancel();
+    }
 }
 
 static void complete(FmLinuxShared *shared, int result, uint64_t frame) {
@@ -161,7 +346,8 @@ extern "C" __attribute__((visibility("default"))) int64_t fm_linux_attach() {
     if (!shared || syscall(SYS_gettid) != getpid())
         return -EPERM;
     if (fm_ipc_load(&shared->command) != FM_LINUX_IDLE || hook.hasOwnership() || pollHook.hasOwnership() ||
-        retirementHook.hasOwnership() || frameHook.hasOwnership() || click || text || key || chat || chatRead)
+        retirementHook.hasOwnership() || frameHook.hasOwnership() || workerHook.hasOwnership() ||
+        evaluationHook.hasOwnership() || input.owned() || click || text || key || chat || chatRead)
         return -EBUSY;
     const auto config = shared->config;
     if (!config.entry || !config.original || !config.guiInstance || !config.callerStart ||
@@ -190,7 +376,8 @@ extern "C" __attribute__((visibility("default"))) int64_t fm_linux_cleanup() {
     if (!shared || syscall(SYS_gettid) != getpid())
         return -EPERM;
     const auto command = fm_ipc_load(&shared->command);
-    if (command == FM_LINUX_PENDING || command == FM_LINUX_RUNNING || click || text || key || chat || chatRead)
+    if (command == FM_LINUX_PENDING || command == FM_LINUX_RUNNING || input.owned() ||
+        click || text || key || chat || chatRead)
         return -EBUSY;
     const int result = removeHooks();
     publishOwnership(shared);
@@ -210,6 +397,7 @@ extern "C" void fm_after_gui_logic(void *receiver, uintptr_t caller) noexcept {
     if (!receiver || *instance != receiver)
         return;
     const uint64_t frame = __atomic_add_fetch(&shared->frame, uint64_t{1}, __ATOMIC_RELEASE);
+    serviceInput(shared);
     // A suspended render loop must not prevent a pending capture from acknowledging cancellation.
     if (fm_ipc_load(&shared->command) == FM_LINUX_RUNNING && shared->operation == FM_LINUX_SCREENSHOT) {
         if (fm_ipc_load(&shared->cancel)) {
@@ -219,28 +407,38 @@ extern "C" void fm_after_gui_logic(void *receiver, uintptr_t caller) noexcept {
         }
         return;
     }
-    const bool resumedCleanup = fm_ipc_load(&shared->command) == FM_LINUX_RUNNING && key &&
-        (shared->operation == FM_LINUX_CLEANUP || shared->operation == FM_LINUX_DETACH);
+    const bool resumedCleanup = fm_ipc_load(&shared->command) == FM_LINUX_RUNNING &&
+        (shared->operation == FM_LINUX_CLEANUP || shared->operation == FM_LINUX_DETACH ||
+         shared->operation == FM_LINUX_INPUT_CANCEL);
     if (resumedCleanup) {
-        if (key->active())
+        if (key && key->active())
             return;
     } else if (!fm_ipc_exchange_if(&shared->command, FM_LINUX_PENDING, FM_LINUX_RUNNING)) {
         return;
     }
     if (shared->operation == FM_LINUX_CHAT)
         shared->chatProgress = {};
+    if (!resumedCleanup) {
+        shared->gameState = {0, -1};
+        shared->gameStateError = shared->gameStateConfig.global ?
+            readGameState(shared->gameStateConfig, &shared->cancel, shared->gameState) : 0;
+    }
     int result;
     if (shared->operation == FM_LINUX_DETACH) {
         // Cleanup must finish even when the requesting session was canceled.
         result = cleanupAction(shared);
-        if (key && key->active())
+        if ((key && key->active()) || (result == EBUSY && input.owned()))
             return;
-        if (!result && !click && !text && !key && !chat && !chatRead)
+        if (!result && !input.owned() && !click && !text && !key && !chat && !chatRead)
             result = removeHooks();
         publishOwnership(shared);
     } else if (shared->operation == FM_LINUX_CLEANUP) {
         result = cleanupAction(shared);
-        if (key && key->active())
+        if ((key && key->active()) || (result == EBUSY && input.owned()))
+            return;
+    } else if (shared->operation == FM_LINUX_INPUT_CANCEL) {
+        result = serviceInput(shared, true);
+        if (result == EBUSY && input.owned())
             return;
     } else if (click || text || key || chat || chatRead) {
         // Only explicit cleanup/detach can resume owned releases. Never overwrite or replay an uncertain action.
@@ -248,7 +446,7 @@ extern "C" void fm_after_gui_logic(void *receiver, uintptr_t caller) noexcept {
     } else if (fm_ipc_load(&shared->cancel)) {
         result = ECANCELED;
     } else if (shared->operation == FM_LINUX_FRAME) {
-        result = 0;
+        result = shared->gameStateError;
     } else if (shared->operation == FM_LINUX_SCREENSHOT) {
         shared->frameSize = {};
         shared->frameBytes = 0;
@@ -267,6 +465,10 @@ extern "C" void fm_after_gui_logic(void *receiver, uintptr_t caller) noexcept {
         result = snapshotUi(receiver, shared->ui, shared->nodeLimit, &shared->cancel, shared->snapshot, &shared->selector);
     } else if (shared->operation == FM_LINUX_CONTROLS) {
         result = snapshotControls(shared->controlsLayout, &shared->cancel, shared->controlsSnapshot);
+    } else if (shared->operation == FM_LINUX_WORKER) {
+        result = installWorker(shared);
+    } else if (shared->operation == FM_LINUX_INPUT) {
+        result = startInput(shared);
     } else if (shared->operation == FM_LINUX_INPUT_CONTEXT) {
         shared->inputContextSnapshot = {};
         InputContext context;
@@ -328,7 +530,7 @@ extern "C" void fm_after_gui_logic(void *receiver, uintptr_t caller) noexcept {
             shared->textRequest, &shared->cancel, shared->snapshot);
         publishAction(shared);
     } else if (shared->operation == FM_LINUX_KEY) {
-        result = installPoll(shared);
+        result = installPoll(shared, shared->pollConfig, shared->keyConfig.event.extent);
         if (!result) {
             key.emplace();
             result = key->start(bound.guiInstance, receiver, shared->ui, shared->keyConfig, shared->selector,
@@ -376,12 +578,12 @@ extern "C" void fm_before_frame(void *device, void *window, uintptr_t caller) no
     complete(shared, result, fm_ipc_load64(&shared->frame));
 }
 
-extern "C" int fm_before_poll(void *receiver, void *event, uintptr_t caller, uintptr_t callerFrame) noexcept {
+extern "C" int fm_before_poll(void *receiver, void *event, uintptr_t caller, uintptr_t callerStack) noexcept {
     PreserveErrno preserve;
-    return eventPump.intercept(receiver, event, caller, callerFrame);
+    return eventPump.intercept(receiver, event, caller, callerStack);
 }
 
-extern "C" bool fm_after_empty_poll(void *receiver, void *event, uintptr_t caller, uintptr_t callerFrame) noexcept {
+extern "C" bool fm_after_empty_poll(void *receiver, void *event, uintptr_t caller, uintptr_t callerStack) noexcept {
     PreserveErrno preserve;
     if (syscall(SYS_gettid) != getpid())
         return false;
@@ -389,7 +591,7 @@ extern "C" bool fm_after_empty_poll(void *receiver, void *event, uintptr_t calle
     if (!shared || !pollHook.ownsPointer() || !key || !key->active() ||
         fm_ipc_load(&shared->command) != FM_LINUX_RUNNING ||
         (shared->operation != FM_LINUX_KEY && shared->operation != FM_LINUX_CLEANUP && shared->operation != FM_LINUX_DETACH) ||
-        !matchesPollSite(pollBound, receiver, event, caller, callerFrame))
+        !matchesPollSite(pollBound, receiver, event, caller, callerStack))
         return false;
     bool produced = false;
     const int error = key->poll(event, fm_ipc_load(&shared->cancel) != 0, produced);

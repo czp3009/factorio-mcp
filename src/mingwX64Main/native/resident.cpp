@@ -8,7 +8,6 @@
 #include "ui_capture.h"
 #include "world_query.h"
 #include "chat.h"
-#include "input_transfer.h"
 #include "resident_input.h"
 #include <algorithm>
 #include <atomic>
@@ -23,6 +22,7 @@ static Symbols symbols;
 static Detour updateHook;
 static Detour nextEventHook;
 static KeyGesture keyGesture;
+static InputEventButtons uiButtons;
 static ResidentInput timedInput;
 static Detour inputTickHook, gameDestroyHook;
 static Detour presentHook, glHook;
@@ -184,33 +184,27 @@ static void performAction(void *root, void *gui) {
         // Some widgets consult ControlInput rather than only the GUI event's button/modifier fields.
         // Mirror the chord in InputState without routing a second click through the GUI or world.
         const auto functions = gameInputFunctions(symbols);
-        std::vector<InputButton> held;
-        held.reserve(4);
         auto stateButton = [&](InputButton button, bool pressed) {
-            GameInputEvents(symbols.timedInput.events, functions, gameInputState(symbols), false)
+            GameInputEvents(symbols.timedInput.events, functions, uiButtons, gameInputState(symbols), false)
                 .button(button, pressed);
         };
         auto releaseState = [&] {
-            while (!held.empty()) {
-                stateButton(held.back(), false);
-                held.pop_back();
-            }
+            GameInputEvents events(symbols.timedInput.events, functions, uiButtons, gameInputState(symbols), false);
+            uiButtons.release(events);
         };
         // All releases are resident-owned; no IPC/cancellation point separates this finite gesture.
         bool down = false, entered = false;
         try {
             require(action.keyCount <= 3, "Too many UI click modifiers");
             for (unsigned i = 0; i < action.keyCount; ++i) {
-                held.push_back({InputDevice::Keyboard, action.keys[i]});
-                stateButton(held.back(), true);
+                stateButton({InputDevice::Keyboard, action.keys[i]}, true);
             }
             const Symbol mouseSymbol = action.button == 1 ? MouseRight : action.button == 2 ? MouseMiddle : MouseLeft;
             uint32_t mouseCode{};
             memcpy(&mouseCode,
                    reinterpret_cast<const void *>(symbols.address[mouseSymbol] + symbols.controls.mouseValue),
                    sizeof(mouseCode));
-            held.push_back({InputDevice::Mouse, mouseCode});
-            stateButton(held.back(), true);
+            stateButton({InputDevice::Mouse, mouseCode}, true);
             for (unsigned i = 0; i < 5; ++i) {
                 if (!live(widget, root, gui))
                     break;
@@ -267,8 +261,7 @@ static void performAction(void *root, void *gui) {
         require(textBox != nullptr, "set_text requires a text box");
         fn<void (*)(void *, bool)>(FocusWidget)(widget, false);
         const auto key = [&](unsigned key, unsigned character, bool control) {
-            if (!live(widget, root, gui))
-                return false;
+            require(live(widget, root, gui), "Text target disappeared before dispatch completed");
             memset(event, 0, sizeof(event));
             field<unsigned>(event, layout.key, key);
             field<unsigned>(event, layout.extKey, layout.extKeyNone);
@@ -277,12 +270,11 @@ static void performAction(void *root, void *gui) {
             field<void *>(event, layout.keySource, widget);
             field<double>(event, layout.keyTime, GetTickCount64() / 1000.0);
             fn<bool (*)(void *, const void *)>(TextKeyDown)(textBox, event);
-            return true;
         };
-        if (key(layout.keyA, 0, true) && key(layout.keyBackspace, 0, false))
-            for (unsigned i = 0; i < action.textCount && i < 1024; ++i)
-                if (!key(layout.keyNone, action.text[i], false))
-                    break;
+        key(layout.keyA, 0, true);
+        key(layout.keyBackspace, 0, false);
+        for (unsigned i = 0; i < action.textCount && i < 1024; ++i)
+            key(layout.keyNone, action.text[i], false);
     } else if (action.kind == 3) {
         fn<void (*)(void *, bool)>(FocusWidget)(widget, false);
         keyGesture.begin(action.keys, action.keyCount);
@@ -299,6 +291,17 @@ static void service(void *root, void *gui) {
         timedInput.frontend(symbols);
         if (shared)
             InterlockedExchange(&shared->inputActive, timedInput.active());
+    }
+    if (shared && enabled && uiButtons.active()) {
+        // Keep the original action result and release ownership across frontend phases. Only cleanup is resumed.
+        try {
+            const auto functions = gameInputFunctions(symbols);
+            GameInputEvents events(symbols.timedInput.events, functions, uiButtons, gameInputState(symbols), false);
+            uiButtons.release(events);
+        } catch (const std::exception &) {
+            return;
+        }
+        InterlockedExchange(&shared->command, 3);
     }
     if (!shared || !enabled || !root || *reinterpret_cast<void **>(symbols.address[GuiInstance]) != gui)
         return;
@@ -340,16 +343,12 @@ static void service(void *root, void *gui) {
     result.imageSize = 0;
     result.controlCount = 0;
     result.optionCount = 0;
-    result.spriteCount = 0;
     result.registryCount = 0;
     result.worldSize = 0;
     result.chat.count = 0;
-    result.inputTransfer = {};
     try {
         if (shared->cancel)
             throw std::runtime_error("Tool was cancelled before UI traversal");
-        if (shared->operation == 1 || shared->operation == 2)
-            readInputTransfer(symbols, global, result.inputTransfer);
         if (shared->operation == 7) {
             require(!loading, "Control registry is unavailable during loading");
             collectControls(symbols, *shared);
@@ -386,7 +385,7 @@ static void service(void *root, void *gui) {
             else {
                 if (shared->action.count)
                     selectWidgets(result, shared->action);
-                SpriteSnapshot sprites(symbols, result);
+                IconReferences icons(symbols);
                 for (int i : observationWidgets(result, shared->action.count != 0)) {
                     require(!shared->cancel, "Tool cancelled during UI property observation");
                     void *widget = widgets[i];
@@ -397,7 +396,7 @@ static void service(void *root, void *gui) {
                     collectSwitch(symbols, widget, node);
                     collectElement(symbols, widget, node);
                     collectQualityCondition(symbols, widget, node);
-                    sprites.collect(widget, node);
+                    icons.collect(widget, node);
                 }
             }
         }
@@ -415,6 +414,8 @@ static void service(void *root, void *gui) {
         result.count = 0;
     }
     widgets.clear();
+    if (uiButtons.active())
+        return;
     InterlockedExchange(&shared->command, 3);
 }
 
@@ -585,6 +586,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI fm_unhook(void *) {
             }
             require(!timedInput.active(), "Timed input cleanup must finish before unhook");
             require(!keyGesture.active(), "Key gesture cleanup must finish before unhook");
+            require(!uiButtons.active(), "UI button cleanup must finish before unhook");
             Detour::change(hooks, false);
             while (callbacks.load())
                 Sleep(1);

@@ -12,10 +12,6 @@ internal class WidgetPropertyLayouts(types: DebugTypes) {
             "agui::ToggleButton::CheckedState",
             4uL,
         )
-    private val checkStates =
-        types.enumValues("agui::ToggleButton::CheckedState").entries.associate {
-            it.value to it.key
-        }
     private val toggleMode = types.byteMember("agui::Button", "isButtonToggleButton", true)
     private val toggled = types.byteMember("agui::Button", "toggled", true)
     private val selectedIndex = types.scalarMember("agui::DropDown", "selectedIndex", 4uL, 6u)
@@ -24,8 +20,6 @@ internal class WidgetPropertyLayouts(types: DebugTypes) {
     private val maximum = types.scalarMember("agui::Slider", "max", 8uL, 8u)
     private val valueStep = types.scalarMember("agui::Slider", "valueStep", 8uL, 8u)
     val options = runCatching { DropdownOptionLayout(types) }
-
-    fun checkState(value: Int): String = checkStates[value]?.lowercase() ?: "unknown_$value"
 
     fun write(target: WidgetPropertyLayout) {
         target.supported = 1u

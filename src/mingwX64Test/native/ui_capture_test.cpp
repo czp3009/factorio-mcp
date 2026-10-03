@@ -86,8 +86,9 @@ int main() {
     {
         UiCapture capture(symbols, &gui, same, live);
         capture.release(&absolute, nullptr);
-        assert(calls.empty() && gui.capture == target);
+        assert((calls == std::vector<int>{1, 2, 3}) && !gui.capture);
     }
+    calls.clear();
     gui.capture = 0;
     {
         UiCapture capture(symbols, &gui, same, live);

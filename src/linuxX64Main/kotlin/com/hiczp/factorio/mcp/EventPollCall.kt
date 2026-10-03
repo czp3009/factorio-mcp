@@ -1,7 +1,10 @@
+@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
+
 package com.hiczp.factorio.mcp
 
-import com.hiczp.factorio.mcp.X64Instructions.Memory
-import com.hiczp.factorio.mcp.X64Instructions.Operation
+import com.hiczp.factorio.mcp.linuxbridge.FmLinuxPollHookConfig
+import platform.posix.PROT_READ
+import platform.posix.PROT_WRITE
 
 /** The native event pump's typed poll call and its freshly initialized local Event. No hook is installed here. */
 internal data class EventPollCall(
@@ -10,12 +13,31 @@ internal data class EventPollCall(
     val table: Long,
     val slot: Int,
     val returnOffset: Long,
-    val callerReturnFromFrame: Long,
-    val frame: Long,
+    val callerReturnFromStack: Long,
+    val eventFromEntry: Long,
     val defaults: Map<Long, Int>,
     val pump: ElfImage.Symbol,
     val pumpReturnOffset: Long,
 ) {
+    fun writeTo(site: FmLinuxPollHookConfig, header: EventHeader, protection: Int, bias: Long) {
+        require(protection == PROT_READ || protection == (PROT_READ or PROT_WRITE))
+        fun address(value: Long): ULong {
+            require(bias >= 0 && value > 0 && value <= Long.MAX_VALUE - bias)
+            return (value + bias).toULong()
+        }
+        site.entry = address(table + slot * 8L)
+        site.original = address(poll.address)
+        site.table = address(table)
+        site.caller = address(caller.address + returnOffset)
+        site.pumpCaller = address(pump.address + pumpReturnOffset)
+        site.stackReturn = callerReturnFromStack.toUInt()
+        val local = eventFromEntry + callerReturnFromStack
+        require(local in 0..callerReturnFromStack - header.extent)
+        site.eventFromStack = local.toUInt()
+        site.eventExtent = header.extent.toUInt()
+        site.protection = protection.toUInt()
+    }
+
     companion object {
         fun resolve(image: ElfImage, header: EventHeader): EventPollCall {
             val caller = image.symbol("_ZN13GlobalContext9nextEventEv")
@@ -30,44 +52,11 @@ internal data class EventPollCall(
             require(concrete.directBase(window, SysVObjectSize.resolve(image, "9SDLWindow"), 8) == 0L) {
                 "SDL window does not have a primary Window base"
             }
-            val complete = X64ControlFlow.resolve(image, caller)
-            val call = complete.instructions.first { it.operation == Operation.CALL }
-            val memory = call.destination as? Memory ?: error("First event-pump call is not virtual")
-            require(
-                !memory.relative && memory.index == null && memory.base != null && memory.width == 8 &&
-                        memory.displacement == poll.slot * 8L
-            )
-            require(complete.successors.filterKeys { it > call.offset }.values.flatten().none { it <= call.offset }) {
-                "Event-pump prefix is reentered after polling"
-            }
-            val flow = X64ControlFlow(complete.instructions.takeWhile { it.offset <= call.offset })
-            val locals = SysVLocalArgument(flow)
-            val frame = locals.argument(call.offset, 6, header.extent)
-            val frameBase = checkNotNull(locals.registers(call.offset)[5]) {
-                "Event-pump caller has no proven frame register"
-            }
-            require(frameBase in -16384..0)
-            val arguments = ConstructorValues(
-                flow, mapOf(
-                    call.offset to
-                            listOf(ConstructorValues.Borrow(6, header.extent))
-                )
-            )
-            val receiver = arguments.register(call.offset, 7)
-            val vtable = arguments.register(call.offset, memory.base) as? ConstructorValues.Load
-            require(receiver == ConstructorValues.Argument(6) && vtable?.base == receiver && vtable.member == 0L) {
-                "Event pump does not poll its original Window reference through its own table"
-            }
-            val defaults = LocalDefaults.before(
-                flow, call.offset, header.extent,
-                listOf(InlineArgumentFields.Field(header.type, 4), InlineArgumentFields.Field(header.time, 8))
-            )
-            require((header.time until header.time + 8).all { defaults[it] == 0 }) {
-                "Fresh event header does not have the native empty timestamp"
-            }
+            val proof = EventPollSite.analyze(image.functionBytes(caller, 8192), caller.address, poll.slot, header,
+                X64ControlFlow.resolve(image, caller))
             return EventPollCall(
                 caller, poll.function, table.addressPoint, poll.slot,
-                call.offset + call.size, -frameBase, frame, defaults, pump, pumpReturn
+                proof.returned, proof.callerReturnFromStack, proof.eventFromEntry, proof.defaults, pump, pumpReturn
             )
         }
     }

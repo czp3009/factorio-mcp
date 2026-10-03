@@ -12,7 +12,7 @@ internal data class ItaniumType(val addressPoint: Long, val typeInfo: Long) {
                 table.type == 1 && table.size in 24..65536 && table.size % 8 == 0L &&
                         type.type == 1 && type.size >= 16 && name.type == 1 && name.size in 2..4096
             )
-            val pointers = ElfPointers(image)
+            val pointers = image.pointers
             val header = pointers.words(table.address, 2)
             require(
                 header[0].scalar() == 0L && header[1].pointer() == type.address &&

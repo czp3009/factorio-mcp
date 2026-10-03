@@ -5,6 +5,7 @@ import com.hiczp.factorio.mcp.X64Instructions.*
 /** Selected native byte-copy paths without calls or source mutation. Does not establish destruction semantics. */
 internal object EventCopyCases {
     data class Proof(val bytes: Set<Long>, val path: List<Long>, val reads: Set<Long>)
+    data class Case(val required: Set<Long>, val initialized: Set<Long>)
     private data class Pointer(val register: Int, val offset: Long = 0)
     private data class Value(val bytes: List<Long?> = List(16) { null }, val pointer: Pointer? = null)
 
@@ -13,21 +14,42 @@ internal object EventCopyCases {
     }
 
     fun resolve(image: ElfImage, header: EventHeader, code: Long, kinds: Set<Long>): Map<Long, Proof> {
+        return resolve(image, header, scalarCases(header, code, kinds))
+    }
+
+    fun resolve(image: ElfImage, header: EventHeader, cases: Map<Long, Case>): Map<Long, Proof> {
         val function = image.symbol("_ZN5Event20emplaceConstructFromERKS_")
         val tables = X64JumpTables.resolve(image, function)
-        return analyze(X64ControlFlow.resolve(image, function), tables.single(), header, code, kinds)
+        return analyze(X64ControlFlow.resolve(image, function), tables.single(), header, cases)
     }
 
     fun analyze(
         flow: X64ControlFlow, table: X64JumpTables.Table, header: EventHeader, code: Long,
         kinds: Set<Long>
-    ): Map<Long, Proof> {
-        require(header.extent in 16..4096 && kinds.size == 2 && kinds.all { it in 0..0xffffffffL })
+    ): Map<Long, Proof> = analyze(flow, table, header, scalarCases(header, code, kinds))
+
+    private fun scalarCases(header: EventHeader, code: Long, kinds: Set<Long>): Map<Long, Case> {
+        require(header.extent in 16..4096 && kinds.size == 2)
         val required = listOf(header.type to 4, header.time to 8, code to 4).flatMap { (offset, width) ->
             require(offset >= 0 && offset <= header.extent - width)
             (offset until offset + width).toList()
         }.toSet()
-        return kinds.associateWith { kind ->
+        return kinds.associateWith { Case(required, (0L until header.extent).toSet()) }
+    }
+
+    fun analyze(
+        flow: X64ControlFlow, table: X64JumpTables.Table, header: EventHeader, cases: Map<Long, Case>
+    ): Map<Long, Proof> {
+        require(header.extent in 16..4096 && cases.size in 1..32 && cases.keys.all { it in 0..0xffffffffL })
+        val common = listOf(header.type to 4, header.time to 8).flatMap { (offset, width) ->
+            require(offset >= 0 && offset <= header.extent - width)
+            (offset until offset + width).toList()
+        }.toSet()
+        require(cases.values.all {
+            it.required.containsAll(common) && it.initialized.containsAll(it.required) &&
+                    it.initialized.all { byte -> byte in 0L until header.extent }
+        }) { "Event copy case has incomplete or unbounded initialization" }
+        return cases.mapValues { (kind, case) ->
             val registers = MutableList(32) { Value(pointer = Pointer(it)) }
             val saved = mutableMapOf<Long, Value>()
             val written = mutableMapOf<Long, Long?>()
@@ -55,6 +77,9 @@ internal object EventCopyCases {
                                 pointer.offset >= 0 && pointer.offset <= header.extent - operand.width
                     ) {
                         "Copy reads outside the original bounded source"
+                    }
+                    require((pointer.offset until pointer.offset + operand.width).all { it in case.initialized }) {
+                        "Copy reads uninitialized event bytes"
                     }
                     reads.addAll(pointer.offset until pointer.offset + operand.width)
                     Value(List(operand.width) { pointer.offset + it })
@@ -178,7 +203,9 @@ internal object EventCopyCases {
                             require(registers[register] == Value(pointer = Pointer(register))) {
                                 "Copy loses a preserved register"
                             }
-                        require(written.keys.containsAll(required) && written.all { (offset, value) -> value == offset }) {
+                        require(written.keys.containsAll(case.required) && written.all { (offset, value) ->
+                            value == offset && offset in case.initialized
+                        }) {
                             "Selected copy does not preserve the identified fields byte for byte"
                         }
                         break

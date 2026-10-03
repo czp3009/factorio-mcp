@@ -60,7 +60,7 @@ internal data class FrameContextMetadata(
                         }
                     }
                     val apiSlots = GlLoaderBinding.resolve(image, FrameApiBinding.names, backends.minOf { it.size })
-                    val words = ElfPointers(image)
+                    val words = image.pointers
                     for (type in listOf("23GraphicsInterfaceOpenGL", "9SDLWindow")) {
                         val identity = ItaniumType.resolve(image, type)
                         scalars[identity.addressPoint - 16] = 0

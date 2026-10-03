@@ -51,8 +51,8 @@ internal object MapStopField {
             val read = arguments.memory(instruction.offset, member) ?: return@mapNotNull null
             if (read.reference.argument != 7) return@mapNotNull null
             require(read.width == 1 && read.reference.offset in 0 until mapSize)
-            require(instruction.offset > call.offset && flow.predecessors[instruction.offset] == setOf(call.offset)) {
-                "Permanent stop increment is not immediately after the typed stop call"
+            require(flow.dominates(call.offset, instruction.offset)) {
+                "Permanent stop increment can bypass the typed stop call"
             }
             read.reference.offset
         }

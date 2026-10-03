@@ -37,12 +37,10 @@ internal data class GameSnapshot(
     val visibilityUnavailableReason: String? = null,
     val progressUnavailableReason: String? = null,
     val elementUnavailableReason: String? = null,
-    val spriteUnavailableReason: String? = null,
-    val sprites: List<WidgetSprite> = emptyList(),
+    val iconsUnavailableReason: String? = null,
     val qualityConditionUnavailableReason: String? = null,
     val switchUnavailableReason: String? = null,
     val chat: ChatSnapshot? = null,
-    val inputTransfer: InputTransferSnapshot? = null,
 )
 
 /** Native commands finish at a frontend safe point; cancellation is cooperative. */

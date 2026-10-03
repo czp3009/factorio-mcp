@@ -16,7 +16,7 @@ internal class ResidentChannel(
     private val shared = mapping.memory.reinterpret<FmLinuxShared>()
     private val mutex = Mutex()
 
-    data class Result(val code: Int, val frame: ULong)
+    data class Result(val code: Int, val frame: ULong, val state: String = "unknown", val paused: Boolean? = null)
 
     init {
         check(mapping.tryAcquireLease()) { "Another factorio-mcp attachment owns the resident" }
@@ -79,7 +79,15 @@ internal class ResidentChannel(
             check(process.alive()) { "Factorio exited during an admitted resident command" }
             when (state()) {
                 FM_LINUX_COMPLETE -> {
-                    val result = Result(shared.pointed.result, shared.pointed.resultFrame)
+                    val observation = shared.pointed.gameState
+                    val result = Result(shared.pointed.result, shared.pointed.resultFrame,
+                        when (observation.state) {
+                            1u -> "main_menu"
+                            2u -> "in_game"
+                            3u -> "loading"
+                            4u -> "paused"
+                            else -> "unknown"
+                        }, if (observation.paused < 0) null else observation.paused != 0)
                     fm_ipc_store(fm_linux_command_word(shared), FM_LINUX_IDLE)
                     return result
                 }

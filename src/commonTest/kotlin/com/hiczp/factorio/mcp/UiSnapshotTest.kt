@@ -1,9 +1,42 @@
 package com.hiczp.factorio.mcp
 
-import kotlinx.serialization.json.*
 import kotlin.test.*
+import kotlinx.serialization.json.*
 
 class UiSnapshotTest {
+    @Test
+    fun switchIdentifiersAgreeAcrossNativeEnumAndLuaNameSources() {
+        val snapshots =
+            listOf("Right", "right").map { name ->
+                GameSnapshot(
+                        "in_game",
+                        true,
+                        1,
+                        listOf(
+                            node(0)
+                                .copy(
+                                    properties =
+                                        WidgetProperties(switch = WidgetSwitch(41, name, false))
+                                )
+                        ),
+                    )
+                    .uiJson(false)
+            }
+        assertEquals(snapshots[0], snapshots[1])
+        val value =
+            snapshots[0]
+                .getValue("nodes")
+                .jsonArray
+                .single()
+                .jsonObject
+                .getValue("properties")
+                .jsonObject
+                .getValue("switch")
+                .jsonObject
+        assertEquals("right", value.getValue("state").jsonPrimitive.content)
+        assertEquals(41, value.getValue("state_value").jsonPrimitive.int)
+    }
+
     @Test
     fun switchesPreservePositionInsteadOfInventingBooleanOrLabelMeaning() {
         val snapshot =
@@ -40,20 +73,20 @@ class UiSnapshotTest {
     fun qualityConditionsKeepRawIndicesAndUnknownComparisons() {
         val value =
             GameSnapshot(
-                "in_game",
-                true,
-                1,
-                listOf(
-                    node(0)
-                        .copy(
-                            properties =
-                                WidgetProperties(
-                                    qualityCondition =
-                                        WidgetQualityCondition(0, 251, "unknown_251")
-                                )
-                        )
-                ),
-            )
+                    "in_game",
+                    true,
+                    1,
+                    listOf(
+                        node(0)
+                            .copy(
+                                properties =
+                                    WidgetProperties(
+                                        qualityCondition =
+                                            WidgetQualityCondition(0, 251, "unknown_251")
+                                    )
+                            )
+                    ),
+                )
                 .uiJson(false)
                 .getValue("nodes")
                 .jsonArray
@@ -71,23 +104,8 @@ class UiSnapshotTest {
     }
 
     @Test
-    fun spriteGraphsRemainRawBoundedAndScopedToSelectedWidgets() {
-        val sprite =
-            WidgetSprite(
-                "raw.png",
-                false,
-                false,
-                2,
-                3,
-                64,
-                32,
-                -0.5,
-                0.0,
-                0.0,
-                listOf(Double.NaN, 0.0, 1.0, 1.0),
-                0,
-                -2,
-            )
+    fun iconReferencesStayOpaqueAndSelectedWithoutRenderingMetadata() {
+        val normal = WidgetIcon(0)
         val snapshot =
             GameSnapshot(
                 "main_menu",
@@ -97,22 +115,17 @@ class UiSnapshotTest {
                     node(0)
                         .copy(
                             selected = true,
-                            properties = WidgetProperties(icons = WidgetIcons(0, 0, -1)),
+                            properties = WidgetProperties(icons = WidgetIcons(normal, normal, null)),
                         ),
-                    node(0).copy(properties = WidgetProperties(icons = WidgetIcons(1, -1, -1))),
+                    node(0)
+                        .copy(
+                            properties =
+                                WidgetProperties(icons = WidgetIcons(WidgetIcon(1), null, null))
+                        ),
                 ),
-                sprites = listOf(sprite, sprite.copy(filename = "unselected.png", next = -1)),
             )
         val result = snapshot.uiJson(false, true)
-        val resources = result.getValue("sprites").jsonArray
-        assertEquals(1, resources.size)
-        val value = resources.single().jsonObject
-        assertEquals(-0.5, value.getValue("scale").jsonPrimitive.double)
-        assertEquals(0, value.getValue("next").jsonPrimitive.int)
-        assertEquals(JsonNull, value["extra"])
-        assertTrue(value.getValue("extra_truncated").jsonPrimitive.boolean)
-        assertEquals(JsonNull, value.getValue("tint").jsonObject["r"])
-        assertTrue(value.getValue("tint").jsonObject.getValue("r_non_finite").jsonPrimitive.boolean)
+        assertFalse("sprites" in result)
         val icons =
             result
                 .getValue("nodes")
@@ -125,17 +138,61 @@ class UiSnapshotTest {
                 .jsonObject
         assertEquals(icons["normal"], icons["hovered"])
         assertEquals(JsonNull, icons["disabled"])
+        val value = icons.getValue("normal").jsonObject
+        assertEquals(0, value.getValue("reference").jsonPrimitive.int)
+        assertEquals("snapshot", value.getValue("identity_scope").jsonPrimitive.content)
+        assertEquals(setOf("reference", "identity_scope"), value.keys)
+    }
+
+    @Test
+    fun absentAndBoundedIconsRemainDistinct() {
+        assertNull(widgetIconReference(-1))
+        assertEquals(WidgetIcon(null, truncated = true), widgetIconReference(-2))
+        assertEquals(WidgetIcon(511), widgetIconReference(511))
+        assertFails { widgetIconReference(-3) }
+        assertFails { widgetIconReference(512) }
+        val result =
+            GameSnapshot(
+                    "main_menu",
+                    true,
+                    1,
+                    listOf(
+                        node(0)
+                            .copy(
+                                properties =
+                                    WidgetProperties(
+                                        icons = WidgetIcons(widgetIconReference(-2), null, null)
+                                    )
+                            )
+                    ),
+                )
+                .uiJson(false)
+        val value =
+            result
+                .getValue("nodes")
+                .jsonArray
+                .single()
+                .jsonObject
+                .getValue("properties")
+                .jsonObject
+                .getValue("icons")
+                .jsonObject
+                .getValue("normal")
+                .jsonObject
+        assertEquals(JsonNull, value["reference"])
+        assertEquals(JsonPrimitive(true), value["truncated"])
+        assertFalse("name" in value)
     }
 
     @Test
     fun elementsDoNotInventMissingItemStateOrClampRawValues() {
         fun observe(element: WidgetElement) =
             GameSnapshot(
-                "in_game",
-                true,
-                1,
-                listOf(node(0).copy(properties = WidgetProperties(element = element))),
-            )
+                    "in_game",
+                    true,
+                    1,
+                    listOf(node(0).copy(properties = WidgetProperties(element = element))),
+                )
                 .uiJson(false)["nodes"]!!
                 .jsonArray
                 .single()
@@ -196,6 +253,38 @@ class UiSnapshotTest {
                 .jsonObject["name"],
         )
         assertNull(nodes[2].jsonObject["properties"])
+    }
+
+    @Test
+    fun progressIdentifiersMatchPdbAndLuaSpelling() {
+        for (name in listOf("Horizontal", "horizontal")) {
+            val snapshot =
+                GameSnapshot(
+                    "unknown",
+                    true,
+                    1,
+                    listOf(
+                        node(0)
+                            .copy(
+                                properties =
+                                    WidgetProperties(progress = WidgetProgress(0.375, name, false))
+                            )
+                    ),
+                )
+            val progress =
+                snapshot
+                    .uiJson(false)
+                    .getValue("nodes")
+                    .jsonArray
+                    .single()
+                    .jsonObject
+                    .getValue("properties")
+                    .jsonObject
+                    .getValue("progress")
+                    .jsonObject
+            assertEquals("horizontal", progress.getValue("direction").jsonPrimitive.content)
+            assertEquals(0.375, progress.getValue("value").jsonPrimitive.double)
+        }
     }
 
     @Test
@@ -360,7 +449,7 @@ class UiSnapshotTest {
                         .copy(
                             properties =
                                 WidgetProperties(
-                                    "intermediate",
+                                    -7,
                                     false,
                                     -1,
                                     SliderProperties(12.5, 0.0, 100.0, Double.NaN),
@@ -375,7 +464,7 @@ class UiSnapshotTest {
                 .single()
                 .jsonObject["properties"]!!
                 .jsonObject
-        assertEquals("intermediate", properties["check_state"]!!.jsonPrimitive.content)
+        assertEquals(-7, properties["check_state"]!!.jsonPrimitive.int)
         assertEquals(false, properties["toggled"]!!.jsonPrimitive.boolean)
         assertEquals(JsonNull, properties["selected_index"])
         assertEquals(0, properties["index_base"]!!.jsonPrimitive.int)
@@ -387,11 +476,11 @@ class UiSnapshotTest {
     fun nestedWindowsAndSiblingParents() {
         val result =
             GameSnapshot(
-                "main_menu",
-                true,
-                7,
-                listOf(node(2, "Load"), node(1), node(2, "Cancel"), node(1), node(0)),
-            )
+                    "main_menu",
+                    true,
+                    7,
+                    listOf(node(2, "Load"), node(1), node(2, "Cancel"), node(1), node(0)),
+                )
                 .uiJson(false)
         val nodes = result.getValue("nodes").jsonArray
         assertEquals(1, nodes[0].jsonObject.getValue("parent").jsonPrimitive.int)
@@ -441,12 +530,12 @@ class UiSnapshotTest {
         )
         val unavailable =
             GameSnapshot(
-                "main_menu",
-                true,
-                1,
-                listOf(node(0)),
-                visibilityUnavailableReason = "Missing metadata",
-            )
+                    "main_menu",
+                    true,
+                    1,
+                    listOf(node(0)),
+                    visibilityUnavailableReason = "Missing metadata",
+                )
                 .uiJson(false)
         assertNull(unavailable["visibility_basis"])
         assertNull(unavailable["nodes"]!!.jsonArray[0].jsonObject["visible"])

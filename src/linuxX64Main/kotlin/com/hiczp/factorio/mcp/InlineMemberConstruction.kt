@@ -10,7 +10,7 @@ internal object InlineMemberConstruction {
     fun resolve(
         image: ElfImage, function: ElfImage.Symbol, owner: String, constructor: String,
         dispatch: ElfImage.Symbol, ownerSize: Long, argument: Int,
-        debug: DwarfInlines = DwarfInlines(image)
+        debug: DwarfInlines = image.inlines
     ): Proof {
         EhFrames(image).function(dispatch)
         val flow = X64ControlFlow.resolve(image, function)
