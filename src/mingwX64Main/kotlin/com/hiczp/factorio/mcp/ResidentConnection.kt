@@ -481,9 +481,7 @@ internal class ResidentConnection(private val pid: UInt) {
                         node.selected != 0,
                         node.truncated and 2 != 0,
                         WidgetProperties(
-                                if (node.properties and 1u != 0u)
-                                    node.checkState
-                                else null,
+                                if (node.properties and 1u != 0u) node.checkState else null,
                                 if (node.properties and 2u != 0u) node.toggled != 0 else null,
                                 if (node.properties and 4u != 0u) node.selectedIndex else null,
                                 if (node.properties and 8u != 0u)
@@ -724,7 +722,18 @@ internal class ResidentConnection(private val pid: UInt) {
 
     suspend fun beginInput(request: InputSequenceRequest): GameInputTask {
         symbols.timedInput.getOrThrow()
-        val pending = NativeInputTask(pid, request, symbols.input.getOrThrow()::keys, ::alive)
+        if (
+            request.timeline.any { (it.control as? InputControl.Pointer)?.path?.space == "world" }
+        ) {
+            symbols.viewport.getOrThrow()
+        }
+        val pending =
+            NativeInputTask(
+                pid,
+                request,
+                { names -> names.map { symbols.input.getOrThrow().keys(listOf(it)).single() } },
+                ::alive,
+            )
         val task = inputTasks.retain(pending)
         try {
             execute(9, 4096, null, inputName = pending.name)

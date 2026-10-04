@@ -17,30 +17,14 @@ struct Lease {
     }
 };
 
-std::vector<InputStep> steps(const FmLinuxInputTask &wire) {
-    if (wire.count > FM_LINUX_INPUT_STEPS || wire.stopPrevious > 1 || wire.reserved || fm_linux_input_state(&wire) ||
+std::vector<InputEntry> entries(const FmLinuxInputTask &wire) {
+    if (wire.count > FM_INPUT_ENTRIES || wire.stopPrevious > 1 || wire.reserved || fm_linux_input_state(&wire) ||
         fm_linux_input_completed(&wire) || fm_linux_input_ticks(&wire))
         throw std::invalid_argument("Invalid input admission state");
-    std::vector<InputStep> result;
-    result.reserve(wire.count);
-    for (uint32_t i = 0; i < wire.count; ++i) {
-        const auto &row = wire.operations[i];
-        if (row.count > FM_LINUX_INPUT_BUTTONS || row.motionCount > FM_LINUX_INPUT_MOTION || row.hasPosition > 1)
-            throw std::invalid_argument("Invalid input operation bounds");
-        InputStep step{row.ticks, {}, {}, row.wheel, {}};
-        if (row.hasPosition)
-            step.position = InputPosition{row.x, row.y};
-        for (uint32_t button = 0; button < row.count; ++button) {
-            const auto &value = row.buttons[button];
-            if (value.device == static_cast<uint32_t>(InputDevice::Mouse) && (value.code < 1 || value.code > 5))
-                throw std::invalid_argument("Invalid logical mouse button");
-            step.buttons.push_back({static_cast<InputDevice>(value.device), value.code});
-        }
-        for (uint32_t point = 0; point < row.motionCount; ++point)
-            step.motion.push_back({row.motion[point].tick, {row.motion[point].x, row.motion[point].y}});
-        result.push_back(std::move(step));
-    }
-    InputSequence::validate(result);
+    auto result = InputSequence::decode(wire.entries, wire.count);
+    for (const auto &entry : result)
+        if (entry.kind == InputKind::MouseButton && (entry.code < 1 || entry.code > 5))
+            throw std::invalid_argument("Invalid logical mouse button");
     return result;
 }
 } // namespace
@@ -66,7 +50,7 @@ int InputTaskSession::start(const FmLinuxInputContextConfig &config, pid_t owner
     try {
         if (!error) {
             auto *wire = task_->mapping.task();
-            task_->sequence.emplace(steps(*wire));
+            task_->sequence.emplace(entries(*wire));
             if (fm_ipc_load(&wire->cancel))
                 error = ECANCELED;
             if (!error && task_->sequence->state() == InputSequenceState::Succeeded) {
@@ -107,6 +91,12 @@ int InputTaskSession::validateContext() {
     return current.paused || current.stopped ? EAGAIN : 0;
 }
 
+int InputTaskSession::readContext(InputContext &output) {
+    if (!task_ || !task_->admitted || task_->finalized)
+        return EINVAL;
+    return task_->context.read(output);
+}
+
 void InputTaskSession::observeCancellation() {
     if (!task_ || !task_->admitted || task_->finalized)
         return;
@@ -123,7 +113,7 @@ void InputTaskSession::publish() {
     if (!wire)
         return;
     const auto &sequence = *task_->sequence;
-    fm_ipc_store(&wire->completedOperations, static_cast<uint32_t>(sequence.completed()));
+    fm_ipc_store(&wire->completedEntries, static_cast<uint32_t>(sequence.completed()));
     fm_ipc_store64(&wire->evaluatedTicks, sequence.ticks());
     if (task_->evaluation->finished()) {
         const auto &reason = sequence.reason();

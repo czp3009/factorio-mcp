@@ -4,6 +4,7 @@
 #include <dbghelp.h>
 #include <stdint.h>
 #include <tlhelp32.h>
+#include "../../nativeMain/native/input_timeline_wire.h"
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -11,9 +12,6 @@ extern "C" {
 #define FM_MAX_OPTIONS 1024
 #define FM_MAX_ICON_REFERENCES 512
 #define FM_MAX_WIDGET_OPTIONS 64
-#define FM_MAX_INPUT_STEPS 256
-#define FM_MAX_INPUT_BUTTONS 8
-#define FM_MAX_INPUT_MOTION 64
 #define FM_INPUT_NAME_SIZE 128
 #define FM_MAX_LUA_SOURCE 131072
 #define FM_MAX_QUERY_ARGUMENTS 262144
@@ -293,29 +291,13 @@ typedef struct FmWorldQuery {
     char source[FM_MAX_LUA_SOURCE], arguments[FM_MAX_QUERY_ARGUMENTS];
 } FmWorldQuery;
 
-typedef struct FmInputButton {
-    uint32_t device, code;
-} FmInputButton;
-
-typedef struct FmInputOperation {
-    uint32_t ticks, count, hasPosition;
-    int32_t x, y, wheel;
-    FmInputButton buttons[FM_MAX_INPUT_BUTTONS];
-    uint32_t motionCount;
-
-    struct {
-        uint32_t tick;
-        int32_t x, y;
-    } motion[FM_MAX_INPUT_MOTION];
-} FmInputOperation;
-
 // A task owns its own mapping, so replacement cannot overwrite another caller's terminal result.
 typedef struct FmInputTask {
     uint32_t stopPrevious, count, ownerPid;
-    volatile LONG state, cancel, completedOperations;
+    volatile LONG state, cancel, completedEntries;
     volatile LONG64 evaluatedTicks;
     char reason[512];
-    FmInputOperation operations[FM_MAX_INPUT_STEPS];
+    FmInputTimelineEntry entries[FM_INPUT_ENTRIES];
 } FmInputTask;
 
 typedef struct ChatLayout {
@@ -385,7 +367,7 @@ static inline void fm_input_cancel(FmInputTask *task) {
 }
 
 static inline LONG fm_input_completed(FmInputTask *task) {
-    return InterlockedCompareExchange(&task->completedOperations, 0, 0);
+    return InterlockedCompareExchange(&task->completedEntries, 0, 0);
 }
 
 static inline LONG64 fm_input_ticks(FmInputTask *task) {

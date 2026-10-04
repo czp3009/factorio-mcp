@@ -1,5 +1,6 @@
 #pragma once
 #include "bridge.h"
+#include "../../nativeMain/native/input_sequence.h"
 
 struct ViewportSnapshot {
     uint32_t surface{};
@@ -8,3 +9,4 @@ struct ViewportSnapshot {
 };
 
 ViewportSnapshot readViewport(const Symbols &symbols, void *player);
+InputPosition projectWorldInput(const Symbols &symbols, void *player, InputPoint point);

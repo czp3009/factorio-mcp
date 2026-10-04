@@ -26,6 +26,7 @@ class InputTaskSession {
     void aborted(uintptr_t receiver, uint64_t cookie);
     // Called only synchronously by this task's emitter while the session owns its execution gate.
     int validateContext();
+    int readContext(InputContext &output);
 
   private:
     struct Task {

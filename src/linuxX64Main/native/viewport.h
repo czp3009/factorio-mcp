@@ -22,7 +22,10 @@ typedef struct FmLinuxViewportLayout {
 } FmLinuxViewportLayout;
 
 #ifdef __cplusplus
+#include "../../nativeMain/native/input_sequence.h"
 // All references are reacquired in the same verified frontend safe point as the world query.
 int readViewport(uintptr_t game, uintptr_t player, const FmLinuxPlayerLayout &selection,
                  const FmLinuxViewportLayout &layout, const uint32_t *cancel, QueryViewport &output);
+int projectWorldInput(uintptr_t game, uintptr_t player, const FmLinuxPlayerLayout &selection,
+                      const FmLinuxViewportLayout &layout, InputPoint point, InputPosition &output);
 #endif

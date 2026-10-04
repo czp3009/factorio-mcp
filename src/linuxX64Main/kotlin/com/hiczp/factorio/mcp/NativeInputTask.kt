@@ -20,55 +20,57 @@ internal class NativeInputTask(
     private fun task(): CPointer<FmLinuxInputTask> =
         checkNotNull(mapping) { "Input task is closed" }.memory.reinterpret()
 
-    private val lifecycle = InputTaskLifecycle(
-        progress = {
-            val task = task()
-            val state = fm_linux_input_state(task).toInt()
-            val reason = if (state >= 2) {
-                val bytes = task.pointed.reason.readBytes(512)
-                val length = bytes.indexOf(0).let { if (it < 0) bytes.size else it }
-                bytes.decodeToString(endIndex = length).takeIf { it.isNotEmpty() }
-            } else null
-            InputTaskProgress(state, fm_linux_input_completed(task).toInt(),
-                fm_linux_input_ticks(task).toLong(), reason)
-        },
-        alive = alive,
-        cancel = { fm_linux_input_cancel(task()) },
-        release = { dispose() },
-    )
+    private val lifecycle =
+        InputTaskLifecycle(
+            progress = {
+                val task = task()
+                val state = fm_linux_input_state(task).toInt()
+                val reason =
+                    if (state >= 2) {
+                        val bytes = task.pointed.reason.readBytes(512)
+                        val length = bytes.indexOf(0).let { if (it < 0) bytes.size else it }
+                        bytes.decodeToString(endIndex = length).takeIf { it.isNotEmpty() }
+                    } else null
+                InputTaskProgress(
+                    state,
+                    fm_linux_input_completed(task).toInt(),
+                    fm_linux_input_ticks(task).toLong(),
+                    reason,
+                )
+            },
+            alive = alive,
+            cancel = { fm_linux_input_cancel(task()) },
+            release = { dispose() },
+        )
 
     init {
         require(pid > 0)
-        val operations = resolveInputTaskOperations(request, keys)
-        require(operations.size <= FM_LINUX_INPUT_STEPS)
+        val entries = resolveInputTaskEntries(request, keys)
+        require(entries.size <= MAX_INPUT_ENTRIES)
         try {
             mapping = SharedMapping.create(sizeOf<FmLinuxInputTask>())
             val wire = task().pointed
             wire.ownerPid = getpid().toUInt()
             wire.targetPid = pid.toUInt()
             wire.stopPrevious = if (request.stopPrevious) 1u else 0u
-            wire.count = operations.size.toUInt()
-            operations.forEachIndexed { index, operation ->
-                val row = wire.operations[index]
-                row.ticks = operation.ticks
-                row.wheel = operation.wheel
-                operation.position?.let {
-                    row.hasPosition = 1u
-                    row.x = it.x
-                    row.y = it.y
+            wire.count = entries.size.toUInt()
+            entries.forEachIndexed { index, entry ->
+                val row = wire.entries[index]
+                row.kind = entry.kind
+                row.code = entry.code
+                row.perPointTicks = entry.perPointTicks
+                row.intervalCount = entry.intervals.size.toUInt()
+                entry.intervals.forEachIndexed { intervalIndex, interval ->
+                    row.intervals[intervalIndex].first = interval.first.toUInt()
+                    row.intervals[intervalIndex].last = interval.last.toUInt()
                 }
-                require(operation.motion.size <= FM_LINUX_INPUT_MOTION)
-                row.motionCount = operation.motion.size.toUInt()
-                operation.motion.forEachIndexed { pointIndex, point ->
-                    row.motion[pointIndex].tick = point.tick.toUInt()
-                    row.motion[pointIndex].x = point.position.x
-                    row.motion[pointIndex].y = point.position.y
-                }
-                require(operation.buttons.size <= FM_LINUX_INPUT_BUTTONS)
-                row.count = operation.buttons.size.toUInt()
-                operation.buttons.forEachIndexed { buttonIndex, button ->
-                    row.buttons[buttonIndex].device = button.device
-                    row.buttons[buttonIndex].code = button.code
+                entry.path?.let {
+                    row.space = if (it.space == "world") 1u else 0u
+                    row.tileCenters = if (it.tileCenters) 1u else 0u
+                    row.fromX = it.from.x
+                    row.fromY = it.from.y
+                    row.toX = it.to.x
+                    row.toY = it.to.y
                 }
             }
         } catch (failure: Throwable) {

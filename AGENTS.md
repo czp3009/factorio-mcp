@@ -136,6 +136,9 @@
   Preserve chat-specific text, rich-text markers, links and game-generated formatting unchanged as well; do not
   interpret, expand, normalize or recreate them. Encoding and explicit bounded truncation still apply.
 - Input execution supports keyboard and mouse only on every platform; do not implement controller/gamepad input.
+  Use independent concurrent timeline entries with inclusive relative tick intervals and closed input ownership.
+  Preserve overlapping entries; same-button holds share ownership until the final active holder ends. World positions
+  retain exact coordinates unless explicit tile-center snapping is requested; project them using the current view.
   Release the buttons pressed by MCP, including after cancellation or dispatch failure. Preserving keys already held
   by the user is outside this contract; do not add prerequisite user-input ownership detection.
   Keep `input_bindings` focused on keyboard/mouse slots. Controller-binding observation is not required and must

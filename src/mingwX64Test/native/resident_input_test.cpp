@@ -175,11 +175,17 @@ struct Mapping {
         CloseHandle(mapping);
     }
 
+    uint32_t cursor{};
+
     void step(unsigned ticks, std::initializer_list<uint32_t> keys) {
-        auto &row = wire->operations[wire->count++];
-        row.ticks = ticks;
-        for (auto key : keys)
-            row.buttons[row.count++] = {0, key};
+        for (auto key : keys) {
+            auto &row = wire->entries[wire->count++];
+            row.kind = 0;
+            row.code = key;
+            row.intervalCount = 1;
+            row.intervals[0] = {cursor, cursor + ticks - 1};
+        }
+        cursor += ticks;
     }
 
     void admit(ResidentInput &target, const Symbols &api) {
@@ -231,24 +237,26 @@ void motionWireRunsWhileHeldAndRejectsInvalidReplacement() {
     const auto api = symbols();
     Mapping task;
     task.step(4, {10});
-    auto &row = task.wire->operations[0];
-    row.motionCount = 2;
-    row.motion[0] = {2, 32, 48};
-    row.motion[1] = {4, 64, 96};
+    auto &row = task.wire->entries[task.wire->count++];
+    row.kind = 3;
+    row.intervalCount = 1;
+    row.intervals[0] = {0, 3};
+    row.toX = 64;
+    row.toY = 96;
     task.admit(target, api);
     runTick(target, api);
     Mapping invalid;
     invalid.step(4, {20});
     invalid.wire->stopPrevious = 1;
-    invalid.wire->operations[0].motionCount = FM_MAX_INPUT_MOTION + 1;
+    invalid.wire->entries[0].intervalCount = FM_INPUT_INTERVALS + 1;
     rejected([&] { invalid.admit(target, api); });
     assert(state.held.contains(10) && fm_input_state(task.wire) == 1);
     runTick(target, api);
-    assert(state.x == 32 && state.y == 48 && state.held.contains(10));
+    assert(state.x == 21 && state.y == 32 && state.held.contains(10));
     runTick(target, api);
-    assert(state.x == 32 && state.y == 48 && state.held.contains(10));
+    assert(state.x == 43 && state.y == 64 && state.held.contains(10));
     runTick(target, api);
-    assert(state.x == 64 && state.y == 96 && state.held.contains(10));
+    assert(state.x == 64 && state.y == 96 && state.held.empty());
     runTick(target, api);
     assert(state.held.empty() && fm_input_state(task.wire) == 2 && fm_input_ticks(task.wire) == 4);
 }
@@ -265,10 +273,10 @@ void replacementValidatesBeforeCancellation() {
     rejected([&] { second.admit(target, api); });
     assert(fm_input_state(first.wire) == 1 && state.held.contains(10));
     second.wire->stopPrevious = 1;
-    second.wire->operations[0].ticks = 0;
+    second.wire->entries[0].intervalCount = 0;
     rejected([&] { second.admit(target, api); });
     assert(fm_input_state(first.wire) == 1 && state.held.contains(10));
-    second.wire->operations[0].ticks = 1;
+    second.wire->entries[0].intervalCount = 1;
     second.admit(target, api);
     assert(fm_input_state(first.wire) == 3 && fm_input_ticks(first.wire) == 1 && state.held.empty());
     runTick(target, api);
@@ -322,12 +330,17 @@ void mouseAndStopOnly() {
     const auto api = symbols();
     Mapping mouse;
     mouse.step(1000, {});
-    auto &row = mouse.wire->operations[0];
-    row.count = 1;
-    row.buttons[0] = {1, 1};
-    row.hasPosition = 1;
-    row.x = 41;
-    row.y = 52;
+    auto &position = mouse.wire->entries[mouse.wire->count++];
+    position.kind = 2;
+    position.intervalCount = 1;
+    position.intervals[0] = {0, 999};
+    position.fromX = position.toX = 41;
+    position.fromY = position.toY = 52;
+    auto &row = mouse.wire->entries[mouse.wire->count++];
+    row.kind = 1;
+    row.code = 1;
+    row.intervalCount = 1;
+    row.intervals[0] = {0, 999};
     mouse.admit(target, api);
     runTick(target, api);
     assert(state.x == 41 && state.y == 52 && state.held.contains(mouseLeft));

@@ -12,7 +12,9 @@ bool mainThread() {
 struct Lease {
     std::atomic_flag &gate;
     bool retained = false;
+
     explicit Lease(std::atomic_flag &value) : gate(value) {}
+
     ~Lease() {
         if (!retained)
             gate.clear(std::memory_order_release);
@@ -34,7 +36,7 @@ bool InputEvaluation::finished() const {
     Lease guard(busy_);
     const auto state = sequence_.state();
     return !pending() && !sequence_.hasHeldInput() &&
-        (state == InputSequenceState::Succeeded || state == InputSequenceState::Aborted);
+           (state == InputSequenceState::Succeeded || state == InputSequenceState::Aborted);
 }
 
 void InputEvaluation::observeCancellation() {
@@ -69,8 +71,8 @@ uint64_t InputEvaluation::before(uintptr_t receiver, uintptr_t caller) {
     sequence_.beforeTick(current.tick, emitter_);
     // Dispatch and even cleanup callbacks can unload or replace the receiver. Never invoke the saved receiver
     // after such a change. A failure before dispatch above instead forwards the game's unchanged call.
-    if (context_.read(current) || current.source != receiver || current.tick != pending_.tick ||
-        current.paused || current.stopped) {
+    if (context_.read(current) || current.source != receiver || current.tick != pending_.tick || current.paused ||
+        current.stopped) {
         pending_ = {};
         sequence_.cancel("Input context changed during preparation");
         return 1;
@@ -92,12 +94,12 @@ void InputEvaluation::after(uintptr_t receiver, uint64_t cookie) {
     const auto tick = pending_.tick;
     pending_ = {};
     InputContext current;
-    if (context_.read(current) || current.source != receiver || current.tick != tick ||
-        current.paused || current.stopped) {
+    if (context_.read(current) || current.source != receiver || current.tick != tick || current.paused ||
+        current.stopped) {
         sequence_.cancel("Input context changed during native evaluation");
         return;
     }
-    sequence_.afterTick(tick);
+    sequence_.afterTick(tick, emitter_);
     // Account for the evaluation that actually returned before honoring a request made during that call.
     observeCancellation();
 }

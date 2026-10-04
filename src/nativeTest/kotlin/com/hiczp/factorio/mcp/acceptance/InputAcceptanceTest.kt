@@ -37,30 +37,23 @@ class InputAcceptanceTest {
                 .map { Json.parseToJsonElement(it.substringAfter(marker)).jsonObject }
                 .toList()
 
-        fun operations(vararg steps: Pair<Long, List<String>>, stop: Boolean = false) =
+        fun timeline(vararg steps: Pair<Long, List<String>>, stop: Boolean = false) =
             buildJsonObject {
                 put("stop_previous", stop)
-                putJsonArray("operations") {
+                putJsonArray("timeline") {
+                    var tick = 0L
                     steps.forEach { (ticks, keys) ->
-                        add(
-                            buildJsonObject {
-                                put("ticks", ticks)
-                                putJsonArray("controls") {
-                                    keys.forEach { key ->
-                                        add(
-                                            buildJsonObject {
-                                                put("device", "keyboard")
-                                                put("key", key)
-                                            }
-                                        )
-                                    }
-                                }
+                        keys.forEach { key ->
+                            addJsonObject {
+                                put("device", "keyboard")
+                                put("key", key)
+                                put("tick", "$tick-${tick + ticks - 1}")
                             }
-                        )
+                        }
+                        tick += ticks
                     }
                 }
             }
-
         val client = McpHttpClient(url)
         val other = McpHttpClient(url)
         withTimeout(600_000) {
@@ -181,8 +174,9 @@ class InputAcceptanceTest {
                         client
                             .tool(
                                 "input",
-                                operations(
-                                    // Give slow rendering time to observe each hold; only local progress has exact tick counts.
+                                timeline(
+                                    // Give slow rendering time to observe each hold; only local
+                                    // progress has exact tick counts.
                                     64L to listOf(up),
                                     96L to listOf(right),
                                     32L to emptyList(),
@@ -193,7 +187,7 @@ class InputAcceptanceTest {
                             .toolValue()
                     assertEquals("completed", result["status"]!!.jsonPrimitive.content)
                     assertEquals(320L, result["evaluated_ticks"]!!.jsonPrimitive.long)
-                    assertEquals(5, result["completed_operations"]!!.jsonPrimitive.int)
+                    assertEquals(5, result["completed_entries"]!!.jsonPrimitive.int)
                     val observed =
                         waitForWalking(
                             start,
@@ -210,7 +204,7 @@ class InputAcceptanceTest {
                 click("MCP speed 1")
                 val baseline = records(serverLog).size
                 val hold = async {
-                    client.tool("input", operations(100_000L to listOf(up))).toolValue()
+                    client.tool("input", timeline(100_000L to listOf(up))).toolValue()
                 }
                 waitForWalking(baseline, true)
                 assertFalse(hold.isCompleted)
@@ -223,26 +217,26 @@ class InputAcceptanceTest {
                     .toolValue()
                 assertTrue(
                     other
-                        .tool("input", operations(1L to listOf(right)))["isError"]!!
+                        .tool("input", timeline(1L to listOf(right)))["isError"]!!
                         .jsonPrimitive
                         .boolean
                 )
                 assertTrue(
-                    other.tool("input", operations())["isError"]!!.jsonPrimitive.boolean,
+                    other.tool("input", timeline())["isError"]!!.jsonPrimitive.boolean,
                     "An empty request without replacement must preserve the active task",
                 )
                 assertTrue(
                     other
                         .tool(
                             "input",
-                            operations(1L to listOf("UNKNOWN_INPUT_TEST_KEY"), stop = true),
+                            timeline(1L to listOf("UNKNOWN_INPUT_TEST_KEY"), stop = true),
                         )["isError"]!!
                         .jsonPrimitive
                         .boolean
                 )
                 assertFalse(hold.isCompleted)
                 val replace =
-                    other.tool("input", operations(2L to listOf(right), stop = true)).toolValue()
+                    other.tool("input", timeline(2L to listOf(right), stop = true)).toolValue()
                 assertEquals("completed", replace["status"]!!.jsonPrimitive.content)
                 assertEquals("aborted", hold.await()["status"]!!.jsonPrimitive.content)
                 waitForWalking(baseline, false)
@@ -250,11 +244,7 @@ class InputAcceptanceTest {
                 val cancelStart = records(serverLog).size
                 val cancel = async {
                     runCatching {
-                        client.tool(
-                            "input",
-                            operations(100_000L to listOf(up)),
-                            requestId = 100_000,
-                        )
+                        client.tool("input", timeline(100_000L to listOf(up)), requestId = 100_000)
                     }
                 }
                 waitForWalking(cancelStart, true)
@@ -270,11 +260,11 @@ class InputAcceptanceTest {
                 // SDK cancellation may abort the HTTP response; release and later calls are
                 // authoritative.
                 cancel.cancelAndJoin()
-                other.tool("input", operations()).toolValue()
+                other.tool("input", timeline()).toolValue()
 
                 val detachStart = records(serverLog).size
                 val pending = async {
-                    client.tool("input", operations(100_000L to listOf(up))).toolValue()
+                    client.tool("input", timeline(100_000L to listOf(up))).toolValue()
                 }
                 waitForWalking(detachStart, true)
                 other.tool("detach").toolValue()
@@ -314,27 +304,16 @@ class InputAcceptanceTest {
                     .tool(
                         "input",
                         buildJsonObject {
-                            putJsonArray("operations") {
-                                // Let frontend hover processing observe the new pointer before the
-                                // click. A completed same-tick move/click need not activate the UI.
-                                add(buildJsonObject {
-                                    put("ticks", 32)
-                                    putJsonArray("controls") { add(pointer) }
-                                })
-                                add(
-                                    buildJsonObject {
-                                        putJsonArray("controls") {
-                                            add(
-                                                buildJsonObject {
-                                                    pointer.forEach { (name, value) ->
-                                                        put(name, value)
-                                                    }
-                                                    put("button", "left")
-                                                }
-                                            )
-                                        }
-                                    }
-                                )
+                            putJsonArray("timeline") {
+                                addJsonObject {
+                                    pointer.forEach { (name, value) -> put(name, value) }
+                                    put("tick", "0-32")
+                                }
+                                addJsonObject {
+                                    put("device", "mouse")
+                                    put("button", "left")
+                                    put("tick", "32")
+                                }
                             }
                         },
                     )
@@ -397,60 +376,20 @@ class InputAcceptanceTest {
                         .jsonObject
                         .getValue("position")
                         .jsonObject
-                val view = other.tool("world_overview").toolValue().getValue("viewport").jsonObject
-                val area = view.getValue("area").jsonObject
-                val first = area.getValue("left_top").jsonObject
-                val last = area.getValue("right_bottom").jsonObject
-                fun pixel(axis: String, coordinate: Double, dimension: String): Int {
-                    val low = first.getValue(axis).jsonPrimitive.double
-                    val high = last.getValue(axis).jsonPrimitive.double
-                    assertTrue(coordinate in low..high)
-                    return ((coordinate - low) / (high - low) *
-                            view.getValue(dimension).jsonPrimitive.int)
-                        .toInt()
-                }
                 other
                     .tool(
                         "input",
                         buildJsonObject {
-                            putJsonArray("operations") {
-                                add(
-                                    buildJsonObject {
-                                        put("ticks", 32)
-                                        putJsonArray("controls") {
-                                            add(
-                                                buildJsonObject {
-                                                    put("device", "mouse")
-                                                    putJsonObject("position") {
-                                                        put("space", "viewport")
-                                                        put(
-                                                            "x",
-                                                            pixel(
-                                                                "x",
-                                                                targetPosition
-                                                                    .getValue("x")
-                                                                    .jsonPrimitive
-                                                                    .double,
-                                                                "width",
-                                                            ),
-                                                        )
-                                                        put(
-                                                            "y",
-                                                            pixel(
-                                                                "y",
-                                                                targetPosition
-                                                                    .getValue("y")
-                                                                    .jsonPrimitive
-                                                                    .double,
-                                                                "height",
-                                                            ),
-                                                        )
-                                                    }
-                                                }
-                                            )
-                                        }
+                            putJsonArray("timeline") {
+                                addJsonObject {
+                                    put("device", "mouse")
+                                    putJsonObject("position") {
+                                        put("space", "world")
+                                        put("x", targetPosition.getValue("x"))
+                                        put("y", targetPosition.getValue("y"))
                                     }
-                                )
+                                    put("tick", "0-31")
+                                }
                             }
                         },
                     )
@@ -486,12 +425,17 @@ class InputAcceptanceTest {
                 assertFalse(read(serverLog).contains("desynchron", true))
             } finally {
                 withContext(NonCancellable) {
-                    runCatching { other.tool("input", operations(stop = true)) }
+                    runCatching { other.tool("input", timeline(stop = true)) }
                     runCatching {
-                        other.tool("ui_action", buildJsonObject {
-                            put("action", "click")
-                            put("selector", uiSelector("MCP speed 1", "agui::TextButton"))
-                        }).toolValue()
+                        other
+                            .tool(
+                                "ui_action",
+                                buildJsonObject {
+                                    put("action", "click")
+                                    put("selector", uiSelector("MCP speed 1", "agui::TextButton"))
+                                },
+                            )
+                            .toolValue()
                     }
                     client.close()
                     other.close()

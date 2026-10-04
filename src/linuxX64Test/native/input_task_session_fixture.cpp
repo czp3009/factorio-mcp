@@ -45,9 +45,10 @@ struct Wire {
         task = static_cast<FmLinuxInputTask *>(view);
         task->ownerPid = task->targetPid = getpid();
         task->count = 1;
-        task->operations[0].ticks = 2;
-        task->operations[0].count = 1;
-        task->operations[0].buttons[0] = {static_cast<uint32_t>(InputDevice::Keyboard), 42};
+        task->entries[0].kind = 0;
+        task->entries[0].code = 42;
+        task->entries[0].intervalCount = 1;
+        task->entries[0].intervals[0] = {0, 1};
     }
 
     ~Wire() {
@@ -97,7 +98,10 @@ struct Fixture {
 
     void tick() {
         const auto cookie = session.before(current.source, caller);
-        assert(cookie > 1);
+        if (cookie <= 1) {
+            assert(fm_linux_input_state(wire.task) >= 2);
+            return;
+        }
         assert(session.frontend() == EBUSY);
         session.after(current.source, cookie);
         session.after(current.source, cookie);
@@ -166,13 +170,14 @@ int main() {
     for (unsigned invalid = 0; invalid < 5; ++invalid) {
         Fixture f;
         if (invalid == 0)
-            f.wire.task->count = FM_LINUX_INPUT_STEPS + 1;
+            f.wire.task->count = FM_INPUT_ENTRIES + 1;
         if (invalid == 1)
-            f.wire.task->operations[0].ticks = 0;
+            f.wire.task->entries[0].intervalCount = 0;
         if (invalid == 2)
-            f.wire.task->operations[0].buttons[0] = {1, 6};
+            f.wire.task->entries[0].kind = 1;
+        f.wire.task->entries[0].code = 6;
         if (invalid == 3)
-            f.wire.task->operations[0].count = FM_LINUX_INPUT_BUTTONS + 1;
+            f.wire.task->entries[0].intervalCount = FM_INPUT_INTERVALS + 1;
         if (invalid == 4)
             f.wire.task->reserved = 1;
         assert(f.session.start({}, getpid(), f.wire.descriptor, getpid(), caller, f.emitter) == EINVAL);

@@ -114,9 +114,10 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
         frameMetadata = null
         frameBinding = null
         loadBias = site.loadBias
-        val gameState = process.withExecutable { image ->
-            GameStateMetadata.resolve(image).also { it.verifyLoaded(image, process, loadBias) }
-        }
+        val gameState =
+            process.withExecutable { image ->
+                GameStateMetadata.resolve(image).also { it.verifyLoaded(image, process, loadBias) }
+            }
         val verified = borrow(site)
         if (mapping == null) {
             val bootstrap = LibraryLoader(checkNotNull(trace), process)
@@ -332,7 +333,9 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
                 { shared -> metadata.writeTo(shared.controlsLayout, loadBias) },
                 { shared, result ->
                     check(result.code == 0) { "Native input binding read failed: ${result.code}" }
-                    metadata.read(shared.controlsSnapshot, result.frame.toLong()).copy(state = result.state, paused = result.paused)
+                    metadata
+                        .read(shared.controlsSnapshot, result.frame.toLong())
+                        .copy(state = result.state, paused = result.paused)
                 },
             )
     }
@@ -451,7 +454,7 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
                 "Native input cancellation failed: ${result.code}; cleanup is incomplete, retry detach"
             }
         }
-        if (request.operations.isEmpty()) {
+        if (request.timeline.isEmpty()) {
             if (request.stopPrevious) {
                 cancelPrevious()
             } else {
@@ -472,7 +475,7 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
             NativeInputTask(
                 process.pid,
                 request,
-                { if (it.isEmpty()) emptyList() else SdlScancodes.chord(it) },
+                { names -> names.map { SdlScancodes.chord(listOf(it)).single() } },
                 ::alive,
             )
         val task = inputTasks.retain(pending)
@@ -510,11 +513,27 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
                 "Input requires a running, unpaused game"
             }
             val thread = inputWorker()
+            val projection =
+                if (
+                    request.timeline.any {
+                        (it.control as? InputControl.Pointer)?.path?.space == "world"
+                    }
+                ) {
+                    worldMetadata
+                        ?: process
+                            .withExecutable { image ->
+                                WorldQueryMetadata.resolve(image).also {
+                                    it.verifyLoaded(image, process, loadBias)
+                                }
+                            }
+                            .also { worldMetadata = it }
+                } else null
             if (request.stopPrevious) cancelPrevious()
             connection.execute(
                 FM_LINUX_INPUT,
                 { shared ->
                     context.writeTo(shared.inputContextConfig, loadBias)
+                    projection?.writeTo(shared.worldConfig, loadBias)
                     shared.retirementConfig.entry = retired.address.toULong()
                     shared.retirementConfig.original = retired.original.toULong()
                     shared.retirementConfig.protection = retired.protection.toUInt()

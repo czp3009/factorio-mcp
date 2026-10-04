@@ -6,6 +6,10 @@ import com.hiczp.factorio.mcp.McpHttpClient
 import com.hiczp.factorio.mcp.assertUiCaptureReleased
 import com.hiczp.factorio.mcp.toolValue
 import com.hiczp.factorio.mcp.uiSelector
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 import kotlinx.cinterop.toKString
 import kotlinx.coroutines.*
 import kotlinx.io.buffered
@@ -14,10 +18,6 @@ import kotlinx.io.files.SystemFileSystem
 import kotlinx.io.readString
 import kotlinx.serialization.json.*
 import platform.posix.getenv
-import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertFalse
-import kotlin.test.assertTrue
 
 /** Mouse fallback coverage against the explicitly selected local UI acceptance scenario. */
 class MouseMotionAcceptanceTest {
@@ -48,30 +48,29 @@ class MouseMotionAcceptanceTest {
 
         fun gesture(start: JsonObject, end: JsonObject, ticks: Int = 6, motionTick: Int = 3) =
             buildJsonObject {
-                putJsonArray("operations") {
+                putJsonArray("timeline") {
                     addJsonObject {
-                        put("ticks", 2)
-                        putJsonArray("controls") {
-                            addJsonObject {
-                                put("device", "mouse")
-                                put("position", start)
-                            }
-                        }
+                        put("device", "mouse")
+                        put("position", start)
+                        put("tick", "0-${motionTick}")
                     }
                     addJsonObject {
-                        put("ticks", ticks)
-                        putJsonArray("controls") {
-                            addJsonObject {
-                                put("device", "mouse")
-                                put("button", "left")
-                                putJsonArray("motion") {
-                                    addJsonObject {
-                                        put("tick", motionTick)
-                                        put("position", end)
-                                    }
-                                }
+                        put("device", "mouse")
+                        put("button", "left")
+                        put("tick", "2-${ticks + 1}")
+                    }
+                    addJsonObject {
+                        put("device", "mouse")
+                        putJsonObject("motion") {
+                            put("space", "viewport")
+                            val point = buildJsonObject {
+                                put("x", end.getValue("x"))
+                                put("y", end.getValue("y"))
                             }
+                            put("from", point)
+                            put("to", point)
                         }
+                        put("tick", "${motionTick + 1}-${ticks + 1}")
                     }
                 }
             }
@@ -108,7 +107,7 @@ class MouseMotionAcceptanceTest {
                     nodes()
                         .single {
                             it["type"]?.jsonPrimitive?.content == "agui::Window" &&
-                                    it["text"]?.jsonPrimitive?.content == "MCP action fixture"
+                                it["text"]?.jsonPrimitive?.content == "MCP action fixture"
                         }
                         .getValue("bounds")
                         .jsonObject
@@ -119,13 +118,13 @@ class MouseMotionAcceptanceTest {
                         val event =
                             records(serverLog).lastOrNull {
                                 it["kind"]?.jsonPrimitive?.content == "checkpoint" &&
-                                        predicate(it.getValue("data").jsonObject)
+                                    predicate(it.getValue("data").jsonObject)
                             }
                         if (
                             event != null &&
-                            event in records(clientLog) &&
-                            "UI_ACTION_FULL_CRC ${event.getValue("tick").jsonPrimitive.long}" in
-                            read(clientLog)
+                                event in records(clientLog) &&
+                                "UI_ACTION_FULL_CRC ${event.getValue("tick").jsonPrimitive.long}" in
+                                    read(clientLog)
                         )
                             return event
                         delay(50)
@@ -176,8 +175,8 @@ class MouseMotionAcceptanceTest {
                 assertEquals(before.integer("y") + 60, after.integer("y"))
                 checkpoint {
                     it["location"]?.jsonObject?.get("x")?.jsonPrimitive?.int ==
-                            after.integer("x") &&
-                            it["location"]?.jsonObject?.get("y")?.jsonPrimitive?.int ==
+                        after.integer("x") &&
+                        it["location"]?.jsonObject?.get("y")?.jsonPrimitive?.int ==
                             after.integer("y")
                 }
 
@@ -218,8 +217,7 @@ class MouseMotionAcceptanceTest {
                 // Do not replace the task: successful ordinary admission proves notification
                 // cleanup.
                 while (true) {
-                    val probe =
-                        other.tool("input", buildJsonObject { putJsonArray("operations") {} })
+                    val probe = other.tool("input", buildJsonObject { putJsonArray("timeline") {} })
                     if (probe["isError"]?.jsonPrimitive?.boolean != true) {
                         probe.toolValue()
                         break
@@ -232,10 +230,11 @@ class MouseMotionAcceptanceTest {
                     .tool(
                         "input",
                         buildJsonObject {
-                            putJsonArray("operations") {
+                            putJsonArray("timeline") {
                                 addJsonObject {
-                                    put("ticks", 650)
-                                    putJsonArray("controls") {}
+                                    put("device", "mouse")
+                                    put("position", low)
+                                    put("tick", "0-649")
                                 }
                             }
                         },

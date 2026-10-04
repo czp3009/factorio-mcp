@@ -1,5 +1,6 @@
 #include "viewport.h"
 #include "protocol.h"
+#include "../../nativeMain/native/input_world_projection.h"
 #include <cmath>
 #include <cstring>
 
@@ -11,7 +12,7 @@ template <class T> T read(const void *object, unsigned offset) {
 }
 } // namespace
 
-ViewportSnapshot readViewport(const Symbols &symbols, void *player) {
+static ViewportSnapshot viewport(const Symbols &symbols, void *player, const InputPoint *point, InputPosition *output) {
     const auto &layout = symbols.viewport;
     require(layout.supported && player, "Viewport adapter is unavailable");
     void *view = reinterpret_cast<void *(*)(void *)>(symbols.address[PlayerGameView])(player);
@@ -45,5 +46,21 @@ ViewportSnapshot readViewport(const Symbols &symbols, void *player) {
     position(0, 0, result.left, result.top);
     position(result.width, result.height, result.right, result.bottom);
     require(result.right > result.left && result.bottom > result.top, "Viewport transform is not ordered");
+    if (point && output)
+        *output = projectInputWorldPoint(*point, result.width, result.height, [&](int32_t x, int32_t y) {
+            InputPoint value{};
+            position(x, y, value.x, value.y);
+            return value;
+        });
     return result;
+}
+
+ViewportSnapshot readViewport(const Symbols &symbols, void *player) {
+    return viewport(symbols, player, nullptr, nullptr);
+}
+
+InputPosition projectWorldInput(const Symbols &symbols, void *player, InputPoint point) {
+    InputPosition output{};
+    viewport(symbols, player, &point, &output);
+    return output;
 }

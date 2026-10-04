@@ -13,14 +13,21 @@ void check(int error, const char *operation) {
 
 PumpInputEmitter::PumpInputEmitter(EventPump &pump, const KeyboardPumpConfig &keyboard,
                                    const PointerPumpConfig &pointer, EventPump::Pump entry, void *context,
-                                   PointerPump::Guard guard, void *guardContext, pid_t evaluationThread)
+                                   PointerPump::Guard guard, void *guardContext, pid_t evaluationThread,
+                                   Projector projector, void *projectionContext)
     : pump_(pump), keyboard_(keyboard), pointer_(pointer), entry_(entry), context_(context),
-      evaluationThread_(evaluationThread),
+      evaluationThread_(evaluationThread), projector_(projector), projectionContext_(projectionContext),
       motion_(pump, pointer, entry, context, guard, guardContext, evaluationThread) {}
 
 void PumpInputEmitter::move(InputPosition position) {
     PointerMoveProgress progress;
     check(motion_.move(position, progress), "factorio-mcp: pointer motion");
+}
+
+void PumpInputEmitter::moveWorld(InputPoint position) {
+    if (!projector_)
+        throw std::logic_error("factorio-mcp: world projection is unavailable");
+    move(projector_(position, projectionContext_));
 }
 
 void PumpInputEmitter::wheel(int32_t direction) {
@@ -53,7 +60,7 @@ void PumpInputEmitter::button(InputButton button, bool down) {
         throw std::invalid_argument("factorio-mcp: invalid input device");
     auto free = std::find_if(slots_.begin(), slots_.end(), [](const Slot &slot) { return !slot.key && !slot.mouse; });
     if (free == slots_.end())
-        throw std::length_error("factorio-mcp: input chord exceeds eight buttons");
+        throw std::length_error("factorio-mcp: input exceeds timeline button capacity");
     free->button = button;
     int error;
     if (button.device == InputDevice::Keyboard) {

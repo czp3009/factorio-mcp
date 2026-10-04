@@ -9,33 +9,41 @@
 
 namespace {
 int dimensionCalls = 0, positionCalls = 0;
+
 struct Bitmap {
     uintptr_t marker = 7;
     int32_t width = 640, height = 480;
 };
+
 struct Framebuffer {
     virtual ~Framebuffer() = default;
+
     virtual int32_t width() {
         ++dimensionCalls;
         assert(primary || fallback);
         return (primary ? primary : fallback)->width;
     }
+
     virtual int32_t height() {
         ++dimensionCalls;
         assert(primary || fallback);
         return (primary ? primary : fallback)->height;
     }
+
     char padding[FIXTURE_PADDING]{};
     Bitmap *primary = nullptr, *fallback = nullptr;
 };
+
 struct Renderer {
     char padding[FIXTURE_PADDING]{};
     Framebuffer **reference = nullptr;
 };
+
 struct Player {
     virtual ~Player() = default;
     uint16_t index = 6;
 };
+
 struct View {
     virtual ~View() = default;
     char padding[FIXTURE_PADDING]{};
@@ -44,24 +52,27 @@ struct View {
     uint32_t surface = 4;
     int32_t position[2]{-2560, 5120};
 };
+
 struct Game {
     Player *player;
     View *view;
 };
+
 uint32_t offset(const void *object, const void *member) {
     return static_cast<const char *>(member) - static_cast<const char *>(object);
 }
+
 void identity(const void *object, uint64_t &table, uint64_t &type) {
     std::memcpy(&table, object, sizeof(table));
     std::memcpy(&type, reinterpret_cast<const void *>(table - 8), sizeof(type));
 }
+
 uint64_t position(void *object, uint64_t pixel) {
     ++positionCalls;
     const auto &view = *static_cast<View *>(object);
     int32_t input[2];
     std::memcpy(input, &pixel, sizeof(input));
-    const int32_t result[2]{view.position[0] + (input[0] - 320) * 256,
-                            view.position[1] + (input[1] - 240) * 256};
+    const int32_t result[2]{view.position[0] + (input[0] - 320) * 256, view.position[1] + (input[1] - 240) * 256};
     uint64_t packed;
     std::memcpy(&packed, result, sizeof(packed));
     return packed;
@@ -114,11 +125,12 @@ int main() {
     uint32_t cancel = 0;
     QueryViewport result;
     auto run = [&] {
-        return readViewport(reinterpret_cast<uintptr_t>(&game), reinterpret_cast<uintptr_t>(&player), selection, layout, &cancel, result);
+        return readViewport(reinterpret_cast<uintptr_t>(&game), reinterpret_cast<uintptr_t>(&player), selection, layout,
+                            &cancel, result);
     };
-    assert(run() == 0 && dimensionCalls == 2 && positionCalls == 2 && result.surface == 5 &&
-           result.width == 640 && result.height == 480 && result.left == -330 && result.top == -220 &&
-           result.right == 310 && result.bottom == 260);
+    assert(run() == 0 && dimensionCalls == 2 && positionCalls == 2 && result.surface == 5 && result.width == 640 &&
+           result.height == 480 && result.left == -330 && result.top == -220 && result.right == 310 &&
+           result.bottom == 260);
     cancel = 1;
     assert(run() == ECANCELED && dimensionCalls == 2 && positionCalls == 2 && result.width == 0);
     cancel = 0;
@@ -146,4 +158,9 @@ int main() {
     renderer.reference = &pointer;
     layout.position = selection.viewSize - 4;
     assert(run() == EINVAL && positionCalls == 4);
+    layout.position = offset(&view, &view.position);
+    InputPosition pixel{};
+    assert(projectWorldInput(reinterpret_cast<uintptr_t>(&game), reinterpret_cast<uintptr_t>(&player), selection,
+                             layout, {-9.5, 20.5}, pixel) == 0);
+    assert(pixel.x == 320 && pixel.y == 240);
 }

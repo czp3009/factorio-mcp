@@ -1,4 +1,5 @@
 #include "input_task_context.h"
+#include <algorithm>
 #include <cassert>
 #include <cerrno>
 #include <functional>
@@ -41,11 +42,11 @@ struct NativeEmitter : InputEmitter {
             held.push_back(button);
             if (callback)
                 callback();
-        } else if (!held.empty() && held.back() == button) {
+        } else if (const auto found = std::find(held.begin(), held.end(), button); found != held.end()) {
             if (blockRelease)
                 throw std::runtime_error("release unavailable before native entry");
             ++ups;
-            held.pop_back();
+            held.erase(found);
         }
     }
 
@@ -89,8 +90,8 @@ void replacement() {
     FmLinuxInputContextConfig config{};
     uint32_t cancel = 0;
     // Changes to any association invalidate the task permanently, even if the former values return later.
-    for (auto member : {&InputContext::game, &InputContext::source, &InputContext::player,
-                        &InputContext::map, &InputContext::view}) {
+    for (auto member :
+         {&InputContext::game, &InputContext::source, &InputContext::player, &InputContext::map, &InputContext::view}) {
         ViewLifetime lifetime;
         InputTaskContext task(lifetime, readContext);
         InputContext output;
@@ -112,18 +113,19 @@ void sequence() {
     assert(task.bind(config, &cancel, output) == 0);
     NativeEmitter native;
     GuardedInputEmitter emitter(task, native);
-    InputSequence sequence({{2, {first, second}, {}, 0, {}}});
+    InputSequence sequence(
+        {{InputKind::Keyboard, first.code, {{0, 1}}}, {InputKind::MouseButton, second.code, {{0, 1}}}});
     sequence.beforeTick(10, emitter);
-    sequence.afterTick(10);
+    sequence.afterTick(10, emitter);
     sequence.beforeTick(10, emitter);
-    sequence.afterTick(10);
+    sequence.afterTick(10, emitter);
     assert(sequence.ticks() == 1 && native.downs == 2 && native.ups == 0);
     current.tick = 11;
     sequence.beforeTick(11, emitter);
-    sequence.afterTick(11);
+    sequence.afterTick(11, emitter);
     current.tick = 12;
     sequence.beforeTick(12, emitter);
-    assert(sequence.state() == InputSequenceState::Succeeded && sequence.ticks() == 2 && sequence.completed() == 1);
+    assert(sequence.state() == InputSequenceState::Succeeded && sequence.ticks() == 2 && sequence.completed() == 2);
     assert(native.ups == 2 && native.held.empty());
     task.release();
     current = initial;
@@ -144,7 +146,8 @@ void reentrantRetirement() {
         lifetime.retired(current.view);
     };
     native.blockRelease = true;
-    InputSequence sequence({{3, {first, second}, {}, 0, {}}});
+    InputSequence sequence(
+        {{InputKind::Keyboard, first.code, {{0, 2}}}, {InputKind::MouseButton, second.code, {{0, 2}}}});
     sequence.beforeTick(10, emitter);
     assert(sequence.state() == InputSequenceState::Releasing && native.downs == 1 && native.ups == 0);
     assert(task.failure() == ESTALE && task.owned() && lifetime.owned() && sequence.hasHeldInput());
@@ -175,19 +178,24 @@ void callbackChecks() {
         native.callback = [] { current.player += 0x10000; };
         GuardedInputEmitter emitter(task, native);
         const auto dispatch = [&] {
-            if (operation == 0) emitter.move({10, 20});
-            else if (operation == 1) emitter.wheel(1);
-            else emitter.button(first, true);
+            if (operation == 0)
+                emitter.move({10, 20});
+            else if (operation == 1)
+                emitter.wheel(1);
+            else
+                emitter.button(first, true);
         };
         try {
             dispatch();
             assert(false);
-        } catch (const std::runtime_error &) {}
+        } catch (const std::runtime_error &) {
+        }
         current = initial;
         try {
             dispatch();
             assert(false);
-        } catch (const std::runtime_error &) {}
+        } catch (const std::runtime_error &) {
+        }
         assert(native.moves + native.wheels + native.downs == 1);
         emitter.button(first, false);
         task.release();
@@ -204,12 +212,16 @@ void stoppedWorldCleanup() {
         assert(task.bind(config, &cancel, output) == 0);
         NativeEmitter native;
         native.callback = [&] {
-            if (condition == 0) current.paused = true;
-            else if (condition == 1) current.stopped = 1;
-            else readFailure = EFAULT;
+            if (condition == 0)
+                current.paused = true;
+            else if (condition == 1)
+                current.stopped = 1;
+            else
+                readFailure = EFAULT;
         };
         GuardedInputEmitter emitter(task, native);
-        InputSequence sequence({{3, {first, second}, {}, 0, {}}});
+        InputSequence sequence(
+            {{InputKind::Keyboard, first.code, {{0, 2}}}, {InputKind::MouseButton, second.code, {{0, 2}}}});
         sequence.beforeTick(10, emitter);
         assert(sequence.state() == InputSequenceState::Aborted && sequence.ticks() == 0);
         assert(native.downs == 1 && native.ups == 1 && native.held.empty());

@@ -4,6 +4,10 @@ package com.hiczp.factorio.mcp.acceptance
 
 import com.hiczp.factorio.mcp.McpHttpClient
 import com.hiczp.factorio.mcp.toolValue
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 import kotlinx.cinterop.toKString
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
@@ -14,11 +18,6 @@ import kotlinx.io.files.SystemFileSystem
 import kotlinx.io.readString
 import kotlinx.serialization.json.*
 import platform.posix.getenv
-import kotlin.math.roundToInt
-import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertFalse
-import kotlin.test.assertTrue
 
 /** Uses ordinary copy/build controls; only the fixture supplies the original machine. */
 class BlueprintMotionAcceptanceTest {
@@ -69,7 +68,7 @@ class BlueprintMotionAcceptanceTest {
                             .map { it.jsonObject }
                             .single {
                                 it.getValue("slot").jsonPrimitive.content ==
-                                        "keyboard_mouse_primary"
+                                    "keyboard_mouse_primary"
                             }
                     val modifiers =
                         binding.getValue("modifiers").jsonArray.map { it.jsonPrimitive.content }
@@ -83,12 +82,12 @@ class BlueprintMotionAcceptanceTest {
                             )
                         }
                     } +
-                            buildJsonObject {
-                                val keyboard =
-                                    binding.getValue("type").jsonPrimitive.content == "Keyboard"
-                                put("device", if (keyboard) "keyboard" else "mouse")
-                                put(if (keyboard) "key" else "button", binding.getValue("name"))
-                            }
+                        buildJsonObject {
+                            val keyboard =
+                                binding.getValue("type").jsonPrimitive.content == "Keyboard"
+                            put("device", if (keyboard) "keyboard" else "mouse")
+                            put(if (keyboard) "key" else "button", binding.getValue("name"))
+                        }
                 }
 
                 suspend fun input(controls: List<JsonObject>) =
@@ -96,9 +95,12 @@ class BlueprintMotionAcceptanceTest {
                         .tool(
                             "input",
                             buildJsonObject {
-                                putJsonArray("operations") {
-                                    addJsonObject {
-                                        putJsonArray("controls") { controls.forEach { add(it) } }
+                                putJsonArray("timeline") {
+                                    controls.forEach { control ->
+                                        addJsonObject {
+                                            control.forEach { (name, value) -> put(name, value) }
+                                            put("tick", "0")
+                                        }
                                     }
                                 }
                             },
@@ -130,61 +132,34 @@ class BlueprintMotionAcceptanceTest {
                 }
                 input(controls("clear-cursor"))
                 while (cursor() != null) delay(20)
-                val viewport =
-                    client.tool("world_overview").toolValue().getValue("viewport").jsonObject
-                val area = viewport.getValue("area").jsonObject
-                val left = area.getValue("left_top").jsonObject
-                val right = area.getValue("right_bottom").jsonObject
-                fun pixel(x: Double, y: Double) = buildJsonObject {
-                    put("space", "viewport")
-                    put(
-                        "x",
-                        ((x - left.getValue("x").jsonPrimitive.double) /
-                                (right.getValue("x").jsonPrimitive.double -
-                                        left.getValue("x").jsonPrimitive.double) *
-                                viewport.getValue("width").jsonPrimitive.int)
-                            .roundToInt(),
-                    )
-                    put(
-                        "y",
-                        ((y - left.getValue("y").jsonPrimitive.double) /
-                                (right.getValue("y").jsonPrimitive.double -
-                                        left.getValue("y").jsonPrimitive.double) *
-                                viewport.getValue("height").jsonPrimitive.int)
-                            .roundToInt(),
-                    )
+                fun point(x: Double, y: Double) = buildJsonObject {
+                    put("space", "world")
+                    put("x", x)
+                    put("y", y)
                 }
-
                 suspend fun gesture(start: JsonObject, points: List<JsonObject>) =
                     client
                         .tool(
                             "input",
                             buildJsonObject {
-                                putJsonArray("operations") {
+                                putJsonArray("timeline") {
                                     addJsonObject {
-                                        put("ticks", 2)
-                                        putJsonArray("controls") {
-                                            addJsonObject {
-                                                put("device", "mouse")
-                                                put("position", start)
-                                            }
+                                        put("device", "mouse")
+                                        put("position", start)
+                                        put("tick", "0-1")
+                                    }
+                                    controls("build").forEach { control ->
+                                        addJsonObject {
+                                            control.forEach { (name, value) -> put(name, value) }
+                                            put("tick", "2-${3 * points.size + 5}")
                                         }
                                     }
-                                    addJsonObject {
-                                        put("ticks", 3 * points.size + 4)
-                                        putJsonArray("controls") {
-                                            controls("build").forEach { add(it) }
-                                            addJsonObject {
-                                                put("device", "mouse")
-                                                putJsonArray("motion") {
-                                                    points.forEachIndexed { index, point ->
-                                                        addJsonObject {
-                                                            put("tick", 3 * (index + 1))
-                                                            put("position", point)
-                                                        }
-                                                    }
-                                                }
-                                            }
+                                    points.forEachIndexed { index, point ->
+                                        addJsonObject {
+                                            put("device", "mouse")
+                                            put("position", point)
+                                            val tick = 2 + 3 * (index + 1) - 1
+                                            put("tick", "$tick-${tick + 2}")
                                         }
                                     }
                                 }
@@ -193,12 +168,12 @@ class BlueprintMotionAcceptanceTest {
                         .toolValue()
                 input(controls("copy"))
                 while (cursor() != "copy-paste-tool") delay(20)
-                gesture(pixel(10.8, -10.2), listOf(pixel(14.2, -6.8)))
+                gesture(point(10.8, -10.2), listOf(point(14.2, -6.8)))
                 while (cursor() != "blueprint") delay(20)
                 val initial = records(serverLog).size
                 val expectedX = listOf(-4.5, -1.5, 1.5, 4.5)
                 val result =
-                    gesture(pixel(expectedX.first(), 8.5), expectedX.drop(1).map { pixel(it, 8.5) })
+                    gesture(point(expectedX.first(), 8.5), expectedX.drop(1).map { point(it, 8.5) })
                 assertEquals("completed", result.getValue("status").jsonPrimitive.content)
                 assertEquals(15L, result.getValue("evaluated_ticks").jsonPrimitive.long)
                 var built: List<JsonObject>
@@ -206,7 +181,7 @@ class BlueprintMotionAcceptanceTest {
                     built =
                         records(serverLog).drop(initial).filter {
                             it["kind"]?.jsonPrimitive?.content == "built" &&
-                                    it["data"]?.jsonObject?.get("ghost_name")?.jsonPrimitive?.content ==
+                                it["data"]?.jsonObject?.get("ghost_name")?.jsonPrimitive?.content ==
                                     "assembling-machine-1"
                         }
                     if (built.size >= 4 && records(clientLog).containsAll(built)) break
@@ -276,7 +251,7 @@ class BlueprintMotionAcceptanceTest {
                 while (
                     !read(clientLog).lineSequence().any {
                         "UI_ACTION_FULL_CRC " in it &&
-                                it.substringAfter("UI_ACTION_FULL_CRC ").trim().toLong() >= lastTick
+                            it.substringAfter("UI_ACTION_FULL_CRC ").trim().toLong() >= lastTick
                     }
                 ) delay(50)
                 assertFalse(read(clientLog).contains("desynchron", ignoreCase = true))

@@ -46,7 +46,7 @@ int main() {
         fixture.descriptor = -1;
         fm_linux_input_cancel(fixture.task);
         assert(fm_ipc_load(&mapping.task()->cancel) == 1);
-        fm_ipc_store(&mapping.task()->completedOperations, 3);
+        fm_ipc_store(&mapping.task()->completedEntries, 3);
         __atomic_store_n(&mapping.task()->evaluatedTicks, uint64_t{91}, __ATOMIC_RELEASE);
         fm_ipc_store(&mapping.task()->state, 2);
         assert(fm_linux_input_completed(fixture.task) == 3 && fm_linux_input_ticks(fixture.task) == 91);

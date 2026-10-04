@@ -63,29 +63,25 @@ class TimedInputSmokeAcceptanceTest {
                         .jsonObject
 
                 fun request(ticks: Int, held: Boolean) = buildJsonObject {
-                    putJsonArray("operations") {
-                        add(
-                            buildJsonObject {
-                                put("ticks", ticks)
-                                putJsonArray("controls") {
-                                    if (held)
-                                        add(
-                                            buildJsonObject {
-                                                put("device", "keyboard")
-                                                put("key", key)
-                                            }
-                                        )
+                    putJsonArray("timeline") {
+                        addJsonObject {
+                            put("device", if (held) "keyboard" else "mouse")
+                            if (held) put("key", key)
+                            else
+                                putJsonObject("position") {
+                                    put("space", "viewport")
+                                    put("x", 0)
+                                    put("y", 0)
                                 }
-                            }
-                        )
+                            put("tick", "0-${ticks - 1}")
+                        }
                     }
                 }
-
                 val before = position()
                 val result = client.tool("input", request(3, true)).toolValue()
                 assertEquals("completed", result.getValue("status").jsonPrimitive.content)
                 assertEquals(3, result.getValue("evaluated_ticks").jsonPrimitive.int)
-                assertEquals(1, result.getValue("completed_operations").jsonPrimitive.int)
+                assertEquals(1, result.getValue("completed_entries").jsonPrimitive.int)
                 val after =
                     withTimeout(30_000) {
                         var value = position()
@@ -121,7 +117,7 @@ class TimedInputSmokeAcceptanceTest {
                                     "input",
                                     buildJsonObject {
                                         put("stop_previous", true)
-                                        putJsonArray("operations") {}
+                                        putJsonArray("timeline") {}
                                     },
                                 )
                                 .toolValue()

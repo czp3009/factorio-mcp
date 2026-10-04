@@ -63,9 +63,10 @@ fixtures. Ninja checks compiler-discovered dependencies, including SDK headers o
 the repository, on every native build. Unchanged native output does not overwrite an identical mapped runtime library.
 Use a fresh native build directory when changing the compiler or SDK installation.
 
-The shared native input sequence and its fixtures live in `src/nativeMain/native/` and `src/nativeTest/native/`.
-Both platform CTest suites exercise tick progression, repeated callbacks, mouse motion, cancellation and retained
-release ownership after dispatch failures without a game. These fixtures do not establish platform event routing
+The shared native input timeline and its fixtures live in `src/nativeMain/native/` and `src/nativeTest/native/`.
+Both platform CTest suites exercise inclusive tick progression, overlapping holds, repeated callbacks, mouse motion,
+point dwell, world projection, cancellation and retained release ownership after dispatch failures without a game.
+These fixtures do not establish platform event routing
 or real-game effects; those require explicit acceptance tests.
 
 ### Platform boundaries
@@ -326,6 +327,10 @@ Run classes with their specific fixture prerequisites rather than enabling every
 Focused checks can reuse a fixture when its expected initial state has been restored; use a fresh scenario for a full
 rerun of tests that leave new objects or cursor state.
 
+The CIO test client permits up to four connection attempts for the native TCP-connect diagnostic with socket error
+zero, before HTTP submission. Other connection errors, response failures and cancellation remain terminal;
+submitted tool requests are never replayed. This test-only workaround does not establish the upstream error's cause.
+
 | Acceptance class | Scope |
 |------------------|-------|
 | `UiActionAcceptanceTest` | Generic native widget gestures, restricted text, modifiers, offscreen options and recreation. |
@@ -334,6 +339,7 @@ rerun of tests that leave new objects or cursor state.
 | `WorldQueryAcceptanceTest`, `RelatedWorldQueryAcceptanceTest`, `ExpandedQueryAcceptanceTest` | Direct world and related-object reads, inventories, filters, catalogs, metadata and query recovery. |
 | `WorldOverviewAcceptanceTest`, `ViewportAcceptanceTest` | Explicit areas, native viewport observations and bounded spatial results. |
 | `InputAcceptanceTest`, `WheelInputAcceptanceTest` | Finite keyboard/mouse execution, replacement, cancellation, detach and independent authoritative effects. |
+| `InputTimelineAcceptanceTest` | Overlapping and unordered intervals, held belt dragging with rotation, world tile-center paths, point dwell and failure cleanup. |
 | `ChatReadAcceptanceTest`, `ChatSendAcceptanceTest` | Original retained records, repeated content, native paging boundaries, waiting, cancellation and local submission. |
 | `HttpAcceptanceTest` | Shared HTTP sessions, every advertised tool, screenshots and repeated attach/detach. |
 | `PlayerContextAcceptanceTest`, `BlueprintMotionAcceptanceTest`, `TrainUiAcceptanceTest` | Authoritative controller transitions, held mouse blueprint placement and nested native train UI interactions. |

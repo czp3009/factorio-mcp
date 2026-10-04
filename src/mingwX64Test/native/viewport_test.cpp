@@ -45,6 +45,12 @@ int main() {
     const auto value = readViewport(symbols, &player);
     assert(value.surface == 8 && value.width == 800 && value.height == 600);
     assert(value.left == 10 && value.top == -20 && value.right == 35 && value.bottom == -1.25);
+    auto projected = projectWorldInput(symbols, &player, {10.5, -19.5});
+    assert(projected.x == 16 && projected.y == 16);
+    view.x += 256;
+    projected = projectWorldInput(symbols, &player, {11.5, -19.5});
+    assert(projected.x == 16 && projected.y == 16);
+    view.x -= 256;
     auto rejected = [&] {
         try {
             readViewport(symbols, &player);

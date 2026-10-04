@@ -9,11 +9,12 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
 import kotlinx.serialization.json.*
 
-private fun toolResult(value: JsonObject, error: Boolean = false) = CallToolResult(
-    content = listOf(TextContent(Json.encodeToString(JsonObject.serializer(), value))),
-    structuredContent = value,
-    isError = if (error) true else null,
-)
+private fun toolResult(value: JsonObject, error: Boolean = false) =
+    CallToolResult(
+        content = listOf(TextContent(Json.encodeToString(JsonObject.serializer(), value))),
+        structuredContent = value,
+        isError = if (error) true else null,
+    )
 
 internal fun createServer(game: GameSession): Server {
     val server =
@@ -24,7 +25,7 @@ internal fun createServer(game: GameSession): Server {
                 """
                 Attach to an existing, fully loaded Factorio client; this server never launches it.
                 Prefer structured reads: world_query for objects, properties and collections, world_overview for spatial observations, chat_read for retained messages, and ui_read for interface state. Discover inspect members and use bounded paths, filters, fields and pages. Use screenshot for missing visual information, verification or requested images.
-                Use ui_action with live selectors for widgets and input for finite keyboard/mouse sequences. Discover current bindings with input_bindings. Use set_text for editable text.
+                Use ui_action with live selectors for widgets and input for concurrent keyboard/mouse timelines. Discover current bindings with input_bindings. Use set_text for editable text.
                 Interpret native values, text, repetitions and hierarchy yourself. Missing, null and unavailable are distinct, widget flags are local, and controller context can differ from the physical character. Check truncation before treating results as complete.
                 Every action, including chat, reports client dispatch/execution and cleanup. Completion does not confirm server acceptance, delivery or gameplay success. Network latency and prediction rollback can delay, change or undo effects; reads observe current state. Actions do not wait for a resulting state. Observe effects before dependent actions. Do not blindly repeat a mutation whose result was lost or uncertain.
                 Tools have no execution timeout. Send explicit MCP cancellation to stop unwanted work; HTTP disconnection alone is not guaranteed to cancel. All clients share this server's attachment.
@@ -51,9 +52,15 @@ internal fun createServer(game: GameSession): Server {
                 operation(args)
             } catch (failure: CancellationException) {
                 if (!currentCoroutineContext().isActive) throw failure
-                toolResult(buildJsonObject { put("error", failure.message ?: "Tool aborted") }, error = true)
+                toolResult(
+                    buildJsonObject { put("error", failure.message ?: "Tool aborted") },
+                    error = true,
+                )
             } catch (failure: Exception) {
-                toolResult(buildJsonObject { put("error", failure.message ?: "Operation failed") }, error = true)
+                toolResult(
+                    buildJsonObject { put("error", failure.message ?: "Operation failed") },
+                    error = true,
+                )
             }
         }
     }
@@ -65,9 +72,7 @@ internal fun createServer(game: GameSession): Server {
         required: List<String> = emptyList(),
         operation: suspend (JsonObject) -> JsonObject,
     ) {
-        register(name, description, properties, required) { args ->
-            toolResult(operation(args))
-        }
+        register(name, description, properties, required) { args -> toolResult(operation(args)) }
     }
 
     tool(
@@ -237,9 +242,9 @@ internal fun createServer(game: GameSession): Server {
     }
     tool(
         "input",
-        "Send finite keyboard/mouse combinations over consecutive local-player input ticks in a running world. Resolve current bindings with input_bindings; pass physical controls, not control IDs. Each operation presses its controls together, holds for ticks, then releases before the next operation; repeating a control in adjacent operations releases and represses it. Supports viewport positioning and held mouse motion without OS input/focus. Prefer ui_action for widgets; wheel routing over UI is not reliable in all states. Only one input runs at a time; busy calls fail unless stop_previous:true. Pause, unload, detach or cancellation aborts and releases held controls; UI/view changes alone do not abort. Returns dispatch progress, completed_operations and evaluated_ticks, never gameplay success or exact authoritative multiplayer effect timing.",
+        "Execute a finite concurrent keyboard/mouse timeline in a running world. Resolve physical keys with input_bindings; use separate entries for modifiers. Mouse paths support viewport pixels and world tile coordinates on the current viewed surface. World positions are projected using the current view each tick. Prefer ui_action for widgets; wheel routing over UI is not reliable in all states. Only one timeline runs; busy calls fail unless stop_previous:true. Pause, unload, detach or cancellation aborts and releases MCP-held buttons. Returns completed_entries and evaluated_ticks as client execution progress, never server acceptance or gameplay success.",
         inputSequenceProperties(),
-        listOf("operations"),
+        listOf("timeline"),
     ) { args ->
         game.input(parseInputSequence(args))
     }
@@ -254,7 +259,10 @@ internal fun createServer(game: GameSession): Server {
                     add("cancel")
                 }
                 put("default", "capture")
-                put("description", "Cancel stops the current capture without starting another; repeatable when idle.")
+                put(
+                    "description",
+                    "Cancel stops the current capture without starting another; repeatable when idle.",
+                )
             }
         },
     ) { args ->
@@ -278,7 +286,7 @@ internal fun createServer(game: GameSession): Server {
                 listOf(
                     TextContent(Json.encodeToString(JsonObject.serializer(), metadata)),
                     ImageContent(Base64.encode(checkNotNull(snapshot.image)), "image/png"),
-                )
+                ),
         )
     }
     return server

@@ -142,6 +142,8 @@ script.on_event(defines.events.on_player_created,function(event)
     empty_chest=storage.empty_chest.unit_number,chest_contents=storage.query_chest.get_inventory(defines.inventory.chest).get_contents()})
   player.gui.top.add{type="button",name="mcp_top",caption="MCP top tool"}
   player.gui.top.add{type="button",name="mcp_train",caption="MCP train fixture"}
+  player.gui.top.add{type="button",name="mcp_timeline",caption="MCP timeline fixture"}
+  player.gui.top.add{type="button",name="mcp_timeline_restore",caption="MCP timeline restore"}
   build(player)
 end)
 
@@ -153,6 +155,30 @@ script.on_event(defines.events.on_gui_click,function(event)
   if name=="speed_one" then game.speed=1 end
   if name=="speed_four" then game.speed=4 end
   if name=="reset_position" then assert(player.teleport({0,0},game.surfaces[1])) end
+  if name=="mcp_timeline" then
+    if not storage.timeline_surface then
+      storage.timeline_surface=game.create_surface("mcp-input-timeline",{width=64,height=64})
+      storage.timeline_surface.request_to_generate_chunks({0,0},1)
+      storage.timeline_surface.force_generate_chunk_requests()
+    end
+    local surface=storage.timeline_surface
+    for _,entity in pairs(surface.find_entities_filtered{area={{-24,-24},{24,24}}}) do
+      if entity.type~="character" then entity.destroy() end
+    end
+    local tiles={}
+    for x=-24,24 do for y=-24,24 do tiles[#tiles+1]={name="grass-1",position={x,y}} end end
+    surface.set_tiles(tiles)
+    player.clear_cursor()
+    assert(player.teleport({0,0},surface))
+    player.cursor_stack.set_stack{name="transport-belt",count=100}
+    player.gui.screen.mcp_actions.visible=false
+    record("timeline_ready",player,{position=player.position,surface=surface.name})
+  end
+  if name=="mcp_timeline_restore" then
+    player.clear_cursor()
+    assert(player.teleport({0,0},game.surfaces[1]))
+    player.gui.screen.mcp_actions.visible=true
+  end
   if name=="mcp_train" then
     if player.surface==storage.train_surface then
       player.teleport(storage.train_origin.position,storage.train_origin.surface)
@@ -223,6 +249,7 @@ end)
 script.on_event(defines.events.on_built_entity,function(event)
   local entity=event.entity
   record("built",game.get_player(event.player_index),{name=entity.name,position=entity.position,
+    direction=entity.direction,
     ghost_name=entity.type=="entity-ghost" and entity.ghost_name or nil})
 end)
 script.on_nth_tick(300,function()

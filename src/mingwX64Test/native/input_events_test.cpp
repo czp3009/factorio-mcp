@@ -179,7 +179,7 @@ void failedDispatchRemainsReleasable() {
         expectedState = &state;
         InputEventButtons buttons;
         GameInputEvents emitter(layout, api, buttons, &state);
-        InputSequence task({{10, {{InputDevice::Keyboard, 83}}, {}}});
+        InputSequence task({{InputKind::Keyboard, 83, {{0, 9}}}});
         failure = stage;
         trace.clear();
         task.beforeTick(100, emitter);
@@ -194,7 +194,7 @@ void failedDispatchRemainsReleasable() {
     expectedState = &state;
     InputEventButtons buttons;
     GameInputEvents emitter(layout, api, buttons, &state);
-    InputSequence task({{10, {{InputDevice::Mouse, 65}}, {}}});
+    InputSequence task({{InputKind::MouseButton, 65, {{0, 9}}}});
     transition = true;
     task.beforeTick(100, emitter);
     assert(task.state() == InputSequenceState::Aborted && state.held.empty());
@@ -225,7 +225,7 @@ void releaseProgressSurvivesPhaseAdaptersWithoutReplaying() {
         State state;
         expectedState = &state;
         InputEventButtons buttons;
-        InputSequence task({{10, {{InputDevice::Keyboard, 83}, {InputDevice::Mouse, 65}}, {}}});
+        InputSequence task({{InputKind::Keyboard, 83, {{0, 9}}}, {InputKind::MouseButton, 65, {{0, 9}}}});
         GameInputEvents press(layout, api, buttons, &state);
         task.beforeTick(100, press);
         assert(state.held.size() == 2 && buttons.active());

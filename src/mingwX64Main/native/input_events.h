@@ -41,7 +41,7 @@ class InputEventButtons {
         InputEventProgress press, release;
     };
 
-    std::array<Entry, 8> entries{};
+    std::array<Entry, FM_INPUT_ENTRIES> entries{};
 
   public:
     bool active() const;

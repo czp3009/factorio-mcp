@@ -198,7 +198,7 @@ int main() {
         Fixture f;
         auto keys = f.keys();
         SequenceEmitter emitter(keys);
-        InputSequence sequence({InputStep{1, {{InputDevice::Keyboard, 42}}, {}, 0, {}}});
+        InputSequence sequence({{InputKind::Keyboard, 42, {{0, 0}}}});
         f.throwStage = static_cast<unsigned>(EventRouteStage::Update);
         f.throwOnce = true;
         sequence.beforeTick(1, emitter);
@@ -211,10 +211,10 @@ int main() {
         auto keys = f.keys();
         SequenceEmitter emitter(keys);
         f.records[1].value.blocked = 1;
-        InputSequence sequence({InputStep{1, {{InputDevice::Keyboard, 42}, {InputDevice::Keyboard, 43}}, {}, 0, {}}});
+        InputSequence sequence({{InputKind::Keyboard, 42, {{0, 0}}}, {InputKind::Keyboard, 43, {{0, 0}}}});
         sequence.beforeTick(1, emitter);
         assert(sequence.hasHeldInput() && keys.owned());
-        sequence.afterTick(1);
+        sequence.afterTick(1, emitter);
         sequence.beforeTick(2, emitter);
         assert(sequence.state() == InputSequenceState::Succeeded);
         assert(!sequence.hasHeldInput() && !keys.owned() && !f.record.value.held);
@@ -224,9 +224,9 @@ int main() {
         Fixture f;
         auto keys = f.keys();
         SequenceEmitter emitter(keys);
-        InputSequence sequence({InputStep{1, {{InputDevice::Keyboard, 42}}, {}, 0, {}}});
+        InputSequence sequence({{InputKind::Keyboard, 42, {{0, 1}}}});
         sequence.beforeTick(1, emitter);
-        sequence.afterTick(1);
+        sequence.afterTick(1, emitter);
         f.throwStage = static_cast<unsigned>(EventRouteStage::Source);
         sequence.cancel("fixture cancel");
         sequence.cleanup(emitter);

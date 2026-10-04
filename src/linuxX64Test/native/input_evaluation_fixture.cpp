@@ -10,7 +10,9 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 
-extern "C" { uint64_t fm_evaluation_original = 0; }
+extern "C" {
+uint64_t fm_evaluation_original = 0;
+}
 extern "C" void fm_fixture_evaluation_invoke(uintptr_t receiver);
 extern "C" const unsigned char fm_fixture_evaluation_return;
 
@@ -42,7 +44,9 @@ void invokeHook() {
     fm_fixture_evaluation_invoke(current.source);
 }
 
-uintptr_t caller() { return reinterpret_cast<uintptr_t>(&fm_fixture_evaluation_return); }
+uintptr_t caller() {
+    return reinterpret_cast<uintptr_t>(&fm_fixture_evaluation_return);
+}
 
 __attribute__((noinline)) void deepFrontend(InputEvaluation &evaluation, unsigned depth) {
     if (depth)
@@ -62,8 +66,15 @@ struct Emitter : InputEmitter {
     unsigned downs = 0, ups = 0;
     bool held = false, blockRelease = false;
     std::function<void()> onDown;
-    void move(InputPosition) override { assert(false); }
-    void wheel(int32_t) override { assert(false); }
+
+    void move(InputPosition) override {
+        assert(false);
+    }
+
+    void wheel(int32_t) override {
+        assert(false);
+    }
+
     void button(InputButton, bool down) override {
         if (down) {
             assert(!held);
@@ -83,7 +94,7 @@ struct Emitter : InputEmitter {
 struct Fixture {
     ViewLifetime lifetime;
     InputTaskContext context{lifetime, readContext};
-    InputSequence sequence{{{2, {{InputDevice::Keyboard, 42}}, {}, 0, {}}}};
+    InputSequence sequence{{{InputKind::Keyboard, 42, {{0, 1}}}}};
     Emitter emitter;
     InputEvaluation evaluation;
 
@@ -95,8 +106,13 @@ struct Fixture {
         assert(context.bind({}, &cancel, output) == 0);
     }
 
-    uint64_t begin() { return evaluation.before(current.source, caller()); }
-    void finish(uint64_t cookie) { evaluation.after(current.source, cookie); }
+    uint64_t begin() {
+        return evaluation.before(current.source, caller());
+    }
+
+    void finish(uint64_t cookie) {
+        evaluation.after(current.source, cookie);
+    }
 };
 } // namespace
 
@@ -172,11 +188,8 @@ int main() {
         assert(f.sequence.ticks() == 1 && f.emitter.downs == 1);
         ++current.tick;
         f.finish(f.begin());
-        assert(f.sequence.ticks() == 2 && f.sequence.state() == InputSequenceState::Running);
-        ++current.tick;
-        const auto last = f.begin();
-        assert(f.sequence.state() == InputSequenceState::Succeeded && !f.evaluation.finished());
-        f.finish(last);
+        assert(f.sequence.ticks() == 2 && f.sequence.state() == InputSequenceState::Succeeded);
+        assert(f.begin() == 0);
         assert(f.sequence.state() == InputSequenceState::Succeeded && f.sequence.ticks() == 2);
         assert(f.evaluation.finished());
         assert(f.emitter.ups == 1 && !f.emitter.held && f.context.owned());
@@ -201,10 +214,14 @@ int main() {
     for (unsigned change = 0; change < 4; ++change) {
         Fixture f;
         f.emitter.onDown = [&] {
-            if (change == 0) f.lifetime.retired(current.view);
-            if (change == 1) current.source += 8;
-            if (change == 2) current.paused = true;
-            if (change == 3) ++current.tick;
+            if (change == 0)
+                f.lifetime.retired(current.view);
+            if (change == 1)
+                current.source += 8;
+            if (change == 2)
+                current.paused = true;
+            if (change == 3)
+                ++current.tick;
         };
         assert(f.begin() == 1 && !f.evaluation.pending());
         f.evaluation.frontend();
@@ -215,10 +232,14 @@ int main() {
     for (unsigned change = 0; change < 4; ++change) {
         Fixture f;
         const auto cookie = f.begin();
-        if (change == 0) f.lifetime.retired(current.view);
-        if (change == 1) ++current.tick;
-        if (change == 2) current.stopped = 1;
-        if (change == 3) readError = EFAULT;
+        if (change == 0)
+            f.lifetime.retired(current.view);
+        if (change == 1)
+            ++current.tick;
+        if (change == 2)
+            current.stopped = 1;
+        if (change == 3)
+            readError = EFAULT;
         f.finish(cookie);
         f.evaluation.frontend();
         assert(f.sequence.state() == InputSequenceState::Aborted && f.sequence.ticks() == 0);
@@ -281,6 +302,8 @@ int main() {
         ++current.tick;
         invokeHook();
         assert(f.sequence.ticks() == 2 && nativeCalls == 2 && f.emitter.downs == 1);
+        assert(f.sequence.state() == InputSequenceState::Succeeded && f.emitter.ups == 1);
+        reenterFrontend = false;
         ++current.tick;
         invokeHook();
         assert(f.sequence.state() == InputSequenceState::Succeeded && f.emitter.ups == 1);

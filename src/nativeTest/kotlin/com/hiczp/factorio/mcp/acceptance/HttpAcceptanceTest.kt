@@ -5,12 +5,12 @@ package com.hiczp.factorio.mcp.acceptance
 import com.hiczp.factorio.mcp.McpHttpClient
 import com.hiczp.factorio.mcp.toolValue
 import com.hiczp.factorio.mcp.uiSelector
+import kotlin.io.encoding.Base64
+import kotlin.test.*
 import kotlinx.cinterop.toKString
 import kotlinx.coroutines.*
 import kotlinx.serialization.json.*
 import platform.posix.getenv
-import kotlin.io.encoding.Base64
-import kotlin.test.*
 
 /** Opt-in real-game acceptance reuses an explicitly selected process and endpoint. */
 class HttpAcceptanceTest {
@@ -24,7 +24,8 @@ class HttpAcceptanceTest {
             val client = McpHttpClient(url)
             try {
                 client.initialize()
-                val result = client.request("tools/list").getValue("result").jsonObject
+                val result =
+                    client.request("tools/list", requestId = 1_000).getValue("result").jsonObject
                 assertTrue(result.getValue("tools").jsonArray.isNotEmpty())
             } finally {
                 client.close()
@@ -95,7 +96,7 @@ class HttpAcceptanceTest {
                 )
                 assertTrue(
                     client
-                        .tool("input", buildJsonObject { putJsonArray("operations") {} })
+                        .tool("input", buildJsonObject { putJsonArray("timeline") {} })
                         .getValue("isError")
                         .jsonPrimitive
                         .boolean
@@ -147,7 +148,7 @@ class HttpAcceptanceTest {
                     } else {
                         assertTrue(
                             world.toolValue()["player"]!!.jsonObject["index"]!!.jsonPrimitive.int >
-                                    0
+                                0
                         )
                     }
                     assertTrue(
@@ -197,7 +198,10 @@ class HttpAcceptanceTest {
                             .boolean
                     )
                     val screenshot = client.tool("screenshot")
-                    val cancelled = client.tool("screenshot", buildJsonObject { put("action", "cancel") }).toolValue()
+                    val cancelled =
+                        client
+                            .tool("screenshot", buildJsonObject { put("action", "cancel") })
+                            .toolValue()
                     assertEquals("completed", cancelled.getValue("dispatch").jsonPrimitive.content)
                     assertFalse(cancelled.getValue("cancelled").jsonPrimitive.boolean)
                     val metadata = screenshot.toolValue()
@@ -222,7 +226,7 @@ class HttpAcceptanceTest {
                     assertTrue(
                         nodes.any {
                             it.jsonObject.getValue("type").jsonPrimitive.content ==
-                                    "agui::TopContainer"
+                                "agui::TopContainer"
                         }
                     )
                     val bounded =

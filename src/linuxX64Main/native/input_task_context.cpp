@@ -76,6 +76,12 @@ void GuardedInputEmitter::move(InputPosition position) {
     check();
 }
 
+void GuardedInputEmitter::moveWorld(InputPoint position) {
+    check();
+    native_.moveWorld(position);
+    check();
+}
+
 void GuardedInputEmitter::button(InputButton button, bool down) {
     if (down)
         check();

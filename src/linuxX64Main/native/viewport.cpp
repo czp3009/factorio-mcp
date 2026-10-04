@@ -1,6 +1,7 @@
 #include "viewport.h"
 #include "linux_ipc.h"
 #include "memory_read.h"
+#include "../../nativeMain/native/input_world_projection.h"
 #include <cerrno>
 #include <cmath>
 #include <cstring>
@@ -26,20 +27,22 @@ int identity(uintptr_t pointer, uint32_t size, uintptr_t table, uintptr_t type) 
 bool layoutValid(const FmLinuxPlayerLayout &selection, const FmLinuxViewportLayout &layout) {
     return validPlayerLayout(selection) && layout.width && layout.height && layout.mapPosition &&
            layout.width != layout.height && layout.framebufferVtable >= 16 && layout.framebufferTypeInfo &&
-           layout.rendererSize >= 8 && layout.rendererSize <= 64 * 1024 * 1024 &&
-           layout.framebufferSize >= 8 && layout.framebufferSize <= 64 * 1024 * 1024 &&
-           fm::member(layout.renderer, 8, selection.viewSize) && layout.renderer % 8 == 0 &&
-           fm::member(layout.framebufferReference, 8, layout.rendererSize) && layout.framebufferReference % 8 == 0 &&
-           fm::member(layout.primary, 8, layout.framebufferSize) && fm::member(layout.fallback, 8, layout.framebufferSize) &&
+           layout.rendererSize >= 8 && layout.rendererSize <= 64 * 1024 * 1024 && layout.framebufferSize >= 8 &&
+           layout.framebufferSize <= 64 * 1024 * 1024 && fm::member(layout.renderer, 8, selection.viewSize) &&
+           layout.renderer % 8 == 0 && fm::member(layout.framebufferReference, 8, layout.rendererSize) &&
+           layout.framebufferReference % 8 == 0 && fm::member(layout.primary, 8, layout.framebufferSize) &&
+           fm::member(layout.fallback, 8, layout.framebufferSize) &&
            (layout.primary + 8 <= layout.fallback || layout.fallback + 8 <= layout.primary) &&
            layout.widthSlot <= 8191 && layout.heightSlot <= 8191 && layout.widthSlot != layout.heightSlot &&
            fm::member(layout.surface, 4, selection.viewSize) && fm::member(layout.position, 8, selection.viewSize) &&
-           (layout.surface + 4 <= layout.position || layout.position + 8 <= layout.surface) && layout.fractionBits <= 30;
+           (layout.surface + 4 <= layout.position || layout.position + 8 <= layout.surface) &&
+           layout.fractionBits <= 30;
 }
 } // namespace
 
-int readViewport(uintptr_t game, uintptr_t player, const FmLinuxPlayerLayout &selection,
-                 const FmLinuxViewportLayout &layout, const uint32_t *cancel, QueryViewport &output) {
+static int viewport(uintptr_t game, uintptr_t player, const FmLinuxPlayerLayout &selection,
+                    const FmLinuxViewportLayout &layout, const uint32_t *cancel, QueryViewport &output,
+                    const InputPoint *point, InputPosition *pixelOutput) {
     output = {};
     if (!cancel || !layoutValid(selection, layout))
         return EINVAL;
@@ -79,7 +82,8 @@ int readViewport(uintptr_t game, uintptr_t player, const FmLinuxPlayerLayout &se
         return EFAULT;
     if (!framebuffer)
         return ENOENT;
-    if (const auto error = identity(framebuffer, layout.framebufferSize, layout.framebufferVtable, layout.framebufferTypeInfo))
+    if (const auto error =
+            identity(framebuffer, layout.framebufferSize, layout.framebufferVtable, layout.framebufferTypeInfo))
         return error;
     uintptr_t width, height, primary, fallback;
     if (!fm::read(layout.framebufferVtable + layout.widthSlot * 8, width) ||
@@ -120,6 +124,29 @@ int readViewport(uintptr_t game, uintptr_t player, const FmLinuxPlayerLayout &se
         return ERANGE;
     if (fm_ipc_load(cancel))
         return ECANCELED;
+    if (point && pixelOutput) {
+        try {
+            *pixelOutput = projectInputWorldPoint(*point, nativeWidth, nativeHeight, [&](int32_t x, int32_t y) {
+                InputPoint value{};
+                position(x, y, value.x, value.y);
+                return value;
+            });
+        } catch (const std::exception &) {
+            return ERANGE;
+        }
+    }
     output = result;
     return 0;
+}
+
+int readViewport(uintptr_t game, uintptr_t player, const FmLinuxPlayerLayout &selection,
+                 const FmLinuxViewportLayout &layout, const uint32_t *cancel, QueryViewport &output) {
+    return viewport(game, player, selection, layout, cancel, output, nullptr, nullptr);
+}
+
+int projectWorldInput(uintptr_t game, uintptr_t player, const FmLinuxPlayerLayout &selection,
+                      const FmLinuxViewportLayout &layout, InputPoint point, InputPosition &output) {
+    uint32_t cancel = 0;
+    QueryViewport observation{};
+    return viewport(game, player, selection, layout, &cancel, observation, &point, &output);
 }

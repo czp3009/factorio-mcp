@@ -1,4 +1,5 @@
 #include "input_sequence.h"
+#include "input_world_projection.h"
 #include <cassert>
 #include <stdexcept>
 #include <string>
@@ -6,13 +7,18 @@
 
 struct Emitter : InputEmitter {
     std::vector<std::string> events;
-    bool failDown{}, failUp{};
-    bool failWheel{}, failMove{};
+    std::vector<InputPoint> worldPoints;
+    bool failDown{}, failUp{}, failMove{}, failWheel{};
+    InputSequence *cancelOnDown{};
 
-    void move(InputPosition position) override {
-        events.push_back("move:" + std::to_string(position.x) + "," + std::to_string(position.y));
+    void move(InputPosition point) override {
+        events.push_back("move:" + std::to_string(point.x) + "," + std::to_string(point.y));
         if (failMove)
-            throw std::runtime_error("Move dispatch failed");
+            throw std::runtime_error("Move failed");
+    }
+
+    void moveWorld(InputPoint point) override {
+        worldPoints.push_back(point);
     }
 
     void button(InputButton button, bool down) override {
@@ -20,220 +26,172 @@ struct Emitter : InputEmitter {
         bool &failure = down ? failDown : failUp;
         if (failure) {
             failure = false;
-            throw std::runtime_error("Injected dispatch failure");
+            throw std::runtime_error("Button dispatch failed");
         }
+        if (down && cancelOnDown)
+            cancelOnDown->cancel("World unloaded");
     }
 
     void wheel(int32_t direction) override {
         events.push_back("wheel:" + std::to_string(direction));
         if (failWheel)
-            throw std::runtime_error("Wheel dispatch failed");
+            throw std::runtime_error("Wheel failed");
     }
 };
 
-static constexpr InputButton w{InputDevice::Keyboard, 10}, d{InputDevice::Keyboard, 20};
-static constexpr InputButton left{InputDevice::Mouse, 1};
-
-static void motionPreservesHeldButtonsAndDistinctTicks() {
-    InputSequence sequence({{4, {left, w}, InputPosition{10, 20}, 0, {{2, {30, 40}}, {4, {50, 60}}}}, {1, {left}, {}}});
-    Emitter emitter;
-    const std::vector<std::vector<std::string>> expected{
-        {"move:10,20", "+1", "+10"}, {"move:30,40"}, {}, {"move:50,60"}, {"-10", "-1", "+1"}, {"-1"}};
-    for (uint64_t i = 0; i < expected.size(); ++i) {
-        emitter.events.clear();
-        sequence.beforeTick(200 + i, emitter);
-        sequence.beforeTick(200 + i, emitter);
-        assert(emitter.events == expected[i]);
-        sequence.afterTick(200 + i);
-        sequence.beforeTick(200 + i, emitter);
-        assert(emitter.events == expected[i]);
-    }
-    assert(sequence.state() == InputSequenceState::Succeeded && sequence.ticks() == 5 && sequence.completed() == 2);
-    for (bool fail : {false, true}) {
-        InputSequence interrupted({{5, {left}, {}, 0, {{2, {30, 40}}, {4, {50, 60}}}}});
-        emitter.events.clear();
-        interrupted.beforeTick(1, emitter);
-        interrupted.afterTick(1);
-        if (fail) {
-            emitter.failMove = true;
-            interrupted.beforeTick(2, emitter);
-            emitter.failMove = false;
-        } else {
-            interrupted.cancel("Fixture cancelled before motion");
-        }
-        interrupted.cleanup(emitter);
-        interrupted.beforeTick(4, emitter);
-        assert(interrupted.state() == InputSequenceState::Aborted && !interrupted.hasHeldInput());
-        assert((emitter.events ==
-                (fail ? std::vector<std::string>{"+1", "move:30,40", "-1"} : std::vector<std::string>{"+1", "-1"})));
-    }
-    for (const auto &motion : std::vector<std::vector<InputMotion>>{{{1, {0, 0}}},
-                                                                    {{6, {0, 0}}},
-                                                                    {{2, {-1, 0}}},
-                                                                    {{3, {0, 0}}, {2, {0, 0}}},
-                                                                    {{2, {0, 0}}, {2, {1, 1}}},
-                                                                    std::vector<InputMotion>(65, {2, {0, 0}})}) {
-        bool rejected = false;
-        try {
-            InputSequence invalid({{5, {left}, {}, 0, motion}});
-        } catch (const std::invalid_argument &) {
-            rejected = true;
-        }
-        assert(rejected);
-    }
+static InputEntry key(uint32_t code, std::vector<InputInterval> intervals) {
+    return {InputKind::Keyboard, code, std::move(intervals)};
 }
 
-static void wheelIsAnImpulseAndIsNeverReplayed() {
-    InputSequence sequence({{3, {w}, InputPosition{10, 20}, 1}, {1, {}, {}, -1}});
+static void tick(InputSequence &task, Emitter &emitter, uint64_t nativeTick) {
+    task.beforeTick(nativeTick, emitter);
+    const auto size = emitter.events.size();
+    task.beforeTick(nativeTick, emitter);
+    assert(emitter.events.size() == size);
+    task.afterTick(nativeTick, emitter);
+    const auto completed = task.ticks();
+    task.afterTick(nativeTick, emitter);
+    task.beforeTick(nativeTick, emitter);
+    assert(task.ticks() == completed);
+}
+
+static void overlapsAndInclusiveEndpoints() {
+    InputSequence task({key(10, {{0, 2}, {3, 3}, {5, 6}}), key(10, {{1, 3}}), key(20, {{2, 2}})});
     Emitter emitter;
-    for (uint64_t tick = 1; tick <= 5; ++tick) {
-        sequence.beforeTick(tick, emitter);
-        sequence.beforeTick(tick, emitter);
-        sequence.afterTick(tick);
-    }
-    assert(sequence.state() == InputSequenceState::Succeeded);
-    assert((emitter.events == std::vector<std::string>{"move:10,20", "+10", "wheel:1", "-10", "wheel:-1"}));
-    InputSequence failing({{3, {w}, {}, 1}, {1, {}, {}, -1}});
+    for (uint64_t i = 0; i <= 6; ++i)
+        tick(task, emitter, 100 + i);
+    assert((emitter.events == std::vector<std::string>{"+10", "+20", "-20", "-10", "+10", "-10"}));
+    assert(task.state() == InputSequenceState::Succeeded && task.ticks() == 7 && task.completed() == 3);
+    assert(!task.hasHeldInput());
+    InputSequence adjacent({key(10, {{0, 0}, {1, 1}})});
     emitter.events.clear();
-    emitter.failWheel = true;
-    failing.beforeTick(1, emitter);
-    failing.beforeTick(2, emitter);
-    failing.cleanup(emitter);
-    assert(failing.state() == InputSequenceState::Aborted && !failing.hasHeldInput());
-    assert((emitter.events == std::vector<std::string>{"+10", "wheel:1", "-10"}));
+    tick(adjacent, emitter, 1);
+    tick(adjacent, emitter, 2);
+    assert((emitter.events == std::vector<std::string>{"+10", "-10", "+10", "-10"}));
+    InputSequence internalOverlap({key(10, {{2, 3}, {0, 5}, {2, 3}})});
+    emitter.events.clear();
+    for (uint64_t i = 0; i <= 5; ++i)
+        tick(internalOverlap, emitter, 100 + i);
+    assert((emitter.events == std::vector<std::string>{"+10", "-10"}));
+    assert(internalOverlap.ticks() == 6 && internalOverlap.completed() == 1 && !internalOverlap.hasHeldInput());
+    std::vector<InputInterval> repeated(64, {0, 0});
+    InputSequence many({key(10, repeated)});
+    emitter.events.clear();
+    tick(many, emitter, 1);
+    assert((emitter.events == std::vector<std::string>{"+10", "-10"}));
+    assert(many.state() == InputSequenceState::Succeeded && many.completed() == 1);
 }
 
-static void adjacentStepsAndDistinctTicks() {
-    InputSequence sequence({{2, {w}, {}}, {3, {d}, {}}, {1, {}, {}}, {2, {w, d}, {}}, {1, {w}, {}}});
+static void draggingAndRotation() {
+    InputSequence task({
+        {InputKind::Motion, 0, {{0, 2}}, false, false, {10, 20}, {12, 20}},
+        {InputKind::MouseButton, 1, {{0, 5}}},
+        key(30, {{2, 2}}),
+        {InputKind::Motion, 0, {{3, 5}}, false, false, {12, 20}, {12, 22}},
+    });
     Emitter emitter;
-    const std::vector<std::vector<std::string>> expected{{"+10"},        {}, {"-10", "+20"},        {},     {}, {"-20"},
-                                                         {"+10", "+20"}, {}, {"-20", "-10", "+10"}, {"-10"}};
-    for (uint64_t i = 0; i < expected.size(); ++i) {
-        emitter.events.clear();
-        sequence.beforeTick(100 + i, emitter);
-        // Re-entry and repeated callbacks do not create another input evaluation or chord.
-        sequence.beforeTick(100 + i, emitter);
-        assert(emitter.events == expected[i]);
-        sequence.afterTick(100 + i);
-        sequence.afterTick(100 + i);
-        sequence.beforeTick(100 + i, emitter);
-        assert(emitter.events == expected[i]);
+    for (uint64_t i = 0; i <= 5; ++i)
+        tick(task, emitter, 500 + i);
+    assert((emitter.events == std::vector<std::string>{"move:10,20", "+1", "move:11,20", "move:12,20", "+30", "-30",
+                                                       "move:12,20", "move:12,21", "move:12,22", "-1"}));
+    assert(task.ticks() == 6 && task.completed() == 4);
+}
+
+static void dwellAndParallelPointers() {
+    InputSequence task({
+        {InputKind::Motion, 0, {{2, 7}}, true, true, {-1.5, 0.5}, {0.5, 0.5}, 2},
+        {InputKind::Motion, 0, {{3, 3}, {5, 5}}, false, false, {0, 0}, {10, 20}},
+        {InputKind::Wheel, 1, {{0, 2}, {3, 3}}},
+    });
+    Emitter emitter;
+    for (uint64_t i = 0; i <= 7; ++i)
+        tick(task, emitter, 1 + i);
+    assert(emitter.worldPoints.size() == 6);
+    for (size_t i = 0; i < 6; ++i) {
+        assert(emitter.worldPoints[i].x == -1.5 + double(i / 2));
+        assert(emitter.worldPoints[i].y == 0.5);
     }
-    assert(sequence.state() == InputSequenceState::Succeeded);
-    assert(sequence.ticks() == 9 && sequence.completed() == 5 && !sequence.hasHeldInput());
+    assert((emitter.events == std::vector<std::string>{"wheel:1", "move:10,20", "wheel:1", "move:10,20"}));
+    assert(task.state() == InputSequenceState::Succeeded);
 }
 
-static void cancellationDoesNotNeedAnotherTick() {
-    InputSequence sequence({{100000, {w, left}, InputPosition{42, 24}}});
-    Emitter emitter;
-    sequence.beforeTick(1, emitter);
-    sequence.afterTick(1);
-    assert((emitter.events == std::vector<std::string>{"move:42,24", "+10", "+1"}));
-    sequence.cancel("World paused");
-    sequence.cleanup(emitter);
-    assert(sequence.state() == InputSequenceState::Aborted && sequence.reason() == "World paused");
-    assert(sequence.ticks() == 1 && sequence.completed() == 0 && !sequence.hasHeldInput());
-    assert((emitter.events == std::vector<std::string>{"move:42,24", "+10", "+1", "-1", "-10"}));
-    sequence.beforeTick(2, emitter);
-    sequence.afterTick(2);
-    assert(sequence.ticks() == 1);
-}
-
-static void errorsRetainCleanupOwnership() {
-    InputSequence sequence({{2, {w, d}, {}}});
-    Emitter emitter;
-    emitter.failDown = emitter.failUp = true;
-    sequence.beforeTick(10, emitter);
-    assert(sequence.state() == InputSequenceState::Releasing && sequence.hasHeldInput());
-    sequence.cleanup(emitter);
-    assert(sequence.state() == InputSequenceState::Aborted && !sequence.hasHeldInput());
-    assert((emitter.events == std::vector<std::string>{"+10", "-10", "-10"}));
-    assert(sequence.ticks() == 0);
-}
-
-static void clockDiscontinuityAbortsWithoutAnotherDown() {
-    for (uint64_t next : {9u, 12u}) {
-        InputSequence sequence({{1, {w}, {}}, {1, {d}, {}}});
+static void cancellationAndFailures() {
+    for (unsigned phase = 0; phase < 5; ++phase) {
+        InputSequence task({key(10, {{0, 100}}),
+                            key(20, {{0, 100}}),
+                            {InputKind::Motion, 0, {{0, 100}}, false, false, {0, 0}, {100, 100}},
+                            {InputKind::Wheel, 1, {{0, 100}}}});
         Emitter emitter;
-        sequence.beforeTick(10, emitter);
-        sequence.afterTick(10);
-        sequence.beforeTick(next, emitter);
-        assert(sequence.state() == InputSequenceState::Aborted && sequence.ticks() == 1);
+        if (phase == 0)
+            emitter.failDown = emitter.failUp = true;
+        if (phase == 1)
+            emitter.failMove = true;
+        if (phase == 2)
+            emitter.failWheel = true;
+        if (phase == 3)
+            emitter.cancelOnDown = &task;
+        task.beforeTick(1, emitter);
+        if (phase == 4) {
+            task.afterTick(1, emitter);
+            emitter.failUp = true;
+            task.cancel("Cancelled");
+        }
+        task.cleanup(emitter);
+        task.cleanup(emitter);
+        assert(task.state() == InputSequenceState::Aborted && !task.hasHeldInput());
+        assert(task.completed() == 0);
+    }
+    for (uint64_t next : {9u, 12u}) {
+        InputSequence task({key(10, {{0, 5}})});
+        Emitter emitter;
+        tick(task, emitter, 10);
+        task.beforeTick(next, emitter);
+        assert(task.state() == InputSequenceState::Aborted && task.ticks() == 1);
         assert((emitter.events == std::vector<std::string>{"+10", "-10"}));
     }
+    InputSequence incomplete({key(10, {{0, 1}})});
+    Emitter emitter;
+    incomplete.beforeTick(10, emitter);
+    incomplete.beforeTick(11, emitter);
+    assert(incomplete.state() == InputSequenceState::Aborted && incomplete.ticks() == 0);
 }
 
-static void validationPrecedesReplacement() {
-    for (const std::vector<InputStep> invalid :
-         {std::vector<InputStep>{{0, {}, {}}}, std::vector<InputStep>{{1, {w, w}, {}}},
-          std::vector<InputStep>{{1, {{static_cast<InputDevice>(9), 1}}, {}}},
-          std::vector<InputStep>{{1, {left}, InputPosition{-1, 0}}}}) {
+static void validationAndProjection() {
+    for (auto entry : std::vector<InputEntry>{key(0, {{0, 1}}),
+                                              key(1, {}),
+                                              key(1, {{2, 1}}),
+
+                                              {InputKind::Motion, 0, {{0, 1}}, false, false, {-1, 0}, {0, 0}},
+                                              {InputKind::Motion, 0, {{0, 1}}, true, true, {0, 0}, {1, 1}},
+                                              {InputKind::Motion, 0, {{0, 1}}, false, false, {0, 0}, {5, 0}, 1}}) {
         bool rejected = false;
         try {
-            InputSequence::validate(invalid);
+            InputSequence::validate({entry});
         } catch (const std::invalid_argument &) {
             rejected = true;
         }
         assert(rejected);
     }
     InputSequence empty({});
-    assert(empty.state() == InputSequenceState::Succeeded && empty.ticks() == 0);
-}
-
-static void incompleteEvaluationNeverAdvancesTheSequence() {
-    InputSequence sequence({{1, {w}, {}}, {1, {d}, {}}});
-    Emitter emitter;
-    sequence.beforeTick(10, emitter);
-    sequence.beforeTick(11, emitter);
-    assert(sequence.state() == InputSequenceState::Aborted);
-    assert(sequence.ticks() == 0 && !sequence.hasHeldInput());
-    assert((emitter.events == std::vector<std::string>{"+10", "-10"}));
-}
-
-static void lifecycleCancellationDuringDispatchStopsFurtherDowns() {
-    struct CancellingEmitter : Emitter {
-        InputSequence *task{};
-        bool onMove{}, onUp{};
-
-        void move(InputPosition position) override {
-            Emitter::move(position);
-            if (onMove)
-                task->cancel("World changed while moving");
-        }
-
-        void button(InputButton button, bool down) override {
-            Emitter::button(button, down);
-            if (!onMove && down != onUp)
-                task->cancel("World changed during a button event");
-        }
-    };
-
-    for (unsigned phase = 0; phase < 3; ++phase) {
-        InputSequence sequence({{1, {w, d}, InputPosition{12, 34}}, {1, {left}, {}}});
-        CancellingEmitter emitter;
-        emitter.task = &sequence;
-        emitter.onMove = phase == 0;
-        emitter.onUp = phase == 2;
-        sequence.beforeTick(10, emitter);
-        if (phase == 2) {
-            sequence.afterTick(10);
-            sequence.beforeTick(11, emitter);
-        }
-        assert(sequence.state() == InputSequenceState::Aborted && !sequence.hasHeldInput());
-        const std::vector<std::string> expected[] = {
-            {"move:12,34"}, {"move:12,34", "+10", "-10"}, {"move:12,34", "+10", "+20", "-20", "-10"}};
-        assert(emitter.events == expected[phase]);
+    assert(empty.state() == InputSequenceState::Succeeded);
+    auto map = [](int32_t x, int32_t y) { return InputPoint{-5 + double(x) / 4, -10 + double(y) / 8}; };
+    const auto pixel = projectInputWorldPoint({-1.5, -2.5}, 100, 100, map);
+    assert(pixel.x == 14 && pixel.y == 60);
+    const auto nearest = projectInputWorldPoint({-1.4, -2.45}, 100, 100, map);
+    assert(nearest.x == 14 && nearest.y == 60);
+    bool rejected = false;
+    try {
+        projectInputWorldPoint({-100, 0}, 100, 100, map);
+    } catch (const std::out_of_range &) {
+        rejected = true;
     }
+    assert(rejected);
 }
 
 int main() {
-    motionPreservesHeldButtonsAndDistinctTicks();
-    wheelIsAnImpulseAndIsNeverReplayed();
-    adjacentStepsAndDistinctTicks();
-    cancellationDoesNotNeedAnotherTick();
-    errorsRetainCleanupOwnership();
-    clockDiscontinuityAbortsWithoutAnotherDown();
-    validationPrecedesReplacement();
-    incompleteEvaluationNeverAdvancesTheSequence();
-    lifecycleCancellationDuringDispatchStopsFurtherDowns();
+    overlapsAndInclusiveEndpoints();
+    draggingAndRotation();
+    dwellAndParallelPointers();
+    cancellationAndFailures();
+    validationAndProjection();
 }

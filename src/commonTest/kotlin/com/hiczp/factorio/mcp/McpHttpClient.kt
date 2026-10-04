@@ -5,6 +5,7 @@ import io.ktor.client.engine.cio.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
+import io.ktor.network.sockets.InetSocketAddress
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.job
@@ -14,13 +15,18 @@ import kotlinx.serialization.json.*
 /** Test requests use the SDK's standard Streamable HTTP endpoint. */
 internal class McpHttpClient(private val url: String) {
     init {
-        require(Url(url).protocol == URLProtocol.HTTP) { "Acceptance tests require an HTTP endpoint" }
+        require(Url(url).protocol == URLProtocol.HTTP) {
+            "Acceptance tests require an HTTP endpoint"
+        }
     }
 
-    private val client = HttpClient(CIO) {
-        // The test's coroutine watchdog owns its deadline, including long attachment metadata reads.
-        engine { requestTimeout = 0 }
-    }
+    private val address = InetSocketAddress(Url(url).host, Url(url).port)
+    private val client =
+        HttpClient(CIO) {
+            // The test's coroutine watchdog owns its deadline, including long attachment metadata
+            // reads.
+            engine { requestTimeout = 0 }
+        }
     private var session: String? = null
     private var sequence = 0
 
@@ -63,25 +69,26 @@ internal class McpHttpClient(private val url: String) {
         notification: Boolean,
         requestId: Int?,
     ): JsonObject {
-        val response =
-            client.post(url) {
-                contentType(ContentType.Application.Json)
-                header(HttpHeaders.Accept, "application/json, text/event-stream")
-                header("MCP-Protocol-Version", "2025-11-25")
-                session?.let { header("Mcp-Session-Id", it) }
-                setBody(
-                    buildJsonObject {
-                        put("jsonrpc", "2.0")
-                        if (!notification) {
-                            sequence =
-                                requestId?.also { require(it > sequence) } ?: sequence + 1
-                            put("id", sequence)
-                        }
-                        put("method", method)
-                        parameters?.let { put("params", it) }
+        val payload =
+            buildJsonObject {
+                    put("jsonrpc", "2.0")
+                    if (!notification) {
+                        sequence = requestId?.also { require(it > sequence) } ?: sequence + 1
+                        put("id", sequence)
                     }
-                        .toString()
-                )
+                    put("method", method)
+                    parameters?.let { put("params", it) }
+                }
+                .toString()
+        val response =
+            withCioTestConnection(address) {
+                client.post(url) {
+                    contentType(ContentType.Application.Json)
+                    header(HttpHeaders.Accept, "application/json, text/event-stream")
+                    header("MCP-Protocol-Version", "2025-11-25")
+                    session?.let { header("Mcp-Session-Id", it) }
+                    setBody(payload)
+                }
             }
         check(response.status.value in 200..299) {
             "HTTP ${response.status}: ${response.bodyAsText()}"
@@ -105,17 +112,25 @@ internal class McpHttpClient(private val url: String) {
         requestId: Int? = null,
     ): JsonObject =
         request(
-            "tools/call",
-            buildJsonObject {
-                put("name", name)
-                put("arguments", arguments)
-            },
-            requestId = requestId,
-        )
+                "tools/call",
+                buildJsonObject {
+                    put("name", name)
+                    put("arguments", arguments)
+                },
+                requestId = requestId,
+            )
             .getValue("result")
             .jsonObject
             .also { result ->
-                val text = result.getValue("content").jsonArray.first().jsonObject.getValue("text").jsonPrimitive.content
+                val text =
+                    result
+                        .getValue("content")
+                        .jsonArray
+                        .first()
+                        .jsonObject
+                        .getValue("text")
+                        .jsonPrimitive
+                        .content
                 check(result.getValue("structuredContent") == Json.parseToJsonElement(text)) {
                     "Tool $name returned inconsistent structured content"
                 }
@@ -124,9 +139,11 @@ internal class McpHttpClient(private val url: String) {
     suspend fun close() {
         try {
             session?.let {
-                client.delete(url) {
-                    header("Mcp-Session-Id", it)
-                    header("MCP-Protocol-Version", "2025-11-25")
+                withCioTestConnection(address) {
+                    client.delete(url) {
+                        header("Mcp-Session-Id", it)
+                        header("MCP-Protocol-Version", "2025-11-25")
+                    }
                 }
             }
         } finally {
@@ -142,7 +159,7 @@ internal class McpHttpClient(private val url: String) {
 internal fun JsonObject.toolValue(): JsonObject {
     check(this["isError"]?.jsonPrimitive?.boolean != true) { toString() }
     return Json.parseToJsonElement(
-        getValue("content").jsonArray.first().jsonObject.getValue("text").jsonPrimitive.content
-    )
+            getValue("content").jsonArray.first().jsonObject.getValue("text").jsonPrimitive.content
+        )
         .jsonObject
 }

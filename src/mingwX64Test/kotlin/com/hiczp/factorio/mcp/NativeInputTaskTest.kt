@@ -3,16 +3,16 @@
 package com.hiczp.factorio.mcp
 
 import com.hiczp.factorio.mcp.nativebridge.FmInputTask
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlinx.cinterop.get
 import kotlinx.cinterop.pointed
 import kotlinx.cinterop.reinterpret
 import kotlinx.cinterop.sizeOf
 import kotlinx.coroutines.runBlocking
 import platform.windows.*
-import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
-import kotlin.test.assertFalse
 
 class NativeInputTaskTest {
     @Test
@@ -20,19 +20,17 @@ class NativeInputTaskTest {
         val request =
             InputSequenceRequest(
                 listOf(
-                    InputOperation(
-                        listOf(
-                            InputControl.Mouse(
-                                "left",
-                                InputPosition(10, 20),
-                                motion =
-                                    listOf(
-                                        InputMotion(2, InputPosition(30, 40)),
-                                        InputMotion(4294967295L, InputPosition(50, 60)),
-                                    ),
-                            )
+                    InputEntry(
+                        InputControl.Pointer(
+                            InputPath(
+                                "world",
+                                InputPoint(-1.5, 20.5),
+                                InputPoint(50.5, 60.5),
+                                true,
+                            ),
+                            true,
                         ),
-                        4294967295L,
+                        listOf(InputInterval(2, MAX_INPUT_TICK)),
                     )
                 ),
                 false,
@@ -52,14 +50,15 @@ class NativeInputTaskTest {
                         )
                     )
                 try {
-                    val row = view.reinterpret<FmInputTask>().pointed.operations[0]
-                    assertEquals(2u, row.motionCount)
-                    assertEquals(2u, row.motion[0].tick)
-                    assertEquals(UInt.MAX_VALUE, row.motion[1].tick)
-                    assertEquals(30, row.motion[0].x)
-                    assertEquals(60, row.motion[1].y)
-                    assertEquals(1u, row.count)
-                    assertEquals(1u, row.buttons[0].device)
+                    val row = view.reinterpret<FmInputTask>().pointed.entries[0]
+                    assertEquals(1u, row.intervalCount)
+                    assertEquals(2u, row.intervals[0].first)
+                    assertEquals(UInt.MAX_VALUE, row.intervals[0].last)
+                    assertEquals(-1.5, row.fromX)
+                    assertEquals(60.5, row.toY)
+                    assertEquals(1u, row.space)
+                    assertEquals(1u, row.tileCenters)
+                    assertEquals(3u, row.kind)
                 } finally {
                     UnmapViewOfFile(view)
                 }
@@ -72,26 +71,21 @@ class NativeInputTaskTest {
     }
 
     @Test
-    fun typedMotionCannotOverrunTheWireOrBypassOrdering() {
-        for (motion in
-        listOf(
-            List(65) { InputMotion(it + 2L, InputPosition(0, 0)) },
-            listOf(InputMotion(1, InputPosition(0, 0))),
-            listOf(InputMotion(2, InputPosition(-1, 0))),
-        )) {
+    fun typedIntervalsCannotOverrunTheWireOrBypassOrdering() {
+        for (intervals in
+            listOf(
+                List(65) { InputInterval(it.toLong(), it.toLong()) },
+                listOf(InputInterval(2, 1)),
+                listOf(InputInterval(0, 5), InputInterval(6, MAX_INPUT_TICK + 1)),
+            )) {
             assertFailsWith<IllegalArgumentException> {
                 NativeInputTask(
                     GetCurrentProcessId(),
                     InputSequenceRequest(
-                        listOf(
-                            InputOperation(
-                                listOf(InputControl.Mouse(null, null, motion = motion)),
-                                100,
-                            )
-                        ),
+                        listOf(InputEntry(InputControl.Keyboard("W"), intervals)),
                         false,
                     ),
-                    { emptyList() },
+                    { listOf(26u) },
                     { false },
                 )
             }

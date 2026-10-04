@@ -1,38 +1,25 @@
 #include "resident_input.h"
 #include "protocol.h"
+#include "viewport.h"
 #include <cstring>
 #include <utility>
 
 namespace {
-std::vector<InputStep> readSteps(const Symbols &symbols, const FmInputTask &wire) {
-    require(wire.count <= FM_MAX_INPUT_STEPS && wire.stopPrevious <= 1, "Invalid input task bounds");
-    std::vector<InputStep> steps;
-    steps.reserve(wire.count);
+std::vector<InputEntry> readEntries(const Symbols &symbols, const FmInputTask &wire) {
+    require(wire.count <= FM_INPUT_ENTRIES && wire.stopPrevious <= 1, "Invalid input task bounds");
+    auto entries = InputSequence::decode(wire.entries, wire.count);
     constexpr FmSymbol mouseSymbols[]{MouseLeft, MouseRight, MouseMiddle, Mouse4, Mouse5};
-    for (uint32_t index = 0; index < wire.count; ++index) {
-        const auto &row = wire.operations[index];
-        require(row.count <= FM_MAX_INPUT_BUTTONS && row.hasPosition <= 1, "Invalid input operation bounds");
-        InputStep step{row.ticks, {}, {}, row.wheel};
-        require(row.motionCount <= FM_MAX_INPUT_MOTION, "Mouse motion exceeds supported bound");
-        for (uint32_t i = 0; i < row.motionCount; ++i)
-            step.motion.push_back({row.motion[i].tick, {row.motion[i].x, row.motion[i].y}});
-        if (row.hasPosition)
-            step.position = InputPosition{row.x, row.y};
-        for (uint32_t i = 0; i < row.count; ++i) {
-            auto code = row.buttons[i].code;
-            const auto device = static_cast<InputDevice>(row.buttons[i].device);
-            if (device == InputDevice::Mouse) {
-                require(code >= 1 && code <= 5, "Invalid logical mouse button");
-                const auto address = symbols.address[mouseSymbols[code - 1]];
-                require(address, "Mouse button adapter is unavailable");
-                memcpy(&code, reinterpret_cast<const void *>(address + symbols.controls.mouseValue), sizeof(code));
-            }
-            step.buttons.push_back({device, code});
+    for (auto &entry : entries) {
+        if (entry.kind == InputKind::MouseButton) {
+            require(entry.code >= 1 && entry.code <= 5, "Invalid logical mouse button");
+            const auto address = symbols.address[mouseSymbols[entry.code - 1]];
+            require(address, "Mouse button adapter is unavailable");
+            memcpy(&entry.code, reinterpret_cast<const void *>(address + symbols.controls.mouseValue),
+                   sizeof(entry.code));
         }
-        steps.push_back(std::move(step));
     }
-    InputSequence::validate(steps);
-    return steps;
+    InputSequence::validate(entries);
+    return entries;
 }
 } // namespace
 
@@ -74,6 +61,12 @@ class ResidentInput::Emitter final : public InputEmitter {
         GameInputEvents(symbols.timedInput.events, functions, runtime.task->buttons, gameInputState(symbols))
             .move(position, [](void *owner) { static_cast<Emitter *>(owner)->checkWorld(); }, this);
         checkWorld();
+    }
+
+    void moveWorld(InputPoint point) override {
+        checkWorld();
+        const auto context = gameInputContext(symbols);
+        move(projectWorldInput(symbols, context.player, point));
     }
 
     void button(InputButton button, bool down) override {
@@ -129,7 +122,7 @@ void ResidentInput::publish() {
     if (!task)
         return;
     const auto &sequence = *task->sequence;
-    InterlockedExchange(&task->wire->completedOperations, static_cast<LONG>(sequence.completed()));
+    InterlockedExchange(&task->wire->completedEntries, static_cast<LONG>(sequence.completed()));
     InterlockedExchange64(&task->wire->evaluatedTicks, static_cast<LONG64>(sequence.ticks()));
     const auto state = sequence.state();
     if (state == InputSequenceState::Succeeded || state == InputSequenceState::Aborted) {
@@ -169,7 +162,7 @@ void ResidentInput::admit(const Symbols &symbols, const char *name, size_t capac
     require(candidate->wire, "Cannot map input task");
     auto &wire = *candidate->wire;
     require(fm_input_state(&wire) == 0, "Input task is already admitted");
-    candidate->sequence = std::make_unique<InputSequence>(readSteps(symbols, wire));
+    candidate->sequence = std::make_unique<InputSequence>(readEntries(symbols, wire));
     candidate->owner = OpenProcess(SYNCHRONIZE, FALSE, wire.ownerPid);
     require(candidate->owner && WaitForSingleObject(candidate->owner, 0) == WAIT_TIMEOUT, "Input owner is absent");
     require(!fm_input_state(&wire) && !wire.cancel, "Input cancelled before admission");
@@ -227,7 +220,7 @@ void ResidentInput::evaluate(const Symbols &symbols, void *receiver, void (*orig
     // A dispatched menu action can unload the receiver reentrantly. Never call a destroyed source.
     if (worldEpoch.load() == epoch) {
         original(receiver);
-        task->sequence->afterTick(context.tick);
+        task->sequence->afterTick(context.tick, emitter);
     } else {
         cancel("Input world was unloaded during dispatch");
         task->sequence->cleanup(emitter);

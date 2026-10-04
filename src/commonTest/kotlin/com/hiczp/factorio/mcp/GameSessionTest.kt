@@ -1,11 +1,11 @@
 package com.hiczp.factorio.mcp
 
+import kotlin.test.*
 import kotlinx.coroutines.*
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonPrimitive
-import kotlin.test.*
 
 class GameSessionTest {
     private class Connection : GameConnection {
@@ -102,7 +102,10 @@ class GameSessionTest {
     }
 
     private val inputRequest =
-        InputSequenceRequest(listOf(InputOperation(listOf(InputControl.Keyboard("W")), 2)), false)
+        InputSequenceRequest(
+            listOf(InputEntry(InputControl.Keyboard("W"), listOf(InputInterval(0, 1)))),
+            false,
+        )
 
     @Test
     fun statusReportsExitDiscoveredDuringNativeObservation() = runBlocking {
@@ -131,7 +134,8 @@ class GameSessionTest {
             connection.failClose = exits
             val failure = assertFailsWith<IllegalStateException> { session.status() }
             assertEquals("Native operation failed", failure.message)
-            if (exits) assertEquals("Local cleanup failed", failure.suppressedExceptions.single().message)
+            if (exits)
+                assertEquals("Local cleanup failed", failure.suppressedExceptions.single().message)
             else assertTrue(failure.suppressedExceptions.isEmpty())
             assertFalse(connection.closed)
             connection.failClose = false
@@ -272,7 +276,7 @@ class GameSessionTest {
             session.detach()
             val result = input.await()
             assertEquals("aborted", result["status"]!!.jsonPrimitive.content)
-            assertEquals(1, result["completed_operations"]!!.jsonPrimitive.int)
+            assertEquals(1, result["completed_entries"]!!.jsonPrimitive.int)
             assertEquals(3, result["evaluated_ticks"]!!.jsonPrimitive.int)
             assertTrue(connection.inputs.single().closed && connection.closed)
             session.close()
@@ -378,10 +382,11 @@ class GameSessionTest {
     @Test
     fun screenshotRejectsConcurrentCaptureAndCancellationWaitsForCleanup() = runBlocking {
         withTimeout(1000) {
-            val connection = Connection().apply {
-                blocked = true
-                cleanupGate = CompletableDeferred()
-            }
+            val connection =
+                Connection().apply {
+                    blocked = true
+                    cleanupGate = CompletableDeferred()
+                }
             val session = GameSession { connection }
             session.attach(12)
             supervisorScope {
@@ -389,9 +394,8 @@ class GameSessionTest {
                 connection.started.await()
                 assertFailsWith<IllegalStateException> { session.screenshot() }
                 assertEquals(1, connection.calls.count { it == 6 })
-                val cancellation = async(start = CoroutineStart.UNDISPATCHED) {
-                    session.cancelScreenshot()
-                }
+                val cancellation =
+                    async(start = CoroutineStart.UNDISPATCHED) { session.cancelScreenshot() }
                 assertFalse(cancellation.isCompleted)
                 connection.cleanupGate!!.complete(Unit)
                 assertTrue(cancellation.await().getValue("cancelled").jsonPrimitive.boolean)
@@ -415,9 +419,10 @@ class GameSessionTest {
             supervisorScope {
                 val read = async { runCatching { session.read(10, false) } }
                 connection.started.await()
-                val capture = async(start = CoroutineStart.UNDISPATCHED) {
-                    runCatching { session.screenshot() }
-                }
+                val capture =
+                    async(start = CoroutineStart.UNDISPATCHED) {
+                        runCatching { session.screenshot() }
+                    }
                 session.cancelScreenshot()
                 assertIs<CancellationException>(capture.await().exceptionOrNull())
                 assertFalse(6 in connection.calls)

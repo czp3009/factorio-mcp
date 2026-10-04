@@ -316,138 +316,116 @@ Use the effective binding's type, name and modifiers when constructing input, re
 discovery. `ids` and `search` can be combined and both filters must match. Missing requested IDs appear in
 `missing_ids` only for a complete snapshot; incomplete discovery uses `unobserved_ids` instead.
 
-## Finite input
+## Input timelines
 
-`input` accepts `operations` and optional `stop_previous` (default `false`). Each operation contains `controls` and
-optional `ticks` (default 1). Controls in a combination press together, remain active for the requested local input
-evaluations, and release before the next combination starts. Shared keys release and press again at a step boundary.
-Use `input_bindings` to discover the currently configured keys for an intended control.
+`input` accepts `timeline` and optional `stop_previous` (default `false`). Each array entry is an independent action
+with inclusive relative ticks. Use `input_bindings` for physical key names and add modifier keys as separate entries.
+Tick `0` is the first eligible local-player input evaluation after the task is admitted, meaning start as soon as
+possible. It is not the time the agent sends the request, a wall-clock deadline or an authoritative server tick.
 
 ```json
 {
-  "operations": [
+  "timeline": [
     {
-      "controls": [
-        {
-          "device": "keyboard",
-          "key": "W"
-        }
-      ],
-      "ticks": 2
+      "device": "mouse",
+      "motion": {
+        "space": "viewport",
+        "from": {"x": 100, "y": 200},
+        "to": {"x": 200, "y": 200}
+      },
+      "tick": "0-100"
     },
+    {"device": "mouse", "button": "left", "tick": "0-200"},
+    {"device": "keyboard", "key": "R", "tick": "100"},
     {
-      "controls": [],
-      "ticks": 1
-    },
-    {
-      "controls": [
-        {
-          "device": "mouse",
-          "button": "left",
-          "position": {
-            "space": "viewport",
-            "x": 800,
-            "y": 500
-          }
-        }
-      ]
+      "device": "mouse",
+      "motion": {
+        "space": "viewport",
+        "from": {"x": 200, "y": 200},
+        "to": {"x": 200, "y": 300}
+      },
+      "tick": "101-200"
     }
   ]
 }
 ```
 
-Keyboard names use the uppercase vocabulary returned by `input_bindings`. Mouse buttons are `left`, `right`, `middle`,
-`button_4` and `button_5`. A mouse control may specify just a button or just a position; positions use nonnegative
-integer client-content pixels. Choose coordinates within the current game viewport; the tool does not clamp them
-to its bounds. All positions in one combination must agree. This changes the game's input
-cursor, including its entry into the client, without moving the OS pointer or activating the game.
-Moving and clicking in one combination does not guarantee that UI hover processing has selected the new target.
-Use an explicit position-only combination before a mouse click when needed, or select the widget with `ui_action`.
-MCP does not insert extra ticks or retry a click based on an inferred UI outcome.
-Mouse input can target world content or UI.
+This holds the left button while moving along two paths, with a one-tick R press between them. The first motion
+entry precedes the button entry so the initial pointer position is dispatched before the press. Within each tick,
+entries dispatch in array order, with intervals in their supplied order; the last active pointer position wins.
+All scheduled presses/moves run before the local input evaluation, and interval-ending buttons release after it.
 
-To move while holding buttons, add `motion` to one mouse control in the combination. Each point has a one-based
-`tick` and a viewport `position`. A path contains 1–64 points with strictly increasing ticks from 2 through the
-operation's `ticks`. The initial `position`, if supplied, is sent before buttons go down; scheduled points are sent
-while those buttons remain held. No interpolation or intermediate positions are added. For example:
+`tick: "0-100"` includes 101 evaluations. A single value such as `"100"` occupies one evaluation. Multiple segments
+such as `"100-200,201,300-400"` stay separate; each interval owns and closes its hold, including adjacent intervals.
+Each entry permits at most 64 intervals, with endpoints in `0..4294967295`. Intervals may overlap or repeat, and
+their supplied order is preserved. Intervals within an entry and different entries may repeat the same physical
+key or button. A shared button stays pressed until its last active owner ends; overlapping holds do not generate
+extra down events. When no other holder remains, adjacent intervals release and press again.
+Gaps before or between actions still advance the timeline.
+
+Each entry specifies exactly one action:
+
+- Keyboard `key`: an uppercase physical key name from `input_bindings`.
+- Mouse `button`: `left`, `right`, `middle`, `button_4` or `button_5`.
+- Mouse `position`: `{space, x, y}` applied on each active tick.
+- Mouse `motion`: `{space, from: {x, y}, to: {x, y}}`.
+- Mouse `wheel`: `up` or `down`, sent once at the start of each interval, with no release event.
+
+For timed motion, each interval restarts the straight path, including both endpoints. A one-tick interval uses `to`.
+Viewport paths round interpolated positions to the nearest integer pixel, with half ties toward the greater value.
+World paths preserve fractional coordinates unless `snap: "tile_center"` is supplied inside `motion` or `position`.
+Snapping uses `floor(x)+0.5, floor(y)+0.5`, including for negative coordinates, and snapped motion visits grid centers.
+World coordinates use the same tile units as ordinary positions returned by `world_query` and `world_overview`.
+They refer to the currently viewed surface, which can differ from the character's physical surface.
+The current game view projects each world position to the nearest representable viewport pixel on that tick;
+offscreen world positions fail and release held input. The tool does not move the camera.
+
+For long paths with point-by-point dwell, replace `tick` with `per_point_ticks` and optional `start_tick` (default 0):
 
 ```json
 {
-  "operations": [
+  "timeline": [
     {
-      "controls": [
-        {
-          "device": "mouse",
-          "position": {
-            "space": "viewport",
-            "x": 800,
-            "y": 500
-          }
-        }
-      ],
-      "ticks": 2
+      "device": "mouse",
+      "motion": {
+        "space": "world",
+        "snap": "tile_center",
+        "from": {"x": 10, "y": 20},
+        "to": {"x": 20, "y": 20}
+      },
+      "start_tick": 0,
+      "per_point_ticks": 1
     },
-    {
-      "controls": [
-        {
-          "device": "mouse",
-          "button": "left",
-          "motion": [
-            {
-              "tick": 3,
-              "position": {
-                "space": "viewport",
-                "x": 850,
-                "y": 500
-              }
-            },
-            {
-              "tick": 6,
-              "position": {
-                "space": "viewport",
-                "x": 900,
-                "y": 500
-              }
-            }
-          ]
-        }
-      ],
-      "ticks": 9
-    }
+    {"device": "mouse", "button": "left", "tick": "0-10"}
   ]
 }
 ```
 
-Cancellation releases held buttons and discards remaining motion points. A completed path only reports dispatched
-input; it does not assert that a window moved or that buildings were placed. Prefer a slider's adjacent text field
-when one exists. Mouse dragging is a fallback and depends on the current cursor target and game state.
+The generated path has `ceil(max(abs(dx),abs(dy)))+1` uniformly spaced points, including endpoints, after any
+endpoint snapping. Viewport points are rounded to pixels; tile-center paths are snapped to centers. The example
+visits 11 centers from `(10.5,20.5)` to `(20.5,20.5)` and occupies ticks `0-10`. Each point is held for the specified
+number of evaluations. This mode is available only for motion and cannot be combined with `tick`; its final tick
+must fit the same endpoint bound. Dwell counts client input evaluations, without guaranteeing placement, selection
+or server effects. Use several entries for complex paths or varying speeds.
 
-A mouse control can also include `wheel: "up"` or `wheel: "down"`, with an optional position and button. At most one
-wheel event is allowed per combination. It is sent once, after all button downs and before the first input evaluation;
-`ticks` does not repeat it. It has no release event. To scroll several times, use several operations. The game's
-current bindings, modifiers, UI routing and controller decide whether it scrolls a widget, zooms the world or has
-another effect. This is a vertical wheel gesture, not a request for a specific amount of scrolling or zoom.
-UI consumption of wheel input is not reliable in all tested states. Prefer `ui_action` selectors for UI choices,
-including offscreen options, rather than relying on wheel input to reveal them.
+Viewport coordinates are nonnegative integer game-content pixels from the top-left, not desktop pixels. Choose
+positions within the viewport; viewport coordinates are not clamped. Input changes the game's cursor without OS
+input or focus. For UI actions, a same-tick move and press can precede hover processing; use an earlier position
+entry or prefer `ui_action`. Wheel routing over UI is not reliable in all tested states.
 
-A request permits at most 256 operations, each with at most eight controls and 1 through 4,294,967,295 ticks.
-Empty controls wait. Empty operations complete immediately; with `stop_previous: true`, they cancel the previous input
-without starting another sequence. Nonempty sequences require a running world. `ui_action` remains available for
-frontend key gestures in menus and paused games.
+A request permits at most 256 entries. Empty `timeline` completes immediately; with `stop_previous: true`, it cancels
+and cleans up the previous task without starting another. Nonempty timelines require a running world.
+Only one task may run in the attached game; busy calls fail unless `stop_previous` is true. Replacement validates
+arguments and context before aborting the old task. Other observation and UI tools can run while input is pending.
+Pause, unload, detach or cancellation stops further work and releases MCP-held buttons cooperatively. Original
+player-held state and concurrent player operation are outside the contract.
 
-Only one input task may run in the attached game. A new call fails while busy unless it explicitly sets
-`stop_previous: true`. Replacement validates its arguments and context before aborting the old task. Other observation
-and UI tools can run while input is pending. Pause, world unload, detach and explicit cancellation stop further presses
-and release held controls cooperatively; a view or ordinary UI change alone does not cancel the sequence.
-
-The result contains `status` (`completed` or `aborted`), `completed_operations`, `evaluated_ticks`, and an abort`reason`
-when present. For example, `{"status":"completed","completed_operations":1,"evaluated_ticks":2}` reports one
-finished two-tick combination. These describe dispatch progress, not a guaranteed gameplay outcome. In particular,
-multiplayer latency
-adjustments can shift or combine authoritative effects even when local evaluation ticks are consecutive. Observe world
-state before relying on a result. A caller explicitly cancelled through MCP may no longer receive its tool response;
-detach and replacement return an abort result to a still-live original caller.
-If input cleanup reports an error, use `detach` to retry cleanup before starting further work.
+Results contain `status` (`completed` or `aborted`), `completed_entries`, `evaluated_ticks` and an optional abort
+`reason`. An entry is complete after its last interval and required release. Evaluations include timeline gaps.
+These describe client execution and cleanup, never server acceptance or gameplay fulfillment. Client prediction,
+rollback and network latency can alter observed effects. Explicit MCP request cancellation may suppress that
+caller's response; detach and replacement return abort progress to a still-live original caller. If cleanup reports
+an error, use `detach` to retry it before starting further work.
 
 ## World overviews
 

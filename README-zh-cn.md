@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README-zh-cn.md)
 
-factorio-mcp 是一个 MCP 服务, 让 AI agent 读取 Factorio 世界数据, 执行有限时长的键鼠操作,
+factorio-mcp 是一个 MCP 服务, 让 AI agent 读取 Factorio 世界数据, 执行键鼠时间线,
 并查看和操作游戏界面, 包括菜单和模组窗口. **无需安装模组, 不依赖 RCON, 也不需要游戏内管理员权限.**
 它提供通用接口, 理论上可支持任意模组, 也可用于已连接多人服务器的游戏客户端.
 
@@ -143,7 +143,7 @@ Windows 上应将与 `factorio.exe` 匹配的 `factorio.pdb` 保留在同一目�
 | `ui_action` | 点击控件, 替换文本或向控件发送按键. |
 | `screenshot` | 获取包含游戏画面和 UI 的 PNG 截图. |
 | `input_bindings` | 查询游戏本体及模组的 control ID 对应的当前键鼠绑定. |
-| `input` | 执行有限时长的键鼠组合操作, 包括按住鼠标按钮时移动鼠标. |
+| `input` | 执行并行的键鼠时间线, 支持视口像素和世界坐标路径. |
 | `world_query` | 查询世界对象及其相关属性, 以及玩家, 物品栏和原型目录. |
 | `world_overview` | 按游戏原有属性汇总区域内的数据, 或筛选实体并读取指定的详细信息. |
 | `chat_read` | 读取本地保留的聊天消息和通知, 支持通过 offset 增量查询或等待新消息. |

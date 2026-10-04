@@ -4,6 +4,11 @@ package com.hiczp.factorio.mcp.acceptance
 
 import com.hiczp.factorio.mcp.McpHttpClient
 import com.hiczp.factorio.mcp.toolValue
+import kotlin.math.abs
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 import kotlinx.cinterop.toKString
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
@@ -14,11 +19,6 @@ import kotlinx.io.files.SystemFileSystem
 import kotlinx.io.readString
 import kotlinx.serialization.json.*
 import platform.posix.getenv
-import kotlin.math.abs
-import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertFalse
-import kotlin.test.assertTrue
 
 /** Uses only the explicitly configured local fixture, with the ordinary zoom bindings. */
 class WheelInputAcceptanceTest {
@@ -63,25 +63,21 @@ class WheelInputAcceptanceTest {
                     .tool(
                         "input",
                         buildJsonObject {
-                            putJsonArray("operations") {
-                                add(
-                                    buildJsonObject {
-                                        put("ticks", ticks)
-                                        putJsonArray("controls") {
-                                            add(
-                                                buildJsonObject {
-                                                    put("device", "mouse")
-                                                    put("wheel", direction)
-                                                    putJsonObject("position") {
-                                                        put("space", "viewport")
-                                                        put("x", x)
-                                                        put("y", y)
-                                                    }
-                                                }
-                                            )
-                                        }
+                            putJsonArray("timeline") {
+                                addJsonObject {
+                                    put("device", "mouse")
+                                    putJsonObject("position") {
+                                        put("space", "viewport")
+                                        put("x", x)
+                                        put("y", y)
                                     }
-                                )
+                                    put("tick", "0-${ticks - 1}")
+                                }
+                                addJsonObject {
+                                    put("device", "mouse")
+                                    put("wheel", direction)
+                                    put("tick", "0-${ticks - 1}")
+                                }
                             }
                         },
                     )

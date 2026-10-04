@@ -8,10 +8,12 @@
 // outside this adapter. Slots survive a throwing down/up until their native release obligation is resolved.
 class PumpInputEmitter final : public InputEmitter {
   public:
+    using Projector = InputPosition (*)(InputPoint, void *);
     PumpInputEmitter(EventPump &pump, const KeyboardPumpConfig &keyboard, const PointerPumpConfig &pointer,
                      EventPump::Pump entry, void *context, PointerPump::Guard guard, void *guardContext,
-                     pid_t evaluationThread = 0);
+                     pid_t evaluationThread = 0, Projector projector = nullptr, void *projectionContext = nullptr);
     void move(InputPosition position) override;
+    void moveWorld(InputPoint position) override;
     void button(InputButton button, bool down) override;
     void wheel(int32_t direction) override;
     bool owned() const;
@@ -29,6 +31,8 @@ class PumpInputEmitter final : public InputEmitter {
     EventPump::Pump entry_;
     void *context_;
     const pid_t evaluationThread_;
+    Projector projector_;
+    void *projectionContext_;
     PointerPump motion_;
-    std::array<Slot, 8> slots_;
+    std::array<Slot, FM_INPUT_ENTRIES> slots_;
 };

@@ -266,23 +266,21 @@ class TrainUiAcceptanceTest {
                     .tool(
                         "input",
                         buildJsonObject {
-                            putJsonArray("operations") {
+                            putJsonArray("timeline") {
                                 addJsonObject {
-                                    put("ticks", 32)
-                                    putJsonArray("controls") {
-                                        addJsonObject {
-                                            put("device", "mouse")
-                                            putJsonObject("position") {
-                                                put("space", "viewport")
-                                                put("x", pixel("x", "width"))
-                                                put("y", pixel("y", "height"))
-                                            }
-                                        }
+                                    put("device", "mouse")
+                                    putJsonObject("position") {
+                                        put("space", "viewport")
+                                        put("x", pixel("x", "width"))
+                                        put("y", pixel("y", "height"))
                                     }
+                                    put("tick", "0-39")
                                 }
-                                addJsonObject {
-                                    put("ticks", 8)
-                                    put("controls", JsonArray(controls))
+                                controls.forEach { control ->
+                                    addJsonObject {
+                                        control.forEach { (name, value) -> put(name, value) }
+                                        put("tick", "32-39")
+                                    }
                                 }
                             }
                         },

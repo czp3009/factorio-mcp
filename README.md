@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README-zh-cn.md)
 
-An MCP server that lets an AI agent read world data, send finite input sequences, and inspect and operate the UI of
+An MCP server that lets an AI agent read world data, execute keyboard/mouse timelines, and inspect and operate the UI of
 a running Factorio client, including menus and mod windows. **No mod installation, RCON or in-game administrator
 privileges are required.** Its generic interface can support any mod in principle and can be used with a client
 connected to a multiplayer server.
@@ -147,7 +147,7 @@ See [development instructions](https://github.com/czp3009/factorio-mcp/blob/mast
 | `ui_action`      | Click a widget, replace text or press a key.                                     |
 | `screenshot`     | Get a PNG of the rendered game and UI.                                           |
 | `input_bindings` | Map native/mod control IDs to current keyboard/mouse bindings.                   |
-| `input`          | Execute finite keyboard/mouse combinations, including held mouse motion.         |
+| `input`          | Execute concurrent keyboard/mouse timelines with viewport or world motion.         |
 | `world_query`    | Inspect world objects and related properties, players, inventories and catalogs. |
 | `world_overview` | Summarize an area by native properties or read filtered entities with selected details. |
 | `chat_read`      | Read retained local chat and notifications, with offsets and optional waiting.   |

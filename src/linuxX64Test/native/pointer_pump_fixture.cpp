@@ -312,14 +312,16 @@ int main() {
     {
         Fixture f;
         PumpInputEmitter emitter(f.pump, f.keyboard, f.pointer, Fixture::run, &f, Fixture::guard, &f);
-        InputSequence sequence(
-            {{2, {{InputDevice::Keyboard, 42}, {InputDevice::Mouse, 5}}, InputPosition{51, 79}, 1, {}}});
+        InputSequence sequence({{InputKind::Position, 0, {{0, 1}}, false, false, {51, 79}, {51, 79}},
+                                {InputKind::Keyboard, 42, {{0, 1}}},
+                                {InputKind::MouseButton, 5, {{0, 1}}},
+                                {InputKind::Wheel, 1, {{0, 1}}}});
         sequence.beforeTick(100, emitter);
-        sequence.afterTick(100);
+        sequence.afterTick(100, emitter);
         assert(sequence.hasHeldInput() && emitter.owned() && f.downs == 2 && f.wheels == 1 && f.enters == 1 &&
                f.moves == 1);
         sequence.beforeTick(101, emitter);
-        sequence.afterTick(101);
+        sequence.afterTick(101, emitter);
         sequence.beforeTick(102, emitter);
         assert(sequence.state() == InputSequenceState::Succeeded && !emitter.owned() && f.ups == 2 &&
                sequence.ticks() == 2);
@@ -327,9 +329,11 @@ int main() {
     for (const InputButton button : {InputButton{InputDevice::Keyboard, 42}, InputButton{InputDevice::Mouse, 4}}) {
         Fixture f;
         PumpInputEmitter emitter(f.pump, f.keyboard, f.pointer, Fixture::run, &f, Fixture::guard, &f);
-        InputSequence sequence({{10, {button}, {}, 0, {}}});
+        InputSequence sequence({{button.device == InputDevice::Keyboard ? InputKind::Keyboard : InputKind::MouseButton,
+                                 button.code,
+                                 {{0, 9}}}});
         sequence.beforeTick(100, emitter);
-        sequence.afterTick(100);
+        sequence.afterTick(100, emitter);
         sequence.cancel("fixture caller cancelled");
         failClock = true;
         sequence.cleanup(emitter);
@@ -345,10 +349,10 @@ int main() {
         Fixture f;
         f.state.held = f.pointer.state.masks[2];
         PumpInputEmitter emitter(f.pump, f.keyboard, f.pointer, Fixture::run, &f, Fixture::guard, &f);
-        InputSequence sequence({{1, {{InputDevice::Mouse, 3}}, {}, 0, {}}});
+        InputSequence sequence({{InputKind::MouseButton, 3, {{0, 0}}}});
         sequence.beforeTick(1, emitter);
         assert(emitter.owned() && f.downs == 1);
-        sequence.afterTick(1);
+        sequence.afterTick(1, emitter);
         sequence.beforeTick(2, emitter);
         assert(sequence.state() == InputSequenceState::Succeeded && !emitter.owned() && f.ups == 1);
         assert(f.state.held == 0);

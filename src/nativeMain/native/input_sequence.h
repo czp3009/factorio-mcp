@@ -1,6 +1,9 @@
 #pragma once
+#include "input_timeline_wire.h"
+#include <array>
 #include <cstdint>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -16,17 +19,22 @@ struct InputPosition {
     int32_t x, y;
 };
 
-struct InputMotion {
-    uint32_t tick;
-    InputPosition position;
+struct InputPoint {
+    double x, y;
 };
 
-struct InputStep {
-    uint32_t ticks;
-    std::vector<InputButton> buttons;
-    std::optional<InputPosition> position;
-    int32_t wheel{};
-    std::vector<InputMotion> motion;
+struct InputInterval {
+    uint32_t first, last;
+};
+enum class InputKind : uint32_t { Keyboard, MouseButton, Position, Motion, Wheel };
+
+struct InputEntry {
+    InputKind kind;
+    uint32_t code{};
+    std::vector<InputInterval> intervals;
+    bool world{}, tileCenters{};
+    InputPoint from{}, to{};
+    uint32_t perPointTicks{};
 };
 
 // Implemented by the game adapter, or by a fixture. No game object belongs to this interface.
@@ -34,37 +42,51 @@ class InputEmitter {
   public:
     virtual ~InputEmitter() = default;
     virtual void move(InputPosition position) = 0;
+
+    virtual void moveWorld(InputPoint) {
+        throw std::logic_error("World coordinate adapter is unavailable");
+    }
+
     virtual void button(InputButton button, bool down) = 0;
     virtual void wheel(int32_t direction) = 0;
 };
-
 enum class InputSequenceState { Running, Releasing, Succeeded, Aborted };
 
-// One admitted finite task. Call only from mutually exclusive game-owned input/frontend phases.
+// One admitted, bounded timeline. Tick zero is the first eligible local input evaluation.
 class InputSequence {
-    std::vector<InputStep> steps;
-    std::vector<InputButton> held;
-    size_t nextStep{}, completedSteps{};
-    size_t nextMotion{};
-    uint32_t remaining{};
-    uint64_t evaluatedTicks{};
+    struct Cursor {
+        std::array<bool, FM_INPUT_INTERVALS> active{};
+        size_t finished{};
+        bool completed{};
+    };
+
+    struct Held {
+        InputButton button;
+        size_t owners;
+    };
+
+    std::vector<InputEntry> entries;
+    std::vector<Cursor> cursors;
+    std::vector<Held> held;
+    size_t completedEntries{};
+    uint64_t evaluatedTicks{}, lastTick{};
     std::optional<uint64_t> previousTick, preparedTick;
     InputSequenceState stateValue = InputSequenceState::Running;
     std::string reasonValue;
 
     void release(InputEmitter &emitter);
     void fail(const char *message);
+    void acquire(InputButton button, InputEmitter &emitter);
+    void relinquish(InputButton button, InputEmitter &emitter);
 
   public:
-    // Validate before cancelling a previous task when admitting a replacement.
-    static void validate(const std::vector<InputStep> &steps);
-    explicit InputSequence(std::vector<InputStep> steps);
-
+    static void validate(const std::vector<InputEntry> &entries);
+    static std::vector<InputEntry> decode(const FmInputTimelineEntry *rows, uint32_t count);
+    explicit InputSequence(std::vector<InputEntry> entries);
     void beforeTick(uint64_t tick, InputEmitter &emitter);
-    void afterTick(uint64_t tick);
+    void afterTick(uint64_t tick, InputEmitter &emitter);
     void cancel(const char *reason);
     void cleanup(InputEmitter &emitter);
-
     InputSequenceState state() const;
     const std::string &reason() const;
     uint64_t ticks() const;
