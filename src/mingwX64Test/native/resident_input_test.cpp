@@ -14,11 +14,13 @@ struct Event {
     uint32_t button;
     int32_t dw{};
     int32_t dy{};
+    uint16_t modifiers{};
 };
 
 struct State {
     int32_t x{}, y{};
     std::set<uint32_t> held;
+    uint16_t modifiers{};
 } state;
 
 struct Map {
@@ -54,22 +56,22 @@ std::vector<std::set<uint32_t>> samples;
 unsigned mouseLeft = 77;
 
 void *construct(void *out, double time, int type) {
+    assert(time == 1.0);
     *static_cast<Event *>(out) = {time, type, 0, 0, 0, 0};
     return out;
 }
 
-void *destroy(void *event, unsigned flags) {
-    assert(!flags);
-    return event;
-}
+void destroy(void *) {}
 
-uint32_t time() {
-    return 1000;
+uint64_t time() {
+    return 1000000000;
 }
 
 void update(void *object, const void *value) {
     assert(object == &state);
     const auto &event = *static_cast<const Event *>(value);
+    if (event.type == 1 || event.type == 2)
+        state.modifiers = event.modifiers;
     if (event.type == 1 || event.type == 4)
         state.held.insert(event.type == 1 ? event.key : event.button);
     if (event.type == 2 || event.type == 5)
@@ -120,7 +122,7 @@ Symbols symbols() {
     result.address[LocalPlayer] = reinterpret_cast<uintptr_t>(getPlayer);
     result.address[EventConstructor] = reinterpret_cast<uintptr_t>(construct);
     result.address[EventDestructor] = reinterpret_cast<uintptr_t>(destroy);
-    result.address[SdlTicks] = reinterpret_cast<uintptr_t>(time);
+    result.address[SdlTicksNS] = reinterpret_cast<uintptr_t>(time);
     result.address[InputStateUpdate] = reinterpret_cast<uintptr_t>(update);
     result.address[ProcessInputEvent] = reinterpret_cast<uintptr_t>(process);
     result.address[InputStatePostUpdate] = reinterpret_cast<uintptr_t>(post);
@@ -150,6 +152,8 @@ Symbols symbols() {
                      offsetof(Event, dw),
                      offsetof(Event, dy),
                      6};
+    layout.events.modifiers.event = offsetof(Event, modifiers);
+    layout.events.modifiers.state = offsetof(State, modifiers);
     return result;
 }
 

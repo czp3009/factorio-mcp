@@ -18,6 +18,10 @@ internal class ConstructorValues(
     // Each selected set must independently describe that call's optimized input ABI.
     private val callInputs: Map<Long, Set<Int>> = emptyMap(),
     private val trackFrameAliases: Boolean = false,
+    // Optional source attribution only. MemberSource never proves pointer identity or a pointee.
+    private val attributeMembers: Boolean = false,
+    // Observe only the inputs of a final call; its effects and borrowed storage are not analyzed.
+    private val terminalConsumer: Long? = null,
 ) {
     private val localAliases = scalarWitness != null || trackFrameAliases
 
@@ -37,11 +41,16 @@ internal class ConstructorValues(
 
     data class Load(val base: Value, val member: Long, val site: Long) : Value
 
+    data class MemberSource(val argument: Int, val member: Long) : Value
+
     data class Adjusted(val base: Value, val amount: Long) : Value
 
     data class Nullable(val base: Value, val adjustment: Long) : Value
 
     data class Constant(val value: Long) : Value
+
+    /** All 128 bits are zero; a scalar low-lane constant alone does not establish this. */
+    data object VectorZero : Value
 
     data class Allocation(val call: Long, val size: Long, val adjustment: Long = 0) : Value
 
@@ -159,6 +168,15 @@ internal class ConstructorValues(
     }
 
     init {
+        terminalConsumer?.let { site ->
+            require(
+                site in flow.reachable &&
+                    flow.body[site]?.operation == Operation.CALL &&
+                    flow.successors.getValue(site).isEmpty()
+            ) {
+                "Constructor witness has post-consumer observations"
+            }
+        }
         require(
             callInputs.all { (site, inputs) ->
                 flow.body[site]?.operation == Operation.CALL &&
@@ -215,6 +233,7 @@ internal class ConstructorValues(
         while (pending.isNotEmpty()) {
             require(++steps <= 262144) { "Constructor provenance exceeds analysis bound" }
             val position = pending.removeFirst()
+            if (position == terminalConsumer) continue
             val instruction = flow.body.getValue(position)
             val state = before.getValue(position).copyState()
             val registers = state.registers
@@ -268,7 +287,9 @@ internal class ConstructorValues(
                             require(operand.width == 8 || value !is Frame) {
                                 "Constructor truncates a local pointer"
                             }
-                            if (operand.width == 8) value
+                            if (value == VectorZero)
+                                if (operand.width == 16) VectorZero else Constant(0)
+                            else if (operand.width == 8) value
                             else if (value is Constant && operand.width in listOf(1, 2, 4))
                                 Constant(value.value and ((1L shl (operand.width * 8)) - 1))
                             else Unknown
@@ -309,7 +330,9 @@ internal class ConstructorValues(
                             operand.width == 8 && !operand.relative && operand.index == null
                         ) {
                             val base = operand.base?.let { registers[it] }
-                            if (base is Argument || base is Load) {
+                            if (attributeMembers && base is Argument) {
+                                MemberSource(base.register, base.adjustment + operand.displacement)
+                            } else if (base is Argument || base is Load) {
                                 var depth = 0
                                 var parent = base
                                 while (parent is Load) {
@@ -351,7 +374,13 @@ internal class ConstructorValues(
                             "Constructor loses a local pointer through a partial register write"
                         }
                         registers[operand.number] =
-                            if (operand.width == 8) value
+                            if (
+                                operand.width == 16 &&
+                                    operand.number in 16..31 &&
+                                    value == VectorZero
+                            )
+                                VectorZero
+                            else if (operand.width == 8) value
                             else if (operand.width == 4 && value is Constant)
                                 Constant(value.value and 0xffffffffL)
                             else Unknown
@@ -398,7 +427,8 @@ internal class ConstructorValues(
                 Operation.ENDBR,
                 Operation.JMP,
                 Operation.JCC,
-                Operation.RET -> Unit
+                Operation.RET,
+                Operation.TRAP -> Unit
                 Operation.PUSH,
                 Operation.POP -> {
                     if (instruction.operation == Operation.PUSH)
@@ -601,7 +631,16 @@ internal class ConstructorValues(
                             read(instruction.destination) !is Frame &&
                                 read(instruction.source) !is Frame
                     )
-                    write(instruction.destination, if (zero) Constant(0) else Unknown)
+                    write(
+                        instruction.destination,
+                        if (
+                            zero &&
+                                instruction.operation == Operation.VECTOR_XOR &&
+                                (instruction.destination as? Register)?.width == 16
+                        )
+                            VectorZero
+                        else if (zero) Constant(0) else Unknown,
+                    )
                     state.tested = null
                     state.equal = null
                 }

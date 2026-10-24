@@ -8,6 +8,53 @@ internal fun machineCode(text: String) =
 
 class X64InstructionsTest {
     @Test
+    fun decodesPackedDoubleComparisonWithoutChangingIntegerFlags() {
+        val instruction = X64Instructions(machineCode("66 0f c2 05 10 00 00 00 01")).all().single()
+        assertEquals(Operation.VECTOR_COMPARE_DOUBLES, instruction.operation)
+        assertEquals(Register(16, 16), instruction.destination)
+        assertEquals(Memory(null, null, 1, 16, 16, true), instruction.source)
+        assertEquals(1, instruction.control)
+        assertEquals(9, instruction.size)
+    }
+
+    @Test
+    fun decodesPackedDoubleMinimumAndMaximum() {
+        val code = X64Instructions(machineCode("66 0f 5d c1 66 0f 5f 4f 10")).all()
+        assertEquals(Operation.VECTOR_MINIMUM_DOUBLES, code[0].operation)
+        assertEquals(Register(16, 16), code[0].destination)
+        assertEquals(Register(17, 16), code[0].source)
+        assertEquals(Operation.VECTOR_MAXIMUM_DOUBLES, code[1].operation)
+        assertEquals(Memory(7, null, 1, 16, 16), code[1].source)
+    }
+
+    @Test
+    fun decodesLockedAdditionWithoutInventingRegisterWrites() {
+        val register = X64Instructions(machineCode("f0 48 01 41 70")).decode(0)
+        assertEquals(Operation.ATOMIC_ADD, register.operation)
+        assertEquals(Memory(1, null, 1, 112, 8), register.destination)
+        assertEquals(Register(0, 8), register.source)
+        val immediate = X64Instructions(machineCode("f0 48 83 41 70 ff")).decode(0)
+        assertEquals(Operation.ATOMIC_ADD, immediate.operation)
+        assertEquals(Immediate(-1), immediate.source)
+        assertFails { X64Instructions(machineCode("f0 48 01 c1")).decode(0) }
+        assertFails { X64Instructions(machineCode("f0 48 83 69 70 01")).decode(0) }
+    }
+
+    @Test
+    fun decodesRegisterAndMemoryAddWithCarry() {
+        val decoded = X64Instructions(machineCode("48 11 d8 13 47 20 10 07 44 12 07")).all()
+        assertTrue(decoded.all { it.operation == Operation.ADC })
+        assertEquals(Register(0, 8), decoded[0].destination)
+        assertEquals(Register(3, 8), decoded[0].source)
+        assertEquals(Memory(7, null, 1, 32, 4), decoded[1].source)
+        assertEquals(Memory(7, null, 1, 0, 1), decoded[2].destination)
+        assertEquals(Register(8, 1), decoded[3].destination)
+        val flow = X64ControlFlow(X64Instructions(machineCode("48 89 f8 48 11 d8 c3")).all())
+        assertEquals(null, SysVArgumentFlow(flow).register(6, 0))
+        assertFails { ScalarExpression(flow).before(6, Register(0, 8)) }
+    }
+
+    @Test
     fun decodesPackedEqualityAndMaskExtractionWithoutInventingScalarProvenance() {
         val instructions =
             X64Instructions(machineCode("66 0f 74 c8 66 45 0f 75 47 20 66 0f 50 c0 45 0f 50 c1"))
@@ -859,9 +906,9 @@ class X64InstructionsTest {
         for (code in
             listOf(
                 "67 8b 00",
-                "f0 83 00 01",
+                "f0 83 08 01",
                 "40 40 8b 00",
-                "0f 0b",
+                "0f 0c",
                 "8d c0",
                 "88 e0",
                 "41 90",

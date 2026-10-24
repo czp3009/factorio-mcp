@@ -697,6 +697,8 @@ internal class ResidentConnection(private val pid: UInt) {
                                     record.raw.toKString(),
                                     record.truncated and 1u != 0u,
                                     record.truncated and 2u != 0u,
+                                    record.playerName.toKString(),
+                                    record.truncated and 4u != 0u,
                                 )
                             },
                         )

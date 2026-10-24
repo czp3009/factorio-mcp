@@ -58,6 +58,7 @@ internal object X64JumpTables {
         val significant =
             instructions.filter { it.operation !in listOf(Operation.NOP, Operation.ENDBR) }
         val chains = mutableMapOf<Long, LongRange>()
+        val bases = mutableListOf<Triple<Long, Int, Instruction>>()
         val tables = mutableListOf<Table>()
         for ((position, jump) in significant.withIndex()) {
             if (jump.operation != Operation.JMP || jump.destination is Immediate) continue
@@ -86,7 +87,13 @@ internal object X64JumpTables {
                     val instruction = significant[candidate]
                     require(
                         instruction.operation !in
-                            listOf(Operation.CALL, Operation.JMP, Operation.JCC, Operation.RET)
+                            listOf(
+                                Operation.CALL,
+                                Operation.JMP,
+                                Operation.JCC,
+                                Operation.RET,
+                                Operation.TRAP,
+                            )
                     ) {
                         "Switch calculation crosses an unproven control-flow or call boundary"
                     }
@@ -112,18 +119,28 @@ internal object X64JumpTables {
                     entry.width == 4 &&
                     entry.displacement == 0L
             )
-            val baseIndex = definition(loadIndex, baseRegister.number)
+            // Discovery may cross a loop/call. The complete CFG below must subsequently prove
+            // that this same address definition reaches both uses, with normal call clobbers.
+            val baseIndex =
+                (loadIndex - 1 downTo maxOf(0, loadIndex - 256)).firstOrNull {
+                    writes(significant[it], baseRegister.number)
+                } ?: error("Switch table has no bounded address definition")
             val base = significant[baseIndex]
-            require(definition(addIndex, baseRegister.number) == baseIndex) {
-                "Switch table base changes after its load"
-            }
             require(base.operation == Operation.LEA && base.destination == baseRegister)
+            bases += Triple(load.offset, baseRegister.number, base)
+            bases += Triple(add.offset, baseRegister.number, base)
             val location = base.source as? Memory ?: error("Switch table has no address")
             require(location.relative && location.base == null && location.index == null)
             val guardIndex =
                 (loadIndex - 1 downTo maxOf(0, loadIndex - 64)).firstOrNull {
                     significant[it].operation in
-                        listOf(Operation.JCC, Operation.JMP, Operation.CALL, Operation.RET)
+                        listOf(
+                            Operation.JCC,
+                            Operation.JMP,
+                            Operation.CALL,
+                            Operation.RET,
+                            Operation.TRAP,
+                        )
                 } ?: error("Switch has no bounded guard")
             val guard = significant[guardIndex]
             require(guard.operation == Operation.JCC && guard.condition == 7) {
@@ -195,7 +212,13 @@ internal object X64JumpTables {
                     val instruction = significant[definition]
                     require(
                         instruction.operation !in
-                            listOf(Operation.CALL, Operation.JMP, Operation.JCC, Operation.RET)
+                            listOf(
+                                Operation.CALL,
+                                Operation.JMP,
+                                Operation.JCC,
+                                Operation.RET,
+                                Operation.TRAP,
+                            )
                     ) {
                         "Switch index has no local zero extension"
                     }
@@ -270,7 +293,8 @@ internal object X64JumpTables {
                 }
             val targets =
                 when (instruction.operation) {
-                    Operation.RET -> emptyList()
+                    Operation.RET,
+                    Operation.TRAP -> emptyList()
                     Operation.JMP ->
                         (instruction.destination as? Immediate)?.let { listOf(it.value) }
                             ?: tableByJump.getValue(instruction.offset).targets
@@ -296,6 +320,31 @@ internal object X64JumpTables {
             for ((left, right) in chain.zipWithNext()) {
                 require(predecessors[right.offset] == setOf(left.offset)) {
                     "Another control-flow edge bypasses the switch bound or table calculation"
+                }
+            }
+        }
+        if (tables.isNotEmpty()) {
+            val definitions = ScalarExpression(X64ControlFlow(instructions, tables))
+            for ((site, register, expected) in bases) {
+                fun tableAddress(instruction: Instruction): Long? {
+                    val source = instruction.source as? Memory ?: return null
+                    if (
+                        instruction.operation != Operation.LEA ||
+                            instruction.destination != Register(register, 8) ||
+                            !source.relative ||
+                            source.base != null ||
+                            source.index != null
+                    )
+                        return null
+                    val next = address + instruction.offset + instruction.size
+                    if (source.displacement < -next || source.displacement > Long.MAX_VALUE - next)
+                        return null
+                    return next + source.displacement
+                }
+                val selected = checkNotNull(tableAddress(expected))
+                val reaching = definitions.definitions(site, register)
+                require(reaching.isNotEmpty() && reaching.all { tableAddress(it) == selected }) {
+                    "Switch table address is bypassed or changed on a reaching path"
                 }
             }
         }

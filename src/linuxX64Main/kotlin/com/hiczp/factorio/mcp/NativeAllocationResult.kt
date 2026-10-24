@@ -21,39 +21,18 @@ internal object NativeAllocationResult {
     }
 
     fun verify(flow: X64ControlFlow, allocation: Instruction, store: Instruction, base: Int) {
-        val start = allocation.offset + allocation.size
-        val region = flow.instructions.filter { it.offset in start..store.offset }
-        require(region.isNotEmpty() && region.first().offset == start && region.last() == store)
-        val sites = region.map { it.offset }.toSet()
         require(
-            region.all { instruction ->
-                flow.predecessors[instruction.offset].orEmpty().all {
-                    it in sites || instruction.offset == start && it == allocation.offset
-                }
-            }
+            allocation.operation == Operation.CALL &&
+                flow.body[allocation.offset] == allocation &&
+                flow.body[store.offset] == store &&
+                flow.dominates(allocation.offset, store.offset)
         ) {
             "Object initialization has an entry bypassing allocation"
         }
-        val local =
-            X64ControlFlow(
-                region.map { instruction ->
-                    val target = instruction.destination as? Immediate
-                    instruction.copy(
-                        offset = instruction.offset - start,
-                        destination =
-                            if (
-                                target != null &&
-                                    instruction.operation in
-                                        listOf(Operation.CALL, Operation.JMP, Operation.JCC)
-                            )
-                                Immediate(target.value - start)
-                            else instruction.destination,
-                    )
-                }
-            )
-        val allocated =
-            SysVArgumentFlow(local, entryReferences = mapOf(0 to SysVArgumentFlow.Reference(7)))
-        require(allocated.register(store.offset - start, base) == SysVArgumentFlow.Reference(7)) {
+        require(
+            ReturnedPointerOrigins(flow).register(store.offset, base) ==
+                ReturnedPointerOrigins.Value(allocation.offset)
+        ) {
             "Object store does not use this allocation's original result"
         }
     }

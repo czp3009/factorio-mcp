@@ -13,6 +13,47 @@ import platform.posix.getenv
 
 class X64JumpTablesTest {
     @Test
+    fun verifiesHoistedTableAddressesAcrossLoopsAndCalls() {
+        fun body(base: Int = 13, clobber: Boolean = false, refresh: Long? = null) = buildList {
+            fun emit(
+                op: Operation,
+                dst: X64Instructions.Operand? = null,
+                src: X64Instructions.Operand? = null,
+                condition: Int? = null,
+            ) {
+                add(Instruction(size.toLong(), 1, op, dst, src, condition = condition))
+            }
+            emit(Operation.LEA, Register(base, 8), Memory(null, null, 1, 0xff, 8, true))
+            emit(Operation.NOP)
+            emit(Operation.JMP, Immediate(5))
+            emit(Operation.CALL, Immediate(0x2000))
+            if (refresh != null)
+                emit(Operation.LEA, Register(base, 8), Memory(null, null, 1, refresh - 5, 8, true))
+            else if (clobber) emit(Operation.MOV, Register(base, 8), Register(7, 8))
+            else emit(Operation.NOP)
+            emit(Operation.MOV, Register(0, 4), Register(6, 4))
+            emit(Operation.CMP, Register(0, 4), Immediate(2))
+            emit(Operation.JCC, Immediate(12), condition = 7)
+            emit(Operation.MOVSX, Register(2, 8), Memory(base, 0, 4, 0, 4))
+            emit(Operation.ADD, Register(2, 8), Register(base, 8))
+            emit(Operation.JMP, Register(2, 8))
+            emit(Operation.JMP, Immediate(3))
+            emit(Operation.RET)
+        }
+        fun resolve(base: Int = 13, clobber: Boolean = false, refresh: Long? = null) =
+            X64JumpTables.resolve(body(base, clobber, refresh), 0x1000) { location, length ->
+                assertEquals(0x1100L, location)
+                assertEquals(12L, length)
+                BinaryView(ByteArray(12) { ((0x100b - 0x1100) shr ((it % 4) * 8)).toByte() })
+            }
+        assertEquals(1, resolve().size)
+        assertEquals(1, resolve(refresh = 0x100).size)
+        assertFails { resolve(refresh = 0x104) }
+        assertFails { resolve(clobber = true) }
+        assertFails { resolve(base = 10) }
+    }
+
+    @Test
     fun accountsForImplicitWritesWithoutRejectingUnrelatedNativeWork() {
         fun inserted(text: String, insertion: Long): List<X64JumpTables.Table> {
             val extra =

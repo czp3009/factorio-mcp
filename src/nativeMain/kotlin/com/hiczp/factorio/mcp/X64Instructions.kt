@@ -60,6 +60,7 @@ internal class X64Instructions(
         JMP,
         JCC,
         RET,
+        TRAP,
         NOP,
         ENDBR,
         XCHG,
@@ -67,6 +68,7 @@ internal class X64Instructions(
         SET,
         ATOMIC_INC,
         ATOMIC_DEC,
+        ATOMIC_ADD,
         BYTE_COMPARE_EXCHANGE,
         ATOMIC_EXCHANGE_ADD,
         VECTOR_MOV,
@@ -97,6 +99,9 @@ internal class X64Instructions(
         VECTOR_ADD_FLOATS,
         VECTOR_MULTIPLY_FLOATS,
         VECTOR_MULTIPLY_DOUBLES,
+        VECTOR_MINIMUM_DOUBLES,
+        VECTOR_MAXIMUM_DOUBLES,
+        VECTOR_COMPARE_DOUBLES,
         VECTOR_SHUFFLE_FLOATS,
         VECTOR_ADD_DOUBLES,
         VECTOR_SUBTRACT_DOUBLES,
@@ -244,6 +249,21 @@ internal class X64Instructions(
             return result(op, Immediate(end + displacement), condition = condition)
         }
         if (locked) {
+            if (opcode in listOf(0x00, 0x01, 0x80, 0x81, 0x83)) {
+                require(!word && codeSegmentPrefixes == 0)
+                val size = if (opcode == 0x00 || opcode == 0x80) 1 else width
+                val operands = modRm(size)
+                require(operands.operand is Memory) { "Locked addition requires memory" }
+                val source =
+                    if (opcode == 0x00 || opcode == 0x01) operands.register
+                    else {
+                        require(operands.group == 0 && rex and 4 == 0) {
+                            "Unsupported locked arithmetic group"
+                        }
+                        Immediate(signed(if (opcode == 0x81) 4 else 1))
+                    }
+                return result(Operation.ATOMIC_ADD, operands.operand, source)
+            }
             if (opcode == 0x0f) {
                 val second = read(1)
                 if (second == 0xc1L) {
@@ -343,7 +363,8 @@ internal class X64Instructions(
                     )
                 }
                 require(
-                    second in listOf(0x10, 0x11, 0x58, 0x59, 0x5c, 0x5d, 0x5e, 0x5f) && rex and 8 == 0
+                    second in listOf(0x10, 0x11, 0x58, 0x59, 0x5c, 0x5d, 0x5e, 0x5f) &&
+                        rex and 8 == 0
                 ) {
                     "Unsupported scalar operation"
                 }
@@ -625,6 +646,10 @@ internal class X64Instructions(
                             }
                         }
                 ) {
+                    0x0b -> {
+                        require(!word && !hasRex)
+                        result(Operation.TRAP)
+                    }
                     0xa3 -> {
                         val operands = modRm(width)
                         require(operands.operand is Register) {
@@ -662,9 +687,13 @@ internal class X64Instructions(
                     0x59,
                     0x5b,
                     0x5c,
+                    0x5d,
+                    0x5f,
+                    0xc2,
                     0xc6 -> {
                         require(
-                            (!word && second != 0x5c || word && second != 0x5b) && rex and 8 == 0
+                            (!word && second !in listOf(0x5c, 0x5d, 0x5f, 0xc2) ||
+                                word && second != 0x5b) && rex and 8 == 0
                         ) {
                             "Unsupported packed float prefix"
                         }
@@ -684,13 +713,16 @@ internal class X64Instructions(
                                     else Operation.VECTOR_MULTIPLY_FLOATS
                                 0x5b -> Operation.VECTOR_INTS_TO_FLOATS
                                 0x5c -> Operation.VECTOR_SUBTRACT_DOUBLES
+                                0x5d -> Operation.VECTOR_MINIMUM_DOUBLES
+                                0x5f -> Operation.VECTOR_MAXIMUM_DOUBLES
+                                0xc2 -> Operation.VECTOR_COMPARE_DOUBLES
                                 else ->
                                     if (word) Operation.VECTOR_SHUFFLE_DOUBLES
                                     else Operation.VECTOR_SHUFFLE_FLOATS
                             },
                             operands.register.copy(number = operands.register.number + 16),
                             source,
-                            control = if (second == 0xc6) read(1).toInt() else null,
+                            control = if (second in listOf(0xc2, 0xc6)) read(1).toInt() else null,
                         )
                     }
 
@@ -1101,6 +1133,10 @@ internal class X64Instructions(
             0x09,
             0x0a,
             0x0b,
+            0x10,
+            0x11,
+            0x12,
+            0x13,
             0x20,
             0x21,
             0x22,
@@ -1124,6 +1160,7 @@ internal class X64Instructions(
                     when (opcode and 0xf8) {
                         0x00 -> Operation.ADD
                         0x08 -> Operation.OR
+                        0x10 -> Operation.ADC
                         0x20 -> Operation.AND
                         0x28 -> Operation.SUB
                         0x30 -> Operation.XOR

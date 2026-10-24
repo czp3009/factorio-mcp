@@ -9,7 +9,10 @@ import com.hiczp.factorio.mcp.linuxbridge.FmLinuxPointerStateLayout
 import kotlinx.cinterop.get
 import kotlinx.cinterop.set
 
-/** Full keyboard/mouse-pump pointer variants. Direct-widget three-button mirroring remains a separate adapter. */
+/**
+ * Full keyboard/mouse-pump pointer variants. Direct-widget three-button mirroring remains a
+ * separate adapter.
+ */
 internal data class PointerEventMetadata(
     val payload: PointerEventPayloads,
     val cursor: PointerInputState,
@@ -23,33 +26,54 @@ internal data class PointerEventMetadata(
     private val readonly: List<ElfImage.ReadonlyRange>,
 ) {
     init {
-        require(masks.size == 5 && masks.distinct().size == 5 && masks.all { it > 0 && it and (it - 1) == 0L })
+        require(
+            masks.size == 5 &&
+                masks.distinct().size == 5 &&
+                masks.all { it > 0 && it and (it - 1) == 0L }
+        )
         require(payload.cases.all { it.kind != emptyType })
         for (case in payload.cases) {
             val initialized = case.initialized(payload.header)
             require(initialized.containsAll(copies.getValue(case.kind).bytes))
+            require(copies.getValue(case.kind).bytes.containsAll(case.required(payload.header)))
             require(initialized.containsAll(constructionCopies.getValue(case.kind).reads))
-            for (uses in listOf(stateUpdates, postUpdates))
-                require(uses.getValue(case.kind).reads.all { read ->
+            for (uses in listOf(stateUpdates, postUpdates)) require(
+                uses.getValue(case.kind).reads.all { read ->
                     (read.offset until read.offset + read.width).all { it in initialized }
-                }) { "Native pointer handler reads bytes without established initialization" }
+                }
+            ) {
+                "Native pointer handler reads bytes without established initialization"
+            }
         }
     }
 
-    fun verifyLoaded(image: ElfImage, process: ProcessHandle, bias: Long) = verify(image, bias, process::readMemory)
+    fun verifyLoaded(image: ElfImage, process: ProcessHandle, bias: Long) =
+        verify(image, bias, process::readMemory)
 
     internal fun verify(image: ElfImage, bias: Long, read: (Long, Int) -> ByteArray) {
         require(bias >= 0)
         fun compare(address: Long, size: Long, expected: BinaryView) {
-            require(size in 1..16 * 1024 * 1024 && address > 0 && address <= Long.MAX_VALUE - bias - size)
-            require(read(address + bias, size.toInt()).contentEquals(expected.bytes(0, size.toInt()))) {
+            require(
+                size in 1..16 * 1024 * 1024 &&
+                    address > 0 &&
+                    address <= Long.MAX_VALUE - bias - size
+            )
+            require(
+                read(address + bias, size.toInt()).contentEquals(expected.bytes(0, size.toInt()))
+            ) {
                 "Live pointer event evidence differs from the selected executable"
             }
         }
-        for (function in functions)
-            compare(function.address, function.size, image.functionBytes(function, function.size.toInt()))
-        for (range in readonly)
-            compare(range.address, range.size, image.virtualBytes(range.address, range.size))
+        for (function in functions) compare(
+            function.address,
+            function.size,
+            image.functionBytes(function, function.size.toInt()),
+        )
+        for (range in readonly) compare(
+            range.address,
+            range.size,
+            image.virtualBytes(range.address, range.size),
+        )
     }
 
     fun writeTo(output: FmLinuxPointerEventLayout) {
@@ -80,32 +104,76 @@ internal data class PointerEventMetadata(
     }
 
     companion object {
-        fun resolve(image: ElfImage, keyboard: KeyboardEventMetadata, mouse: MouseStateMetadata): PointerEventMetadata {
-            val (resolved, readonly) = image.withReadonlyEvidence {
-                image.withFunctionEvidence {
-                    val payload = PointerEventPayloads.resolve(image)
-                    require(payload.header == keyboard.header && payload.header == mouse.conversion.header)
-                    val cursor = PointerInputState.resolve(image, mouse.state, payload)
-                    val cases = payload.cases.associateBy { it.kind }
-                    val masks = listOf(SdlButtonAdmission.Button.LEFT, SdlButtonAdmission.Button.RIGHT,
-                        SdlButtonAdmission.Button.MIDDLE, SdlButtonAdmission.Button.X1, SdlButtonAdmission.Button.X2)
-                        .map { mouse.update.masks.getValue(it) }
-                    for (case in payload.cases)
-                        case.timeStore?.let { store ->
-                            require(SdlEventTime.resolve(image, KeyboardEventPayload(emptyMap(), store)) == keyboard.clock)
+        fun resolve(
+            image: ElfImage,
+            keyboard: KeyboardEventMetadata,
+            mouse: MouseStateMetadata,
+        ): PointerEventMetadata {
+            val (resolved, readonly) =
+                image.withReadonlyEvidence {
+                    image.withFunctionEvidence {
+                        val payload = PointerEventPayloads.resolve(image)
+                        require(
+                            payload.header == keyboard.header &&
+                                payload.header == mouse.conversion.header
+                        )
+                        val cursor = PointerInputState.resolve(image, mouse.state, payload)
+                        val cases = payload.cases.associateBy { it.kind }
+                        val masks =
+                            listOf(
+                                    SdlButtonAdmission.Button.LEFT,
+                                    SdlButtonAdmission.Button.RIGHT,
+                                    SdlButtonAdmission.Button.MIDDLE,
+                                    SdlButtonAdmission.Button.X1,
+                                    SdlButtonAdmission.Button.X2,
+                                )
+                                .map { mouse.update.masks.getValue(it) }
+                        for (case in payload.cases) case.timeStore?.let { store ->
+                            require(SdlEventTime.resolve(image, store) == keyboard.clock)
                         }
-                    val empty = (0 until 4).fold(0L) { value, byte ->
-                        value or (keyboard.poll.defaults.getValue(payload.header.type + byte).toLong() shl (byte * 8))
+                        val empty =
+                            (0 until 4).fold(0L) { value, byte ->
+                                value or
+                                    (keyboard.poll.defaults
+                                        .getValue(payload.header.type + byte)
+                                        .toLong() shl (byte * 8))
+                            }
+                        PointerEventMetadata(
+                            payload,
+                            cursor,
+                            masks,
+                            empty,
+                            PollEventCopies.resolve(
+                                image,
+                                keyboard.poll,
+                                payload.header,
+                                cases.keys,
+                            ),
+                            EventCopyCases.resolve(
+                                image,
+                                payload.header,
+                                cases.mapValues { (_, case) ->
+                                    EventCopyCases.Case(
+                                        case.required(payload.header),
+                                        case.initialized(payload.header),
+                                    )
+                                },
+                            ),
+                            InputEventUses.resolve(
+                                image,
+                                payload.header,
+                                cases.mapValues { (_, case) -> case.initialized(payload.header) },
+                            ),
+                            InputEventUses.postUpdate(
+                                image,
+                                payload.header,
+                                cases.mapValues { (_, case) -> case.initialized(payload.header) },
+                            ),
+                            emptyList(),
+                            emptyList(),
+                        )
                     }
-                    PointerEventMetadata(payload, cursor, masks, empty,
-                        PollEventCopies.resolve(image, keyboard.poll, payload.header, cases.keys),
-                        EventCopyCases.resolve(image, payload.header, cases.mapValues { (_, case) ->
-                            EventCopyCases.Case(case.required(payload.header), case.initialized(payload.header))
-                        }), InputEventUses.resolve(image, payload.header, cases.mapValues { (_, case) -> case.initialized(payload.header) }),
-                        InputEventUses.postUpdate(image, payload.header, cases.mapValues { (_, case) -> case.initialized(payload.header) }),
-                        emptyList(), emptyList())
                 }
-            }
             return resolved.first.copy(functions = resolved.second, readonly = readonly)
         }
     }

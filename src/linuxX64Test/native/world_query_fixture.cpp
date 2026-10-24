@@ -10,18 +10,22 @@ struct Player {
     virtual ~Player() = default;
     uint16_t index = 6;
 };
+
 struct View {
     virtual ~View() = default;
     Player *player = nullptr;
 };
+
 struct Game {
     Player *player;
     View *view;
 };
+
 struct Name {
     const char *data;
     uint64_t length;
 };
+
 struct Script {
     virtual ~Script() = default;
     Name name{"fixture", 7};
@@ -29,15 +33,17 @@ struct Script {
     uint8_t loading = 0;
     uint8_t enabled = 1;
 };
+
 struct Context {
-    virtual ~Context() = default;
     Script **begin;
     Script **end;
 };
+
 struct Scenario {
     Game *game;
     Context *context;
 };
+
 struct Global {
     Scenario *scenario;
 };
@@ -84,9 +90,7 @@ void testWorldQuery(void *state, const FmLinuxLuaApi &api, const FmLinuxLuaState
     world.contextSize = sizeof(context);
     world.scenario = offset(&global, &global.scenario);
     world.game = offset(&scenario, &scenario.game);
-    world.contextCount = 1;
-    world.contexts[0] = offset(&scenario, &scenario.context);
-    identity(&context, world.contextVtable, world.contextTypeInfo);
+    world.context = offset(&scenario, &scenario.context);
     auto &selection = config.player;
     identity(&player, selection.playerVtable, selection.playerTypeInfo);
     identity(&view, selection.viewVtable, selection.viewTypeInfo);

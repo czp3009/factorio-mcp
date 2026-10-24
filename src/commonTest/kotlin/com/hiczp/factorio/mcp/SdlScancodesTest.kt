@@ -15,6 +15,10 @@ class SdlScancodesTest {
         assertFalse(0u in SdlScancodes.names)
         assertFalse(130u in SdlScancodes.names)
         assertFalse(512u in SdlScancodes.names)
+        assertFalse(400u in SdlScancodes.names)
+        assertEquals(listOf(258u, 262u, 267u, 282u),
+            SdlScancodes.chord(listOf("SLEEP", "MEDIA_PLAY", "MEDIA_NEXT_TRACK", "AC_BACK")))
+        assertFails { SdlScancodes.chord(listOf("AUDIONEXT")) }
     }
 
     @Test

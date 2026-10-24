@@ -3,6 +3,9 @@
 ## Scope and language
 
 - Work without subagents unless the user explicitly re-enables them.
+- Support the latest stable game API only. Do not retain older-game compatibility branches or preserve MCP schemas
+  solely for backward compatibility. Simplify contracts when the current game API changes, and update shared code,
+  tests and documentation together. Keep historical verification results explicitly historical.
 - Keep user-facing conversation in the user's preferred language. Write documentation, comments and docstrings in
   English, except explicitly requested translations. Name translated READMEs `README-{language}.md`, such as
   `README-zh-cn.md`. Keep `README.md` and its translations aligned when changing user-facing requirements, usage,
@@ -224,11 +227,22 @@
 - Keep attachment and injection fast through bounded work and reuse of validated metadata within the owned
   attachment. Remove demonstrated duplicate work without elaborate optimizations or weakening identity, ABI,
   lifetime or cleanup checks. Measure attach separately from first-tool metadata analysis and frontend latency.
+  Make attachment as fast as reasonably possible without a fixed latency threshold. Keep optimizations readable,
+  simple and supported by measurements; avoid fragile tricks or complexity for marginal gains. Prefer local semantic
+  proofs over whole-program scans or recursive call-graph analysis. Stable documented constants may remain when
+  replacing them would add substantial cost; do not exchange verified object identity, bounds or ABI checks for
+  guessed game layouts. Static review alone does not establish runtime performance.
 - Prefer stable semantic boundaries for injection and call-site discovery: matching symbols, verified virtual entries,
   receiver/argument provenance and control flow. Accommodate unrelated instructions, register allocation and equivalent
   compiler output where the same proof holds. Do not depend on call ordinal, adjacent setup instructions or one observed
   prologue when those are incidental. Cover supported variations and ambiguous/unsafe cases in fixtures; retain strict
   ABI, bounds, lifetime and ownership validation on both Windows and Linux.
+  During game updates, treat fixed argument registers without provenance, whole-function branch/call counts,
+  optimizer-created helper boundaries and assumed SDK generations as potential hidden hardcoding too. Derive the
+  required semantic relationship from matching metadata and control/data flow. Do not replace a rejected old shape
+  with a new single-build fingerprint or weaken the proof to make an updated executable pass. Record which invariant
+  failed and add source fixtures for equivalent code and unsafe counterexamples; distinguish unexecuted fixtures from
+  verified results when runtime or build execution is unavailable.
 - Game member locations may be resolved dynamically from the target PDB. Validate declaring types, member types,
   widths and bounds before reading them; never substitute a remembered offset when metadata is missing or incompatible.
   Resolve virtual-method positions from the same matching debug metadata as well; never encode a researched vtable
@@ -279,6 +293,9 @@
   external-game environment markers must not appear in other test packages.
 - Use the official SDK's Streamable HTTP endpoint for acceptance and curl for exploration, with standard initialize,
   session and protocol-version headers. Keep a small stdio smoke test.
+- Locate test UI actions through live widget selectors, never fixed screen pixels or viewport fractions. For tests
+  specifically exercising mouse gestures, derive targets from the selected widget's current bounds and validate
+  available space. Use game-world coordinates for world actions and let the input adapter project them at execution.
 - Real-game acceptance is opt-in and explicitly selects its endpoint and PID. Never terminate an externally managed
   endpoint or game from the acceptance fixture. Keep temporary saves, scenario copies and logs under `temp/`.
   World tests may create dedicated single-player saves directly in the game, including its normal save directory,
@@ -293,9 +310,13 @@
   installed artifacts.
 - Do not infer a running simulation from world presence, absent tick callbacks or UI appearance. Report unobserved pause
   state as unknown until a validated source exists.
+- Distinguish persistent toggles, such as Alt display mode, from transient held-key state. Base input cleanup assertions
+  on verified key-state fields or behavior; a setting remaining enabled after a restart is not evidence of a held key.
 - Reuse the user's already running Windows or WSL Steam client; do not start or manage Steam. Never run graphical
-  Factorio clients in both systems at once. Account for slow WSL rendering when assessing safe-point and action latency;
-  separate it from metadata-analysis costs. Behavior must not depend on resolution, fullscreen mode or window focus.
+  Factorio clients in both systems at once. Allow for WSL overhead when assessing attach and metadata-analysis costs,
+  and slow rendering when assessing safe-point and action latency. Measure these phases separately; investigate
+  reproducibly disproportionate costs without imposing native-host latency targets on WSL. Behavior must not depend
+  on resolution, fullscreen mode or window focus.
 - Start graphical Factorio clients without game arguments, including test launches. Open disposable scenarios/saves
   through normal game UI; extra launch options can cause Steam to require unattended user confirmation.
 - For writable paths, validate authoritative local-server effects and force a full CRC. Read-only-looking Lua APIs

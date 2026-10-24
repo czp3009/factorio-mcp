@@ -23,7 +23,9 @@ int UiKeyCommand::start(uintptr_t instance, void *gui, const FmLinuxUiLayout &ui
         return EALREADY;
     started_ = true;
     config_ = config;
-    if (!validKeyboardEventLayout(config_.event) || !config_.clock.ticks ||
+    if (!validKeyboardEventLayout(config_.event) || !validKeyboardModifiers(config_.owner, config_.modifiers) ||
+        config_.owner.eventSize != config_.event.extent || config_.owner.eventType != config_.event.type ||
+        config_.owner.eventTime != config_.event.time || !config_.clock.ticks ||
         !std::isfinite(config_.clock.divisor) || config_.clock.divisor <= 0 || !request.count || request.count > 8)
         return record(EINVAL);
     for (unsigned index = 0; index < request.count; ++index)
@@ -32,6 +34,11 @@ int UiKeyCommand::start(uintptr_t instance, void *gui, const FmLinuxUiLayout &ui
                 return record(EINVAL);
     if (canceled && fm_ipc_load(canceled))
         return record(ECANCELED);
+    InputStateObjects objects;
+    if (const int error = readInputState(config_.owner, objects))
+        return record(error);
+    global_ = objects.global;
+    state_ = objects.state;
     try {
         if (selector.count) {
             if (!config_.focus || !validCaptureLayout(config_.capture, ui) || !validModalLayout(config_.modal, ui) ||
@@ -86,8 +93,11 @@ int UiKeyCommand::poll(void *event, bool canceled, bool &produced) {
     }
     double now;
     int error = readEventClock(config_.clock, now);
+    uint16_t modifiers = 0;
     if (!error)
-        error = writeKeyboardEvent(config_.event, event, config_.event.extent, key, down, now);
+        error = readKeyboardModifiers(config_.owner, config_.modifiers, global_, state_, key, down, modifiers);
+    if (!error)
+        error = writeKeyboardEvent(config_.event, event, config_.event.extent, key, down, now, modifiers);
     if (error) {
         record(error);
         cancel();

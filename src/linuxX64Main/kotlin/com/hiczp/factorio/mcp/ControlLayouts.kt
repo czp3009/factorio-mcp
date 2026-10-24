@@ -27,30 +27,39 @@ internal data class ControlLayouts(
     private val pointers: Map<Long, Long> = emptyMap(),
 ) {
     init {
-        require(size in 16..4096 && slots.values.size == 2 && gui.width == 1 && gui.maximum == 1UL)
+        require(
+            size in 16..4096 &&
+                slots.values.size == 2 &&
+                gui.width == 1 &&
+                gui.maximum in setOf(1UL, 255UL)
+        )
         require(setOf(emptyKind, mouseKind, wheel.kind, slots.keyboardType.toInt()).size == 4)
     }
 
-    fun verifyLoaded(image: ElfImage, process: ProcessHandle, bias: Long) = verify(image, bias, process::readMemory)
+    fun verifyLoaded(image: ElfImage, process: ProcessHandle, bias: Long) =
+        verify(image, bias, process::readMemory)
 
     internal fun verify(image: ElfImage, bias: Long, read: (Long, Int) -> ByteArray) {
         require(bias >= 0)
         fun compare(address: Long, bytes: ByteArray) {
             require(
-                bytes.isNotEmpty() && bytes.size <= 16 * 1024 * 1024 &&
-                        address > 0 && address <= Long.MAX_VALUE - bias - bytes.size
+                bytes.isNotEmpty() &&
+                    bytes.size <= 16 * 1024 * 1024 &&
+                    address > 0 &&
+                    address <= Long.MAX_VALUE - bias - bytes.size
             )
             require(read(address + bias, bytes.size).contentEquals(bytes)) {
                 "Live control binding evidence differs from the selected executable"
             }
         }
-        for (function in functions)
-            compare(
-                function.address,
-                image.functionBytes(function, function.size.toInt()).bytes(0, function.size.toInt())
-            )
-        for (range in readonly)
-            compare(range.address, image.virtualBytes(range.address, range.size).bytes(0, range.size.toInt()))
+        for (function in functions) compare(
+            function.address,
+            image.functionBytes(function, function.size.toInt()).bytes(0, function.size.toInt()),
+        )
+        for (range in readonly) compare(
+            range.address,
+            image.virtualBytes(range.address, range.size).bytes(0, range.size.toInt()),
+        )
         for ((address, target) in pointers) {
             require(target >= 0 && target <= Long.MAX_VALUE - bias)
             val expected = if (target == 0L) 0L else target + bias
@@ -90,9 +99,11 @@ internal data class ControlLayouts(
 
     fun read(source: FmLinuxControlsSnapshot, frame: Long): GameSnapshot {
         require(
-            source.count <= FM_LINUX_MAX_CONTROLS.toUInt() && source.count <= source.registryCount &&
-                    source.registryCount <= 16384u && source.truncated <= 1u &&
-                    (source.count < source.registryCount) == (source.truncated != 0u)
+            source.count <= FM_LINUX_MAX_CONTROLS.toUInt() &&
+                source.count <= source.registryCount &&
+                source.registryCount <= 16384u &&
+                source.truncated <= 1u &&
+                (source.count < source.registryCount) == (source.truncated != 0u)
         )
         fun identity(value: CPointer<ByteVar>): String {
             val bytes = value.readBytes(FM_LINUX_CONTROL_ID_BYTES)
@@ -101,112 +112,194 @@ internal data class ControlLayouts(
             return bytes.decodeToString(0, end, throwOnInvalidSequence = true)
         }
 
-        fun bindings(values: CPointer<FmLinuxBinding>): List<BindingSnapshot> = List(2) { index ->
-            val binding = values[index]
-            val code = binding.code.toInt()
-            val flags = binding.modifiers.toInt()
-            require(binding.type <= 255u && binding.modifiers <= 255u)
-            val type = when (binding.type.toInt()) {
-                emptyKind -> "Nothing"
-                slots.keyboardType.toInt() -> "Keyboard"
-                mouseKind -> "MouseButton"
-                wheel.kind -> "MouseWheel"
-                else -> "Unknown(${binding.type})"
+        fun bindings(values: CPointer<FmLinuxBinding>): List<BindingSnapshot> =
+            List(2) { index ->
+                val binding = values[index]
+                val code = binding.code.toInt()
+                val flags = binding.modifiers.toInt()
+                require(binding.type <= 255u && binding.modifiers <= 255u)
+                val type =
+                    when (binding.type.toInt()) {
+                        emptyKind -> "Nothing"
+                        slots.keyboardType.toInt() -> "Keyboard"
+                        mouseKind -> "MouseButton"
+                        wheel.kind -> "MouseWheel"
+                        else -> "Unknown(${binding.type})"
+                    }
+                BindingSnapshot(
+                    listOf("keyboard_mouse_primary", "keyboard_mouse_secondary")[index],
+                    type,
+                    when (type) {
+                        "Keyboard" -> SdlScancodes.names[binding.code]
+                        "MouseButton" -> mouseNames[code]
+                        "MouseWheel" -> wheel.names[code]
+                        else -> null
+                    },
+                    code,
+                    listOf(
+                            modifiers.control to "control",
+                            modifiers.shift to "shift",
+                            modifiers.alt to "alt",
+                        )
+                        .filter { (mask, _) -> flags and mask != 0 }
+                        .map { it.second },
+                    flags,
+                )
             }
-            BindingSnapshot(
-                listOf("keyboard_mouse_primary", "keyboard_mouse_secondary")[index], type,
-                when (type) {
-                    "Keyboard" -> SdlScancodes.names[binding.code]
-                    "MouseButton" -> mouseNames[code]
-                    "MouseWheel" -> wheel.names[code]
-                    else -> null
-                },
-                code,
-                listOf(modifiers.control to "control", modifiers.shift to "shift", modifiers.alt to "alt")
-                    .filter { (mask, _) -> flags and mask != 0 }.map { it.second },
-                flags,
-            )
-        }
 
-        val controls = List(source.count.toInt()) { index ->
-            val row = source.controls[index]
-            require(listOf(row.custom, row.enabled, row.spectating, row.cutscene, row.gui).all { it <= 1u })
-            ControlSnapshot(
-                identity(row.id).also { require(it.isNotEmpty()) },
-                identity(row.linked).takeIf { it.isNotEmpty() },
-                identity(row.owner).also { require(it.isNotEmpty()) }, row.custom != 0u,
-                if (row.custom != 0u) row.enabled != 0u else null,
-                if (row.custom != 0u) row.spectating != 0u else null,
-                if (row.custom != 0u) row.cutscene != 0u else null, row.gui != 0u,
-                row.usage, bindings(row.bindings), bindings(row.effective)
-            )
+        val controls =
+            List(source.count.toInt()) { index ->
+                val row = source.controls[index]
+                require(
+                    listOf(row.custom, row.enabled, row.spectating, row.cutscene, row.gui).all {
+                        it <= 1u
+                    }
+                )
+                ControlSnapshot(
+                    identity(row.id).also { require(it.isNotEmpty()) },
+                    identity(row.linked).takeIf { it.isNotEmpty() },
+                    identity(row.owner).also { require(it.isNotEmpty()) },
+                    row.custom != 0u,
+                    if (row.custom != 0u) row.enabled != 0u else null,
+                    if (row.custom != 0u) row.spectating != 0u else null,
+                    if (row.custom != 0u) row.cutscene != 0u else null,
+                    row.gui != 0u,
+                    row.usage,
+                    bindings(row.bindings),
+                    bindings(row.effective),
+                )
+            }
+        require(controls.map { it.id }.distinct().size == controls.size) {
+            "Duplicate control identities"
         }
-        require(controls.map { it.id }.distinct().size == controls.size) { "Duplicate control identities" }
         return GameSnapshot(
-            "unknown", true, frame, truncated = source.truncated != 0u,
-            controls = controls, registryCount = source.registryCount.toInt()
+            "unknown",
+            true,
+            frame,
+            truncated = source.truncated != 0u,
+            controls = controls,
+            registryCount = source.registryCount.toInt(),
         )
     }
 
     companion object {
         fun resolve(image: ElfImage): ControlLayouts {
-            val (resolved, readonly) = image.withReadonlyEvidence {
-                image.withFunctionEvidence {
-                    val size = VectorElementSize.resolve(
-                        image,
-                        "_ZNSt6vectorI12ControlInputSaIS0_EED2Ev",
-                        "_ZN12ControlInputD2Ev"
-                    )
-                    val registry = image.symbol("_ZZN12ControlInput19getControlInputListEvE16controlInputList")
-                    val guard = image.symbol("_ZGVZN12ControlInput19getControlInputListEvE16controlInputList")
-                    val loading = image.symbol("_ZN12ControlInput19loadingCustomInputsE")
-                    require(loading.type == 1 && loading.size == 1L)
-                    val names = NamedPointerRegistry.resolve(
-                        image,
-                        "_ZN12ControlInput16findControlInputESt17basic_string_viewIcSt11char_traitsIcEE",
-                        registry.name, guard.name, size
-                    )
-                    val debug = image.inlines
-                    val slots = ControlSlots.resolve(image, size, debug)
-                    val extent = slots.values.minOf { size - it }
-                    val modifiers = ControlModifiers.resolve(image, extent, debug)
-                    val linked = listOf(
-                        "_ZNK12ControlInput11triggeredByERK5EventPPK17ControlInputValuej",
-                        "_ZNK12ControlInput8isActiveEb9NamedBoolI11GuiCheckTagEbS0_I17CheckModifiersTagE"
-                    )
-                        .map { LinkedReceiverPrefix.resolve(image, it, size).member }.distinct().single()
-                    val prototype = ControlPrototype.resolve(image, size, debug)
-                    val gui = ControlGuiFlag.resolve(image, size)
-                    val usage = ControlUsage.resolve(image, size)
-                    val string = NativeStringLayout.resolve(image)
-                    val empty = ControlEmptyKind.resolve(image, extent, slots.type, slots.code, string, debug)
-                    val mouse = ControlMouseKind.resolve(image, extent, slots.type, slots.code)
-                    val wheels = ControlWheelKinds.resolve(image, extent, slots.type, slots.code, string)
-                    val mouseNames = ControlMouseCodes.resolve(image, extent, slots.type, slots.code, mouse)
-                    val header = EventHeader.resolve(image)
-                    val keyboard = InputStateKeyUpdate.resolve(
-                        image,
-                        SysVObjectSize.resolveDeleter(image, "_ZN13SimpleDeleterI10InputStateEclEPS0_"),
-                        header
-                    )
-                    ControlEventCode.resolve(
-                        image, extent, slots.type, slots.code, slots.keyboardType.toInt(),
-                        header.extent.toLong(), keyboard.code
-                    )
-                    val table = image.symbol("_ZTV20CustomInputPrototype")
-                    val pointers = image.pointers
-                    val words = pointers.words(table.address, (table.size / 8).toInt())
-                        .mapIndexed { index, word -> table.address + index * 8L to if (index == 0) word.scalar() else word.pointer() }
-                        .toMap()
-                    val type = image.symbol("_ZTI20CustomInputPrototype")
-                    val typeName = type.address + 8
-                    ControlLayouts(
-                        size, registry, guard.address, loading.address, names, slots, modifiers, linked,
-                        prototype, gui, usage, empty, mouse, mouseNames, wheels,
-                        pointers = words + (typeName to pointers.words(typeName, 1).single().pointer())
-                    )
+            val (resolved, readonly) =
+                image.withReadonlyEvidence {
+                    image.withFunctionEvidence {
+                        val size =
+                            VectorElementSize.resolve(
+                                image,
+                                "_ZNSt6vectorI12ControlInputSaIS0_EED2Ev",
+                                "_ZN12ControlInputD2Ev",
+                            )
+                        val registry =
+                            image.symbol(
+                                "_ZZN12ControlInput19getControlInputListEvE16controlInputList"
+                            )
+                        val guard =
+                            image.symbol(
+                                "_ZGVZN12ControlInput19getControlInputListEvE16controlInputList"
+                            )
+                        val loading = image.symbol("_ZN12ControlInput19loadingCustomInputsE")
+                        require(loading.type == 1 && loading.size == 1L)
+                        val names =
+                            NamedPointerRegistry.resolve(
+                                image,
+                                "_ZN12ControlInput16findControlInputESt17basic_string_viewIcSt11char_traitsIcEE",
+                                registry.name,
+                                guard.name,
+                                size,
+                            )
+                        val debug = image.inlines
+                        val slots = ControlSlots.resolve(image, size, debug)
+                        val extent = slots.values.minOf { size - it }
+                        val modifiers = ControlModifiers.resolve(image, extent)
+                        val linked =
+                            listOf(
+                                    LinkedReceiverPrefix.resolve(image, ControlEntries.ACTIVE, size)
+                                        .member,
+                                    SysVMemberCalls.direct(
+                                        image,
+                                        ControlEntries.TRIGGERED,
+                                        ControlEntries.TRIGGERED,
+                                        size,
+                                    ),
+                                )
+                                .distinct()
+                                .single()
+                        val prototype = ControlPrototype.resolve(image, size, debug)
+                        val gui = ControlGuiFlag.resolve(image, size)
+                        val usage = ControlUsage.resolve(image, size)
+                        val string = NativeStringLayout.resolve(image)
+                        val empty =
+                            ControlEmptyKind.resolve(
+                                image,
+                                extent,
+                                slots.type,
+                                slots.code,
+                                string,
+                                debug,
+                                modifiers = modifiers.field,
+                            )
+                        val mouse = ControlMouseKind.resolve(image, extent, slots.type, slots.code)
+                        val wheels =
+                            ControlWheelKinds.resolve(image, extent, slots.type, slots.code, string)
+                        val mouseNames =
+                            ControlMouseCodes.resolve(image, extent, slots.type, slots.code, mouse)
+                        val header = EventHeader.resolve(image)
+                        val keyboard =
+                            InputStateKeyUpdate.resolve(
+                                image,
+                                SysVOwnedObjectSize.resolveInlined(
+                                        image,
+                                        "_ZN13UniquePointerI10InputState13SimpleDeleterIS0_ELb1EED2Ev",
+                                    )
+                                    .size,
+                                header,
+                            )
+                        ControlEventCode.resolve(
+                            image,
+                            extent,
+                            slots.type,
+                            slots.code,
+                            slots.keyboardType.toInt(),
+                            header.extent.toLong(),
+                            keyboard.code,
+                        )
+                        val table = image.symbol("_ZTV20CustomInputPrototype")
+                        val pointers = image.pointers
+                        val words =
+                            pointers
+                                .words(table.address, (table.size / 8).toInt())
+                                .mapIndexed { index, word ->
+                                    table.address + index * 8L to
+                                        if (index == 0) word.scalar() else word.pointer()
+                                }
+                                .toMap()
+                        val type = image.symbol("_ZTI20CustomInputPrototype")
+                        val typeName = type.address + 8
+                        ControlLayouts(
+                            size,
+                            registry,
+                            guard.address,
+                            loading.address,
+                            names,
+                            slots,
+                            modifiers,
+                            linked,
+                            prototype,
+                            gui,
+                            usage,
+                            empty,
+                            mouse,
+                            mouseNames,
+                            wheels,
+                            pointers =
+                                words + (typeName to pointers.words(typeName, 1).single().pointer()),
+                        )
+                    }
                 }
-            }
             return resolved.first.copy(functions = resolved.second, readonly = readonly)
         }
     }

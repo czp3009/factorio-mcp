@@ -52,6 +52,8 @@ class ExpandedQueryAcceptanceTest {
             mode: String = "values",
             fields: List<String>? = null,
             limit: Int = 64,
+            surface: JsonElement? = null,
+            offset: Int = 0,
         ): JsonObject {
             return client
                 .tool(
@@ -64,6 +66,8 @@ class ExpandedQueryAcceptanceTest {
                         }
                         put("mode", mode)
                         put("limit", limit)
+                        put("offset", offset)
+                        surface?.let { put("surface", it) }
                         fields?.let { putJsonArray("fields") { it.forEach { add(it) } } }
                     },
                 )
@@ -300,33 +304,46 @@ class ExpandedQueryAcceptanceTest {
                         .jsonArray
                         .isNotEmpty()
                 )
-                val fluids =
-                    client
-                        .tool(
-                            "world_query",
-                            buildJsonObject {
-                                put("surface", surface)
-                                putJsonObject("selection") {
-                                    put("kind", "inspect")
-                                    put("target", target("tank"))
-                                    putJsonArray("path") {
-                                        add(json("""{"property":"fluidbox"}"""))
-                                    }
-                                }
-                                put("mode", "entries")
-                            },
-                        )
-                        .toolValue()
-                        .objects()
-                        .single()
-                        .getValue("entries")
-                        .jsonArray
-                assertTrue(
-                    fluids.any {
-                        it.jsonObject["value"]?.jsonObject?.get("name")?.jsonPrimitive?.content ==
-                                "water"
+                val tank = target("tank")
+                val tankMembers = mutableSetOf<String>()
+                var memberOffset = 0
+                do {
+                    val page = inspect(
+                        tank, mode = "members", limit = 256, surface = surface, offset = memberOffset,
+                    )
+                    tankMembers += page.getValue("members").jsonArray.map {
+                        it.jsonObject.getValue("name").jsonPrimitive.content
                     }
+                    memberOffset = page["next_offset"]?.jsonPrimitive?.int ?: 0
+                } while (memberOffset != 0)
+                assertTrue("fluids_count" in tankMembers)
+                val count = inspect(tank, fields = listOf("fluids_count"), surface = surface)
+                assertTrue(
+                    count.getValue("attributes").jsonObject.getValue("fluids_count").jsonPrimitive.int > 0
                 )
+                for (method in listOf(
+                    "get_fluid_capacity", "get_fluid_filter", "get_fluid_box_neighbours",
+                    "get_fluid_box_pipe_connections", "has_fluid_segment", "get_fluid_segment_capacity",
+                    "get_fluid_segment_filter", "get_fluid_segment_fluid", "get_fluid_segment_id",
+                    "get_fluid_segment_extent_bounding_box",
+                )) {
+                    assertTrue(method in tankMembers, method)
+                    val observed = inspect(
+                        tank,
+                        JsonArray(listOf(json("""{"method":"$method","arguments":[1]}"""))),
+                        surface = surface,
+                    )
+                    assertTrue(
+                        observed["read_status"]?.jsonObject?.isEmpty() != false, "$method: $observed",
+                    )
+                }
+                val fluidPath = JsonArray(listOf(json("""{"method":"get_fluid","arguments":[1]}""")))
+                val fluid = inspect(tank, fluidPath, surface = surface).getValue("entries").jsonArray.associate {
+                    it.jsonObject.getValue("key").jsonPrimitive.content to it.jsonObject.getValue("value")
+                }
+                assertEquals("water", fluid.getValue("name").jsonPrimitive.content)
+                assertEquals(1234.0, fluid.getValue("amount").jsonPrimitive.double)
+                assertEquals(25.0, fluid.getValue("temperature").jsonPrimitive.double)
 
                 val beforeChat = client.tool("chat_read").toolValue()
                 val offset = beforeChat.getValue("next_offset")

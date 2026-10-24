@@ -92,9 +92,9 @@ class RelatedWorldQueryTest {
     }
 
     @Test
-    fun quickbarUsesExplicitBoundedIndicesWithoutInventingPageSizes() {
+    fun quickbarUsesExplicitBoundedPageAndSlotLocations() {
         val result =
-            query("""{"selection":{"kind":"quickbar","slots":[1,100,101],"screen_pages":[1,4]}}""")
+            query("""{"selection":{"kind":"quickbar","slots":[{"page_index":1,"slot_index":1},{"page_index":2,"slot_index":1},{"page_index":256,"slot_index":256}],"screen_pages":[1,4]}}""")
         assertEquals(3, result["limit"]!!.jsonPrimitive.int)
         assertTrue(result["fields"]!!.jsonArray.isEmpty())
         assertEquals(
@@ -110,6 +110,11 @@ class RelatedWorldQueryTest {
             """{"selection":{"kind":"quickbar","slots":[1,1]}}""",
             """{"selection":{"kind":"quickbar","slots":[0]}}""",
             """{"selection":{"kind":"quickbar","slots":["1"]}}""",
+            """{"selection":{"kind":"quickbar","slots":[{"page_index":1}]}}""",
+            """{"selection":{"kind":"quickbar","slots":[{"page_index":1,"slot_index":0}]}}""",
+            """{"selection":{"kind":"quickbar","slots":[{"page_index":257,"slot_index":1}]}}""",
+            """{"selection":{"kind":"quickbar","slots":[{"page_index":"1","slot_index":1}]}}""",
+            """{"selection":{"kind":"quickbar","slots":[{"page_index":1,"slot_index":1},{"slot_index":1,"page_index":1}]}}""",
             """{"selection":{"kind":"quickbar","screen_pages":[65537]}}""",
             """{"selection":{"kind":"quickbar","slots":[1]},"limit":1}""",
             """{"selection":{"kind":"quickbar","slots":[1]},"fields":["filter"]}""",
@@ -118,7 +123,14 @@ class RelatedWorldQueryTest {
         val excessive = buildJsonObject {
             putJsonObject("selection") {
                 put("kind", "quickbar")
-                putJsonArray("slots") { (1..129).forEach { add(it) } }
+                putJsonArray("slots") {
+                    (1..129).forEach { index ->
+                        addJsonObject {
+                            put("page_index", index)
+                            put("slot_index", 1)
+                        }
+                    }
+                }
             }
         }
         assertFailsWith<IllegalArgumentException> { parseWorldQuery(excessive) }

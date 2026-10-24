@@ -62,18 +62,21 @@ class TimedInputSmokeAcceptanceTest {
                         .getValue("position")
                         .jsonObject
 
-                fun request(ticks: Int, held: Boolean) = buildJsonObject {
-                    putJsonArray("timeline") {
-                        addJsonObject {
-                            put("device", if (held) "keyboard" else "mouse")
-                            if (held) put("key", key)
-                            else
-                                putJsonObject("position") {
-                                    put("space", "viewport")
-                                    put("x", 0)
-                                    put("y", 0)
-                                }
-                            put("tick", "0-${ticks - 1}")
+                suspend fun request(ticks: Int, held: Boolean): JsonObject {
+                    val current = if (held) null else position()
+                    return buildJsonObject {
+                        putJsonArray("timeline") {
+                            addJsonObject {
+                                put("device", if (held) "keyboard" else "mouse")
+                                if (held) put("key", key)
+                                else
+                                    putJsonObject("position") {
+                                        put("space", "world")
+                                        put("x", checkNotNull(current).getValue("x"))
+                                        put("y", current.getValue("y"))
+                                    }
+                                put("tick", "0-${ticks - 1}")
+                            }
                         }
                     }
                 }

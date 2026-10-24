@@ -64,7 +64,7 @@ class WidgetEnumAcceptanceTest {
             check(proof.names.toSet() == setOf("left", "right", "none"))
             check(proof.proof.pointers.distinct().size == proof.names.size)
             check(proof.evidence.functions.isNotEmpty() && proof.evidence.readonly.isNotEmpty())
-            check(proof.evidence.pointers.size == proof.names.size)
+            check(proof.evidence.pointers.size == if (proof.proof.relative) 0 else proof.names.size)
             println("Original Lua switch enum table=$proof")
         }
     }

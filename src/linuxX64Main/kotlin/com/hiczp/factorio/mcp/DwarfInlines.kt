@@ -132,7 +132,7 @@ internal class DwarfInlines(private val image: ElfImage) {
         }
         inlines(definition, listOf(bound), 0)
         require(names == null || names.all { name -> result.any { it.name == name } }) {
-            "Requested inline accessor lacks a code range"
+            "Requested inline accessor lacks a code range in $ownerName: ${names.orEmpty() - result.map { it.name }.toSet()}"
         }
         return result
     }

@@ -2,16 +2,17 @@
 
 package com.hiczp.factorio.mcp
 
+import kotlin.test.*
 import kotlinx.cinterop.toKString
 import platform.posix.getenv
-import kotlin.test.*
 
 class SysVTargeterReleaseTest {
     @Test
     fun provesUnlinkingAcrossCompilerGeneratedPaddingAndFieldOrder() {
         val directory = checkNotNull(getenv("FACTORIO_MCP_TEST_NATIVE")).toKString()
         val layouts = mutableListOf<SysVTargeterRelease.Layout>()
-        for (padding in listOf(1, 23)) MappedBinary("$directory/targeter_fixture_$padding").use { file ->
+        for (padding in listOf(1, 23)) MappedBinary("$directory/targeter_fixture_$padding").use {
+            file ->
             val image = ElfImage(file.view)
             fun scalar(name: String): Long {
                 val symbol = image.symbol(name)
@@ -19,21 +20,36 @@ class SysVTargeterReleaseTest {
             }
 
             val layout = SysVTargeterRelease.resolve(image, "_ZN8Targeter8attachToEP10Targetable")
+            val entry = image.symbol("_ZN8Targeter8attachToEP10Targetable")
+            val code = image.functionBytes(entry, 512).bytes(0, entry.size.toInt())
+            fun jump(displacement: Int) =
+                byteArrayOf(0xe9.toByte()) + ByteArray(4) { (displacement shr (it * 8)).toByte() }
+            assertEquals(
+                layout,
+                SysVTargeterRelease.analyze(
+                    BinaryView(jump(code.size) + code + jump(-code.size - 5))
+                ),
+            )
+            assertFails { SysVTargeterRelease.analyze(BinaryView(jump(-5) + code)) }
             assertEquals(scalar("fixture_target"), layout.target)
             assertEquals(scalar("fixture_previous"), layout.previous)
             assertEquals(scalar("fixture_next"), layout.next)
             assertEquals(scalar("fixture_head"), layout.head)
             SysVTargeterRelease.verifyFreshAttachment(
-                image.functionBytes(image.symbol("_ZN8Targeter8attachToEP10Targetable"), 512), layout
+                image.functionBytes(image.symbol("_ZN8Targeter8attachToEP10Targetable"), 512),
+                layout,
             )
             SysVTargeterRelease.verifyClearing(
                 image.functionBytes(image.symbol("_ZN10Targetable5clearEv"), 512),
-                layout
+                layout,
             )
             layouts += layout
         }
         assertNotEquals(layouts[0].target, layouts[1].target)
-        assertNotEquals(layouts[0].previous < layouts[0].next, layouts[1].previous < layouts[1].next)
+        assertNotEquals(
+            layouts[0].previous < layouts[0].next,
+            layouts[1].previous < layouts[1].next,
+        )
     }
 
     @Test
@@ -44,10 +60,12 @@ class SysVTargeterReleaseTest {
             val layout = SysVTargeterRelease.resolve(image, "_ZN8Targeter8attachToEP10Targetable")
             val symbol = image.symbol("_ZN10Targetable5clearEv")
             val bytes = image.functionBytes(symbol, 512)
-            val clear = X64Instructions(bytes).all().first {
-                it.operation == X64Instructions.Operation.MOV && it.destination is X64Instructions.Memory &&
+            val clear =
+                X64Instructions(bytes).all().first {
+                    it.operation == X64Instructions.Operation.MOV &&
+                        it.destination is X64Instructions.Memory &&
                         it.source == X64Instructions.Immediate(0)
-            }
+                }
             val corrupted = bytes.bytes(0, bytes.size.toInt())
             repeat(clear.size) { corrupted[clear.offset.toInt() + it] = 0x90.toByte() }
             assertFails { SysVTargeterRelease.verifyClearing(BinaryView(corrupted), layout) }
@@ -64,11 +82,14 @@ class SysVTargeterReleaseTest {
             val bytes = image.functionBytes(symbol, 512)
             val layout = SysVTargeterRelease.analyze(bytes)
             val body = X64Instructions(bytes).all()
-            val headStore = body.single { instruction ->
-                val target = instruction.destination as? X64Instructions.Memory
-                instruction.operation == X64Instructions.Operation.MOV && target?.base == 6 &&
-                        target.displacement == layout.head && instruction.source == X64Instructions.Register(7, 8)
-            }
+            val headStore =
+                body.single { instruction ->
+                    val target = instruction.destination as? X64Instructions.Memory
+                    instruction.operation == X64Instructions.Operation.MOV &&
+                        target?.base == 6 &&
+                        target.displacement == layout.head &&
+                        instruction.source == X64Instructions.Register(7, 8)
+                }
             val corrupted = bytes.bytes(0, bytes.size.toInt())
             repeat(headStore.size) { corrupted[headStore.offset.toInt() + it] = 0x90.toByte() }
             // Null release remains valid, but that proof must not authorize a non-null argument.
@@ -91,10 +112,12 @@ class SysVTargeterReleaseTest {
             assertFails { SysVTargeterRelease.analyze(insertPrefix("48 89 d7")) }
             assertFails { SysVTargeterRelease.analyze(insertPrefix("48 31 db")) }
             val decoded = X64Instructions(BinaryView(bytes)).all()
-            val clears = decoded.filter {
-                it.operation == X64Instructions.Operation.MOV && it.destination is X64Instructions.Memory &&
+            val clears =
+                decoded.filter {
+                    it.operation == X64Instructions.Operation.MOV &&
+                        it.destination is X64Instructions.Memory &&
                         it.source == X64Instructions.Immediate(0)
-            }
+                }
             assertTrue(clears.isNotEmpty())
             val corrupted = bytes.copyOf()
             val selected = clears.first()

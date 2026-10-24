@@ -1,4 +1,5 @@
 #include "keyboard_pump.h"
+#include "keyboard_fixture.h"
 #include <cassert>
 #include <cerrno>
 #include <cstddef>
@@ -23,6 +24,7 @@ struct Record {
 struct State {
     uint64_t buttons = 0;
     Record *begin = nullptr, *end = nullptr;
+    uint16_t modifiers = 0;
 };
 
 struct Global {
@@ -32,6 +34,7 @@ struct Global {
 struct Event {
     uint32_t type = 0, code = 0;
     double time = 0;
+    uint16_t modifiers = 0;
 };
 
 struct Frame {
@@ -41,7 +44,7 @@ struct Frame {
 
 bool failClock = false;
 
-uint32_t ticks() {
+uint64_t ticks() {
     if (failClock)
         throw std::runtime_error("fixture clock failed");
     return 1234;
@@ -91,14 +94,13 @@ struct Fixture {
                        offsetof(State, end),
                        sizeof(Record),
                        offsetof(Record, code),
-                       offsetof(Record, value),
-                       sizeof(Value),
-                       offsetof(Value, held),
-                       offsetof(Value, blocked)};
+                       offsetof(Record, value) + offsetof(Value, held),
+                       fixtureModifiers(offsetof(State, modifiers), 42, 43, 44)};
         config.event.extent = sizeof(Event);
         config.event.type = offsetof(Event, type);
         config.event.time = offsetof(Event, time);
         config.event.code = offsetof(Event, code);
+        config.event.modifiers = offsetof(Event, modifiers);
         config.event.press = 1;
         config.event.release = 2;
         config.clock = {reinterpret_cast<uintptr_t>(ticks), 1000};
@@ -124,6 +126,7 @@ struct Fixture {
             const auto &event = self.frame.event;
             assert(event.code == uint32_t(self.record.code) && event.time == 1.234);
             assert(event.type == 1 || event.type == 2);
+            self.state.modifiers = event.modifiers;
             if (event.type == 1) {
                 ++self.downs;
                 self.record.value.held = 1;

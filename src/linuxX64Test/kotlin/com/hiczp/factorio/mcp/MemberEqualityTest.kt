@@ -6,6 +6,39 @@ import kotlin.test.assertFails
 
 class MemberEqualityTest {
     @Test
+    fun permitsPrivateSpillsScheduledInsideTheDebugRangeWithoutChangingFlags() {
+        val code =
+            "55 48 89 e5 48 83 ec 20 80 7f 18 00 0f 29 45 e0 0f 29 4d f0 0f 94 c0 " +
+                "48 83 c4 20 5d c3"
+        fun analyze(text: String) = MemberEquality.analyze(machineCode(text), 8, 23, 1)
+        assertEquals(MemberEquality(24, 0), analyze(code))
+        assertFails { analyze(code.replace("29 45 e0", "29 47 e0")) }
+        assertFails { analyze(code.replace("29 45 e0", "29 45 d0")) }
+        assertFails { analyze(code.replace("0f 94 c0", "0f 95 c0")) }
+        assertFails { analyze(code.replace("0f 29 4d f0", "83 c0 01 90")) }
+    }
+
+    @Test
+    fun followsUnchangedLoadedValuesThroughRegisters() {
+        val code = "0f b6 47 20 89 c1 90 83 f9 03 c3"
+        assertEquals(MemberEquality(32, 3), MemberEquality.analyze(machineCode(code), 7, 10, 1))
+        assertFails {
+            MemberEquality.analyze(
+                machineCode(code.replace("0f b6 47 20", "8b 47 20 90")),
+                7,
+                10,
+                1,
+            )
+        }
+        assertFails {
+            MemberEquality.analyze(machineCode(code.replace("89 c1 90", "83 c0 01")), 7, 10, 1)
+        }
+        assertFails {
+            MemberEquality.analyze(machineCode(code.replace("0f b6 47", "0f b6 46")), 7, 10, 1)
+        }
+    }
+
+    @Test
     fun decodesSignExtendedImmediateStackArgumentsWithoutChangingReceiver() {
         val code = machineCode("6a ff 68 00 00 00 80 80 bf 20 00 00 00 00 48 83 c4 10 c3")
         val instructions = X64Instructions(code).all()
@@ -40,8 +73,12 @@ class MemberEqualityTest {
     fun acceptsOnlyEntryProloguePushesAttributedToInlineEquality() {
         val code = "55 48 89 e5 41 57 50 80 bf 20 00 00 00 00 58 41 5f 5d c3"
         assertEquals(MemberEquality(32, 0), MemberEquality.analyze(machineCode(code), 4, 14, 1))
-        assertFails { MemberEquality.analyze(machineCode(code.replace("48 89 e5", "48 89 f7")), 4, 14, 1) }
-        assertFails { MemberEquality.analyze(machineCode(code.replace("41 57 50", "90 90 50")), 6, 13, 1) }
+        assertFails {
+            MemberEquality.analyze(machineCode(code.replace("48 89 e5", "48 89 f7")), 4, 14, 1)
+        }
+        assertFails {
+            MemberEquality.analyze(machineCode(code.replace("41 57 50", "90 90 50")), 6, 13, 1)
+        }
     }
 
     @Test
@@ -50,7 +87,16 @@ class MemberEqualityTest {
         assertEquals(MemberEquality(32, 0), MemberEquality.analyze(machineCode(code), 4, 11, 1))
         assertFails { MemberEquality.analyze(machineCode(code), 4, 11, 4) }
         assertFails { MemberEquality.analyze(machineCode(code), 4, 10, 1) }
-        assertFails { MemberEquality.analyze(machineCode(code.replace("89 fb", "89 f3")), 4, 11, 1) }
-        assertFails { MemberEquality.analyze(machineCode(code.replace("20 00 00 00", "ff ff ff ff")), 4, 11, 1) }
+        assertFails {
+            MemberEquality.analyze(machineCode(code.replace("89 fb", "89 f3")), 4, 11, 1)
+        }
+        assertFails {
+            MemberEquality.analyze(
+                machineCode(code.replace("20 00 00 00", "ff ff ff ff")),
+                4,
+                11,
+                1,
+            )
+        }
     }
 }

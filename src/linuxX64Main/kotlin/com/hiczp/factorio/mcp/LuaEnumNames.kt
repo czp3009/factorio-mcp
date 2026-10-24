@@ -10,11 +10,24 @@ internal object LuaEnumNames {
         val table: Long,
         val pointers: List<Long>,
         val names: List<String>,
+        val relative: Boolean = false,
     )
 
-    data class Table(val objectPointer: Long, val field: Long, val address: Long, val count: Int)
+    data class Table(
+        val objectPointer: Long,
+        val field: Long,
+        val address: Long,
+        val count: Int,
+        val relative: Boolean = false,
+    )
 
-    fun resolve(image: ElfImage, function: String, wrapperSize: Long, objectSize: Long): Proof {
+    fun resolve(
+        image: ElfImage,
+        function: String,
+        wrapperSize: Long,
+        objectSize: Long,
+        identity: Long? = null,
+    ): Proof {
         val entry = image.symbol(function)
         val push = image.symbol("lua_pushstring")
         EhFrames(image).function(push)
@@ -25,18 +38,32 @@ internal object LuaEnumNames {
                 push.address - entry.address,
                 wrapperSize,
                 objectSize,
+                identity?.minus(entry.address),
             )
+        val tableWidth = if (table.relative) 4 else 8
         val section =
             image.sections.singleOrNull {
                 it.flags and 6L == 2L &&
                     table.address >= it.address &&
-                    table.count * 8L <= it.size &&
-                    table.address - it.address <= it.size - table.count * 8L
+                    table.count * tableWidth.toLong() <= it.size &&
+                    table.address - it.address <= it.size - table.count * tableWidth.toLong()
             } ?: error("Enum names table is not bounded allocated non-executable data")
         require(section.type == 1L)
         // RELRO pointer words are relocated, not ordinary immutable byte evidence. Consumers must
         // validate these pointers separately against the loaded selected executable before use.
-        val pointers = image.pointers.words(table.address, table.count).map { it.pointer() }
+        val pointers =
+            if (table.relative) {
+                require(section.flags and 1L == 0L)
+                val bytes = image.virtualBytes(table.address, table.count * 4L)
+                List(table.count) { index ->
+                    val displacement = bytes.unsigned(index * 4L, 4).toInt().toLong()
+                    require(
+                        displacement >= -table.address &&
+                            displacement <= Long.MAX_VALUE - table.address
+                    )
+                    table.address + displacement
+                }
+            } else image.pointers.words(table.address, table.count).map { it.pointer() }
         val names =
             pointers.map { address ->
                 val storage =
@@ -50,7 +77,14 @@ internal object LuaEnumNames {
                     .string(0, 128)
                     .also { require(it.isNotEmpty()) }
             }
-        return Proof(table.objectPointer, table.field, table.address, pointers, names)
+        return Proof(
+            table.objectPointer,
+            table.field,
+            table.address,
+            pointers,
+            names,
+            table.relative,
+        )
     }
 
     fun analyze(
@@ -59,6 +93,7 @@ internal object LuaEnumNames {
         push: Long,
         wrapperSize: Long,
         objectSize: Long,
+        identity: Long? = null,
     ): Table {
         require(address >= 0 && wrapperSize in 8..4096 && objectSize in 1..4096)
         val arguments = SysVArgumentFlow(flow)
@@ -85,19 +120,31 @@ internal object LuaEnumNames {
             }
             return instruction
         }
-        val load = pointerDefinition(call.offset, 6)
+        val result = pointerDefinition(call.offset, 6)
+        val relative = result.operation == Operation.ADD
+        val load =
+            if (relative) {
+                val target =
+                    result.destination as? Register ?: error("Relative enum result has no register")
+                pointerDefinition(result.offset, target.number)
+            } else result
         val memory = load.source as? Memory ?: error("Enum result is not a pointer-table load")
         require(
-            load.operation == Operation.MOV &&
-                memory.width == 8 &&
+            load.operation == (if (relative) Operation.MOVSX else Operation.MOV) &&
+                memory.width == (if (relative) 4 else 8) &&
                 !memory.relative &&
                 memory.base != null &&
                 memory.index != null &&
                 memory.base != memory.index &&
-                memory.scale == 8 &&
+                memory.scale == (if (relative) 4 else 8) &&
                 memory.displacement == 0L
         )
         val base = pointerDefinition(load.offset, memory.base)
+        if (relative) {
+            val added =
+                result.source as? Register ?: error("Relative enum result has no table base")
+            require(added.width == 8 && pointerDefinition(result.offset, added.number) == base)
+        }
         val location =
             base.source as? Memory ?: error("Enum table has no selected-executable address")
         require(
@@ -110,7 +157,7 @@ internal object LuaEnumNames {
         val pc = address + base.offset + base.size
         require(location.displacement >= -pc && location.displacement <= Long.MAX_VALUE - pc)
         val table = pc + location.displacement
-        require(table > 0 && table % 8 == 0L)
+        require(table > 0 && table % (if (relative) 4 else 8) == 0L)
 
         fun byteSource(site: Long, register: Int, depth: Int = 0): Instruction {
             require(depth < 32) { "Enum index forwarding exceeds its bound" }
@@ -138,12 +185,16 @@ internal object LuaEnumNames {
                 field.base != null &&
                 field.displacement in 0 until objectSize
         )
-        val values = ConstructorValues(flow.reaching(source.offset), emptyMap())
+        val values =
+            OriginalPointerOrigins(
+                flow.reaching(source.offset),
+                identityCalls = listOfNotNull(identity).toSet(),
+            )
         val objectPointer =
-            values.register(source.offset, field.base) as? ConstructorValues.Load
+            values.register(source.offset, field.base) as? OriginalPointerOrigins.Load
                 ?: error("Enum member does not come from the original wrapper")
         require(
-            objectPointer.base == ConstructorValues.Argument(7) &&
+            objectPointer.base == OriginalPointerOrigins.Argument(7) &&
                 objectPointer.member in 0..wrapperSize - 8
         )
         val objectLoad = flow.body.getValue(objectPointer.site)
@@ -221,6 +272,6 @@ internal object LuaEnumNames {
             }
             pending.addAll(flow.successors.getValue(site))
         }
-        return Table(objectPointer.member, field.displacement, table, count)
+        return Table(objectPointer.member, field.displacement, table, count, relative)
     }
 }

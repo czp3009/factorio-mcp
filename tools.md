@@ -62,7 +62,7 @@ gameplay meaning from their hierarchy or values; interpreting them and choosing 
 `visible`, `render_enabled` and `hidden_by_search` report the widget's own flags, with
 `visibility_basis: "own_widget_flags"`. Parent state is not propagated to children. Interpret these flags alongside
 the returned parent relationships; they do not establish effective visibility, clipping or occlusion. Offscreen options
-can still be directly selected. When metadata is unavailable these fields are omitted and`visibility_unavailable_reason`
+can still be directly selected. When metadata is unavailable these fields are omitted and `visibility_unavailable_reason`
 explains why. Hidden widgets may retain stale property values. Visibility does not implicitly filter reads or actions.
 Bounds describe widget geometry, including offscreen content; they do not establish visibility, clipping or whether
 another window covers the widget. `enabled` is the widget's own state; actions also check its ancestors and the active
@@ -608,7 +608,8 @@ Entity and character/vehicle selections accept `include` with any distinct subse
 These return separate `details` entries with per-entry nil/error information in `detail_status`:
 
 - `recipe`: configured recipe and quality references. A missing recipe is explicit; it does not imply craftability.
-- `fluids`: native fluid-name to amount dictionary. Use object inspection of `fluidbox` for temperature or connections.
+- `fluids`: native fluid-name to amount dictionary. Use object inspection for individual storage temperatures,
+  capacities, filters and connections. Discover the available properties and methods with `mode: "members"`.
 - `filters`: native slot count, up to 128 indexed filters, mode flags and per-property/per-slot errors. Unsupported
   filters/modes are not inferred from the entity's name.
 
@@ -703,13 +704,19 @@ Lua, mutation methods and insertion-capacity probes are not accepted. `arguments
     },
     "path": [
       {
-        "property": "fluidbox"
+        "method": "get_fluid",
+        "arguments": [1]
       }
     ]
   },
   "mode": "entries"
 }
 ```
+
+Fluid storage indices range from 1 through the observed `fluids_count`. Inspect `get_fluid_capacity`,
+`get_fluid_filter`, `get_fluid_box_neighbours` or `get_fluid_box_pipe_connections` with the same index.
+`has_fluid_segment` and admitted `get_fluid_segment_*` methods expose existing segment observations.
+No fluid mutation methods are admitted.
 
 All inspection modes accept `offset` (0–65536) and `limit` (1–256, default 64), and report `total`, `truncated` and
 `next_offset` where applicable. Properties returning native objects remain references: continue the path to inspect
@@ -935,16 +942,16 @@ within the observation rather than resolving a previously observed position. Veh
 
 ### Quickbar
 
-Quickbar slots are filters/references, not inventory storage. Query explicit one-based API indices without opening UI:
+Quickbar slots contain filters or references, not inventory storage. Query explicit one-based page/slot locations:
 
 ```json
 {
   "selection": {
     "kind": "quickbar",
     "slots": [
-      1,
-      2,
-      11
+      {"page_index": 1, "slot_index": 1},
+      {"page_index": 1, "slot_index": 2},
+      {"page_index": 2, "slot_index": 1}
     ],
     "screen_pages": [
       1,
@@ -954,11 +961,14 @@ Quickbar slots are filters/references, not inventory storage. Query explicit one
 }
 ```
 
-`objects` contains the requested slot indices and their `attributes.filter`; `active_pages` contains requested screen
-indices and `attributes.page`. Missing values and rejected API indices have per-entry `read_status` nil/error values.
-Filters retain native item/quality/comparator fields. They do not claim to reproduce blueprint instance contents.
-At least one index list is required; slots allow 1–128 distinct indices and screen pages 1–16. Indices are bounded to
-1..65536 by the tool, not an assertion that the game supports that many slots/pages. Input order is preserved.
+`objects` preserves each `page_index` and `slot_index`. `attributes.value` contains the native slot's `type` and nested
+`filter`, `item`, `record` or `selection` when provided. Missing slots and invalid game locations have explicit
+`read_status.value` nil/error results. Object references do not reproduce blueprint instance contents.
+`page_width` reports the game's actual row width. `active_pages` contains requested screen indices and `attributes.page`,
+with per-entry `read_status.page` for nil/error results.
+Provide at least one list: `slots` accepts 1–128 distinct locations, and `screen_pages` accepts 1–16 distinct indices.
+Page and slot indices are bounded to 1..256; screen indices to 1..65536. These API/tool bounds do not assert that the
+game has that many pages or slots. Input order is preserved.
 This selection does not accept `fields`, `surface`, `offset` or `limit` and does not infer which rows are visible.
 
 ### Inventories
@@ -1125,6 +1135,9 @@ Each message has a native update `tick`, zero-based `position_in_tick` within it
 index, not the one-based Lua player selector; non-player messages can carry a sentinel. No sender/channel is parsed
 from text. `text` is existing cached display text, which may be empty or stale. `raw` formats the localization
 expression without requesting translation. Each string is bounded to 4095 UTF-8 bytes without splitting a character.
+`player_name` and `player_name_truncated` preserve a separately retained sender when available, and
+`text`/`raw` describe the stored message body. MCP does not
+reconstruct a formatted message from these fields or refresh the game's translation/rendering cache.
 
 Omit `offset` or use `0` to return the latest requested observations. A positive integer selects the native tick
 inclusively: its boundary messages are included so messages sharing a tick are not silently skipped. For exact

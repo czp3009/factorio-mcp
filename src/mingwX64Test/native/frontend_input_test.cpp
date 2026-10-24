@@ -19,6 +19,7 @@ __declspec(noinline) static void increment(volatile unsigned *value) {
 struct Keyboard {
     uint64_t padding;
     uint32_t scan;
+    uint16_t modifiers;
 };
 
 struct EventFixture {
@@ -69,9 +70,12 @@ struct SourceFixture {
 static Detour hook;
 static Symbols symbols{};
 static KeyGesture gesture;
+static uint16_t modifiers;
+static void *inputState = &modifiers;
+static void *global = &inputState;
 
-static uint32_t ticks() {
-    return 123450;
+static uint64_t ticksNS() {
+    return 0x8000000000000000ULL + 123450;
 }
 
 static void *construct(void *storage, double time, int type) {
@@ -103,7 +107,11 @@ static int run() {
     layout.scancode = offsetof(Keyboard, scan);
     layout.keyDown = 71;
     layout.keyUp = 98;
-    symbols.address[SdlTicks] = reinterpret_cast<uintptr_t>(ticks);
+    layout.modifiers.event = offsetof(EventFixture, keyboard) + offsetof(Keyboard, modifiers);
+    layout.modifiers.keys[0] = 42;
+    layout.modifiers.keys[2] = 56;
+    symbols.address[Global] = reinterpret_cast<uintptr_t>(&global);
+    symbols.address[SdlTicksNS] = reinterpret_cast<uintptr_t>(ticksNS);
     symbols.address[EventConstructor] = reinterpret_cast<uintptr_t>(construct);
     auto method = &SourceFixture::next;
     static_assert(sizeof(method) == sizeof(void *));
@@ -116,6 +124,7 @@ static int run() {
     // Cancel before admission, after each down/up, and at the final acknowledgement boundary.
     for (unsigned cancelAt = 0; cancelAt <= 7; ++cancelAt) {
         gesture.begin(chord, 3);
+        modifiers = 0;
         std::set<uint32_t> held;
         unsigned events = 0;
         for (unsigned step = 0; step < 8; ++step) {
@@ -125,7 +134,7 @@ static int run() {
             if (!event.engaged)
                 break;
             ++events;
-            assert(event.event.timestamp == 123.45);
+            assert(event.event.timestamp == (0x8000000000000000ULL + 123450) / 1e9);
             const auto key = event.event.keyboard.scan;
             if (event.event.type == int(layout.keyDown))
                 assert(held.insert(key).second);
@@ -133,8 +142,11 @@ static int run() {
                 assert(event.event.type == int(layout.keyUp));
                 assert(held.erase(key) == 1);
             }
+            const uint16_t expected = (held.count(42) ? 1 : 0) | (held.count(56) ? 0x40 : 0);
+            assert(event.event.keyboard.modifiers == expected);
+            modifiers = event.event.keyboard.modifiers;
         }
-        assert(!gesture.active() && held.empty());
+        assert(!gesture.active() && held.empty() && modifiers == 0);
         assert(events % 2 == 0);
     }
     assert(source.calls > 0 && destroyed > 0);

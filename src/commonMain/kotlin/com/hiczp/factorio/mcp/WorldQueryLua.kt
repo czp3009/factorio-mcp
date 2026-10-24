@@ -53,11 +53,14 @@ internal val worldQueryLua =
         return {object_name=class, id=value.id}
       elseif class == "LuaRecord" then
         return {object_name=class, valid=value.valid, type=value.type}
+      elseif class == "LuaItem" then
+        return {object_name=class, valid=value.valid, name=value.name,
+          quality={name=value.quality.name, level=value.quality.level}}
       elseif class == "LuaItemStack" then
         if not value.valid_for_read then return {object_name=class, valid_for_read=false} end
         return {object_name=class, valid_for_read=true, name=value.name, count=value.count,
           quality={name=value.quality.name, level=value.quality.level}}
-      elseif class == "LuaGroup" then
+      elseif class == "LuaItemGroup" or class == "LuaItemSubGroup" then
         return {object_name=class, name=value.name}
       elseif class == "LuaPlayer" then
         return {object_name=class, index=value.index, name=value.name}
@@ -260,23 +263,29 @@ internal val worldQueryLua =
         end
       end
     elseif selection.kind == "quickbar" then
-      local function indexed(index, field, getter)
-        local record={index=index, attributes={}, read_status={}}
-        local ok,value=pcall(function() return project(getter(index),0) end)
+      extra.page_width=player.quick_bar_width
+      local function read(record, field, getter)
+        record.attributes={}
+        record.read_status={}
+        local ok,value=pcall(function() return project(getter(),0) end)
         if not ok then record.read_status[field]={status="error",message=tostring(value)}
         elseif value==nil then record.read_status[field]={status="nil"}
         else record.attributes[field]=value end
         return record
       end
-      for _,index in ipairs(selection.slots or {}) do
-        objects[#objects+1]=indexed(index,"filter",player.get_quick_bar_slot)
+      for _,location in ipairs(selection.slots or {}) do
+        objects[#objects+1]=read({page_index=location.page_index,slot_index=location.slot_index},"value",function()
+          return player.get_quick_bar_slot(location.page_index,location.slot_index)
+        end)
       end
       extra.active_pages={}
       for _,index in ipairs(selection.screen_pages or {}) do
-        extra.active_pages[#extra.active_pages+1]=indexed(index,"page",player.get_active_quick_bar_page)
+        extra.active_pages[#extra.active_pages+1]=read({index=index},"page",function()
+          return player.get_active_quick_bar_page(index)
+        end)
       end
       extra.index_base=1
-      extra.observation="quickbar_filters"
+      extra.observation="quickbar_slots"
       candidates=#objects
     elseif selection.kind == "players" then
       local found={}

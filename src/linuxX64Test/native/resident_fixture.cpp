@@ -26,12 +26,35 @@ struct ChatAction {
     std::string text;
 };
 
-struct ReadString { const char *data; uint64_t size; };
-struct ReadItem { uint64_t tick; ReadString text; uint16_t index; };
-struct ReadLinks { uintptr_t next, previous; };
-struct ReadNode { ReadLinks links; ReadItem item; };
-struct ReadList { ReadLinks head; uint64_t count; };
-struct ReadConsole { void *player; ReadList lists[2]; };
+struct ReadString {
+    const char *data;
+    uint64_t size;
+};
+
+struct ReadItem {
+    uint64_t tick;
+    ReadString text, playerName;
+    uint16_t index;
+};
+
+struct ReadLinks {
+    uintptr_t next, previous;
+};
+
+struct ReadNode {
+    ReadLinks links;
+    ReadItem item;
+};
+
+struct ReadList {
+    ReadLinks head;
+    uint64_t count;
+};
+
+struct ReadConsole {
+    void *player;
+    ReadList lists[2];
+};
 
 void unexpectedRaw(void *, const void *) {
     require(false, "empty history invoked raw formatting");
@@ -88,7 +111,7 @@ void submitChat(const void *player, void *storage) {
     if (failSubmission)
         throw std::runtime_error("fixture chat submission failure");
 }
-}
+} // namespace
 
 static void retire(unsigned *calls) {
     ++*calls;
@@ -98,7 +121,7 @@ static void retire(unsigned *calls) {
 }
 
 class FixtureGui {
-public:
+  public:
     uintptr_t caller = 0;
     unsigned calls = 0;
 
@@ -139,8 +162,13 @@ int main(int argc, char **argv) {
     uintptr_t *addressPoint = table + 2;
     std::memcpy(static_cast<void *>(&gui), &addressPoint, sizeof(addressPoint));
     require(mprotect(page, pageSize, PROT_READ) == 0, "cannot protect synthetic table");
-    shared->config = {reinterpret_cast<uintptr_t>(addressPoint), table[2],
-                      reinterpret_cast<uintptr_t>(&instance), caller, caller - 1, caller + 1, PROT_READ};
+    shared->config = {reinterpret_cast<uintptr_t>(addressPoint),
+                      table[2],
+                      reinterpret_cast<uintptr_t>(&instance),
+                      caller,
+                      caller - 1,
+                      caller + 1,
+                      PROT_READ};
     shared->command = FM_LINUX_COMPLETE;
     require(fm_linux_attach() == -EBUSY && !shared->attached, "attach overwrote unreconciled result");
     shared->command = FM_LINUX_IDLE;
@@ -155,7 +183,11 @@ int main(int argc, char **argv) {
     };
     auto consume = [&](int result) {
         require(fm_ipc_load(&shared->command) == FM_LINUX_COMPLETE, "request was not completed");
-        require(shared->result == result, "unexpected request result");
+        if (shared->result != result) {
+            std::fprintf(stderr, "factorio-mcp resident fixture: operation %u returned %d, expected %d\n",
+                         shared->operation, shared->result, result);
+            std::abort();
+        }
         require(shared->resultFrame > 0 && shared->resultFrame <= fm_ipc_load64(&shared->frame), "invalid frame");
         fm_ipc_store(&shared->command, FM_LINUX_IDLE);
     };
@@ -210,7 +242,7 @@ int main(int argc, char **argv) {
     invoke(&gui);
     consume(-EINVAL);
     require(!shared->controlsSnapshot.count && !shared->controlsSnapshot.registryCount,
-        "failed control read retained stale rows");
+            "failed control read retained stale rows");
     request(FM_LINUX_CONTROLS, true);
     invoke(&gui);
     consume(-ECANCELED);
@@ -242,7 +274,7 @@ int main(int argc, char **argv) {
         invoke(&gui);
         consume(canceled ? -ECANCELED : -EINVAL);
         require(!shared->actionOwned && !shared->chatProgress.entered && !shared->chatProgress.returned,
-            "rejected chat retained ownership or stale submission progress");
+                "rejected chat retained ownership or stale submission progress");
     }
     chat_fixture::World chatWorld;
     ReadConsole console{};
@@ -271,6 +303,7 @@ int main(int argc, char **argv) {
     layout.playerIndex = offsetof(ReadItem, index);
     layout.indexWidth = sizeof(ReadItem::index);
     layout.text = offsetof(ReadItem, text);
+    layout.playerName = offsetof(ReadItem, playerName);
     layout.textSize = sizeof(ReadString);
     layout.stringSize = sizeof(ReadString);
     layout.stringData = offsetof(ReadString, data);
@@ -279,8 +312,9 @@ int main(int argc, char **argv) {
     invoke(&gui);
     consume(0);
     require(shared->chatSnapshot.consoleIdentity == reinterpret_cast<uintptr_t>(&console) &&
-        !shared->chatSnapshot.count && !shared->chatSnapshot.totals[0] && !shared->chatSnapshot.totals[1] &&
-        !shared->actionOwned, "empty chat history lost identity, bounds or cleanup");
+                !shared->chatSnapshot.count && !shared->chatSnapshot.totals[0] && !shared->chatSnapshot.totals[1] &&
+                !shared->actionOwned,
+            "empty chat history lost identity, bounds or cleanup");
     console.player = &chatWorld.replacement;
     request(FM_LINUX_CHAT_READ, false);
     invoke(&gui);
@@ -298,10 +332,15 @@ int main(int argc, char **argv) {
     require(!shared->chatSnapshot.count && !shared->actionOwned, "invalid read retained rows or ownership");
     layout.nodeSize = nodeSize;
     shared->chatConfig = {chatWorld.config,
-        reinterpret_cast<uintptr_t>(&constructChatString), reinterpret_cast<uintptr_t>(&assignChatString),
-        reinterpret_cast<uintptr_t>(&destroyChatString), reinterpret_cast<uintptr_t>(&constructChatAction),
-        reinterpret_cast<uintptr_t>(&destroyChatAction), reinterpret_cast<uintptr_t>(&submitChat),
-        sizeof(std::string), sizeof(ChatAction), 37};
+                          reinterpret_cast<uintptr_t>(&constructChatString),
+                          reinterpret_cast<uintptr_t>(&assignChatString),
+                          reinterpret_cast<uintptr_t>(&destroyChatString),
+                          reinterpret_cast<uintptr_t>(&constructChatAction),
+                          reinterpret_cast<uintptr_t>(&destroyChatAction),
+                          reinterpret_cast<uintptr_t>(&submitChat),
+                          sizeof(std::string),
+                          sizeof(ChatAction),
+                          37};
     const std::string message = "fixture chat: 中文";
     shared->chatRequest.size = message.size();
     std::memcpy(shared->chatRequest.text, message.data(), message.size());
@@ -311,10 +350,12 @@ int main(int argc, char **argv) {
         request(FM_LINUX_CHAT, false);
         invoke(&gui);
         consume(fail ? -EFAULT : 0);
-        require(submissions == before + 1 && submittedPlayer == &chatWorld.player &&
-            submittedType == 37 && submittedText == message, "chat wire changed submission arguments");
-        require(shared->chatProgress.entered && shared->chatProgress.returned == !fail &&
-            !shared->actionOwned && !stringsOwned && !actionsOwned, "chat completion lost cleanup or progress");
+        require(submissions == before + 1 && submittedPlayer == &chatWorld.player && submittedType == 37 &&
+                    submittedText == message,
+                "chat wire changed submission arguments");
+        require(shared->chatProgress.entered && shared->chatProgress.returned == !fail && !shared->actionOwned &&
+                    !stringsOwned && !actionsOwned,
+                "chat completion lost cleanup or progress");
         invoke(&gui);
         require(submissions == before + 1, "completed chat was replayed");
     }
@@ -323,9 +364,9 @@ int main(int argc, char **argv) {
     request(FM_LINUX_CHAT, false);
     invoke(&gui);
     consume(-EACCES);
-    require(submissions == beforeRejectedChat && !shared->chatProgress.entered &&
-        !shared->chatProgress.returned && !shared->actionOwned && !stringsOwned && !actionsOwned,
-        "excluded chat entered native submission or retained resources");
+    require(submissions == beforeRejectedChat && !shared->chatProgress.entered && !shared->chatProgress.returned &&
+                !shared->actionOwned && !stringsOwned && !actionsOwned,
+            "excluded chat entered native submission or retained resources");
     if (argc == 2) {
         failActionDestruction = std::strcmp(argv[1], "action-destruction") == 0;
         failStringDestruction = std::strcmp(argv[1], "string-destruction") == 0;
@@ -336,9 +377,9 @@ int main(int argc, char **argv) {
         invoke(&gui);
         consume(-EFAULT);
         require(shared->actionOwned && shared->chatProgress.entered && shared->chatProgress.returned,
-            "uncertain destruction discarded ownership or submission progress");
+                "uncertain destruction discarded ownership or submission progress");
         const unsigned submitted = submissions, actionDestroyed = actionDestructions,
-            stringDestroyed = stringDestructions;
+                       stringDestroyed = stringDestructions;
         require(fm_linux_cleanup() == -EBUSY, "direct cleanup discarded uncertain chat");
         request(FM_LINUX_FRAME, false);
         invoke(&gui);
@@ -347,9 +388,9 @@ int main(int argc, char **argv) {
             request(operation, true);
             invoke(&gui);
             consume(-EFAULT);
-            require(shared->actionOwned && shared->attached && shared->pointerOwned &&
-                submissions == submitted && actionDestructions == actionDestroyed &&
-                stringDestructions == stringDestroyed, "cleanup replayed uncertain work or lost ownership");
+            require(shared->actionOwned && shared->attached && shared->pointerOwned && submissions == submitted &&
+                        actionDestructions == actionDestroyed && stringDestructions == stringDestroyed,
+                    "cleanup replayed uncertain work or lost ownership");
         }
         // This isolated fixture process intentionally ends with an uncertain native resource.
         return 0;
@@ -370,8 +411,7 @@ int main(int argc, char **argv) {
     request(FM_LINUX_DETACH, true);
     invoke(&gui);
     consume(0);
-    require(!shared->attached && !shared->pointerOwned && !shared->protectionOwned,
-            "detach retained ownership");
+    require(!shared->attached && !shared->pointerOwned && !shared->protectionOwned, "detach retained ownership");
     require(table[2] == originalTable[0], "detach did not restore original pointer");
     require(table[8] == reinterpret_cast<uintptr_t>(&retire), "detach did not restore retirement pointer");
     delayedRetirement(&retirements);

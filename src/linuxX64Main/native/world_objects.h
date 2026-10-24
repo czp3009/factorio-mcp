@@ -1,21 +1,17 @@
 #pragma once
 #include <stdint.h>
 
-#define FM_LINUX_CONTEXT_CANDIDATES 64
 #define FM_LINUX_SCRIPT_NAME 64
 
 typedef struct FmLinuxWorldLayout {
     uint64_t global;
-    uint64_t contextVtable;
-    uint64_t contextTypeInfo;
     uint32_t globalSize;
     uint32_t scenarioSize;
     uint32_t gameSize;
     uint32_t contextSize;
     uint32_t scenario;
     uint32_t game;
-    uint32_t contextCount;
-    uint32_t contexts[FM_LINUX_CONTEXT_CANDIDATES];
+    uint32_t context;
 } FmLinuxWorldLayout;
 
 typedef struct FmLinuxScriptLayout {
@@ -55,5 +51,6 @@ struct ScriptObjects {
 
 bool validScriptLayout(const FmLinuxScriptLayout &layout);
 // The context must have been resolved in this same frontend callback. Checks native load flags, but does not call Lua.
-int readDefaultScript(uintptr_t context, const FmLinuxScriptLayout &layout, const uint32_t *cancel, ScriptObjects &output);
+int readDefaultScript(uintptr_t context, const FmLinuxScriptLayout &layout, const uint32_t *cancel,
+                      ScriptObjects &output);
 #endif

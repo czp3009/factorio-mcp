@@ -1,11 +1,14 @@
 #pragma once
 #include "keyboard_event.h"
+#include "key_state.h"
 #include "ui_capture.h"
 #include "ui_modal.h"
 
 typedef struct FmLinuxUiKeyConfig {
     FmLinuxKeyboardEventLayout event;
     FmLinuxEventClock clock;
+    FmLinuxMouseStateLayout owner;
+    FmLinuxKeyboardModifiers modifiers;
     FmLinuxCaptureLayout capture;
     FmLinuxModalLayout modal;
     uint64_t focus;
@@ -21,10 +24,19 @@ typedef struct FmLinuxUiKeyRequest {
 #include "../../nativeMain/native/key_gesture.h"
 
 class UiKeyCommand {
-public:
-    bool finished() const { return started_ && !gesture_.active() && !target_.owned(); }
-    bool active() const { return gesture_.active(); }
-    int failure() const { return failure_; }
+  public:
+    bool finished() const {
+        return started_ && !gesture_.active() && !target_.owned();
+    }
+
+    bool active() const {
+        return gesture_.active();
+    }
+
+    int failure() const {
+        return failure_;
+    }
+
     int start(uintptr_t instance, void *gui, const FmLinuxUiLayout &ui, const FmLinuxUiKeyConfig &config,
               const FmLinuxUiSelector &selector, const FmLinuxUiKeyRequest &request, const uint32_t *cancel,
               FmLinuxUiSnapshot &scratch);
@@ -32,11 +44,12 @@ public:
     // An error retains any owed releases. Only commit a gesture edge after the native event was written.
     int poll(void *event, bool canceled, bool &produced);
 
-private:
+  private:
     int record(int error);
     void cancel();
     bool started_ = false;
     int failure_ = 0;
+    uintptr_t global_ = 0, state_ = 0;
     FmLinuxUiKeyConfig config_{};
     KeyGesture gesture_;
     UiTargetReference target_;

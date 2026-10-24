@@ -193,6 +193,7 @@ abstract class VerifyNpmPackage : DefaultTask() {
 
     private fun command(directory: File, environment: Map<String, String>, output: File, vararg args: String) {
         val process = ProcessBuilder(args.toList()).directory(directory).apply {
+            environment().keys.removeIf { it.startsWith("npm_config_", ignoreCase = true) }
             environment().putAll(environment)
             redirectOutput(output)
             redirectError(File(output.path + ".stderr"))

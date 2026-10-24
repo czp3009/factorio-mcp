@@ -3,15 +3,21 @@
 package com.hiczp.factorio.mcp
 
 import com.hiczp.factorio.mcp.linuxbridge.FmLinuxScriptLayout
-import kotlinx.cinterop.alloc
-import kotlinx.cinterop.get
-import kotlinx.cinterop.memScoped
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFails
+import kotlinx.cinterop.alloc
+import kotlinx.cinterop.get
+import kotlinx.cinterop.memScoped
 
 class LuaContextLayoutTest {
-    private val context = LuaContextLayout(80, FirstNamedPointer(24, 32, 16, listOf(97, 0, 98).map(Int::toByte)), 0, 8)
+    private val context =
+        LuaContextLayout(
+            80,
+            FirstNamedPointer(24, 32, 16, listOf(97, 0, 98).map(Int::toByte)),
+            0,
+            8,
+        )
     private val script = LuaScriptLayout(80, 48, 0x2010, 0x3000, ScriptReadiness(64, 65))
 
     @Test
@@ -35,22 +41,42 @@ class LuaContextLayoutTest {
     }
 
     @Test
+    fun acceptsFirstMemberInNonPolymorphicContext(): Unit = memScoped {
+        val output = alloc<FmLinuxScriptLayout>()
+        context.copy(script = context.script.copy(begin = 0)).writeTo(output, script, 0)
+        assertEquals(0u, output.begin)
+    }
+
+    @Test
     fun rejectsOverlapsBoundsAndInvalidRelocations(): Unit = memScoped {
         val output = alloc<FmLinuxScriptLayout>()
-        for (bias in listOf(-1L, 1L, Long.MAX_VALUE)) assertFails { context.writeTo(output, script, bias) }
-        for (element in listOf(
-            script.copy(size = 8), script.copy(state = 16), script.copy(state = 0),
-            script.copy(vtable = 1), script.copy(typeInfo = 0),
-            script.copy(readiness = ScriptReadiness(64, 64)), script.copy(readiness = ScriptReadiness(0, 65)),
-            script.copy(readiness = ScriptReadiness(64, 80)), script.copy(readiness = ScriptReadiness(48, 65))
-        )) {
+        for (bias in listOf(-1L, 1L, Long.MAX_VALUE)) assertFails {
+            context.writeTo(output, script, bias)
+        }
+        for (element in
+            listOf(
+                script.copy(size = 8),
+                script.copy(state = 16),
+                script.copy(state = 0),
+                script.copy(vtable = 1),
+                script.copy(typeInfo = 0),
+                script.copy(readiness = ScriptReadiness(64, 64)),
+                script.copy(readiness = ScriptReadiness(0, 65)),
+                script.copy(readiness = ScriptReadiness(64, 80)),
+                script.copy(readiness = ScriptReadiness(48, 65)),
+            )) {
             assertFails { context.writeTo(output, element, 0) }
         }
-        for (selection in listOf(
-            context.script.copy(begin = 0), context.script.copy(end = 24),
-            context.script.copy(end = 28), context.script.copy(name = 80), context.script.copy(expected = emptyList()),
-            context.script.copy(expected = List(65) { 0 })
-        )) {
+        for (selection in
+            listOf(
+                context.script.copy(begin = -1),
+                context.script.copy(begin = 80),
+                context.script.copy(end = 24),
+                context.script.copy(end = 28),
+                context.script.copy(name = 80),
+                context.script.copy(expected = emptyList()),
+                context.script.copy(expected = List(65) { 0 }),
+            )) {
             assertFails { context.copy(script = selection).writeTo(output, script, 0) }
         }
     }

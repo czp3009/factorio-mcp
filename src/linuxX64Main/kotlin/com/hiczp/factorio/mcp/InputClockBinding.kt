@@ -6,7 +6,10 @@ import com.hiczp.factorio.mcp.X64Instructions.Memory
 import com.hiczp.factorio.mcp.X64Instructions.Operation
 import com.hiczp.factorio.mcp.linuxbridge.FmLinuxInputClockLayout
 
-/** Typed GUI input association and concrete clock ABI; runtime use still requires fresh object/table checks. */
+/**
+ * Typed GUI input association and concrete clock ABI; runtime use still requires fresh object/table
+ * checks.
+ */
 internal data class InputClockBinding(
     val guiSize: Long,
     val member: Long,
@@ -16,10 +19,30 @@ internal data class InputClockBinding(
     val getter: Long,
     val clock: InputClock.Proof,
 ) {
+    fun verifyClock(loadBias: Long, read: (Long, Int) -> ByteArray) {
+        val api = clock.api
+        require(
+            loadBias >= 0 &&
+                api.slot > 0 &&
+                api.slot <= Long.MAX_VALUE - loadBias - 8 &&
+                api.implementation > 0 &&
+                api.implementation <= Long.MAX_VALUE - loadBias
+        )
+        require(
+            BinaryView(read(api.slot + loadBias, 8)).unsigned(0, 8) == api.implementation + loadBias
+        ) {
+            "Live GUI input clock differs from the selected SDL implementation"
+        }
+    }
+
     fun writeTo(output: FmLinuxInputClockLayout, loadBias: Long) {
         require(
-            loadBias >= 0 && getter > 0 && getter < Long.MAX_VALUE - loadBias &&
-                    slot in 0..4095 && handlerTable > 0 && handlerTable <= Long.MAX_VALUE - loadBias - (slot + 1L) * 8
+            loadBias >= 0 &&
+                getter > 0 &&
+                getter < Long.MAX_VALUE - loadBias &&
+                slot in 0..4095 &&
+                handlerTable > 0 &&
+                handlerTable <= Long.MAX_VALUE - loadBias - (slot + 1L) * 8
         )
         output.guiSize = guiSize.toUInt()
         output.member = member.toUInt()
@@ -35,7 +58,8 @@ internal data class InputClockBinding(
             val handlerSize = SysVObjectSize.resolve(image, "16InputHandlerAgui")
             val base = ItaniumClass.resolve(image, "N4agui5InputE")
             val handler = ItaniumClass.resolve(image, "16InputHandlerAgui")
-            // Only its vptr is read. Bounds come from the complete concrete object, not a fictitious base allocation.
+            // Only its vptr is read. Bounds come from the complete concrete object, not a
+            // fictitious base allocation.
             require(handler.directBase(base, handlerSize, 8) == 0L) {
                 "Input handler does not use the expected primary input base"
             }
@@ -43,20 +67,39 @@ internal data class InputClockBinding(
             val handlerTable = ItaniumVtable.resolve(image, "_ZTV16InputHandlerAgui")
             val baseMethod = inputTable.method(image, "_ZNK4agui5Input7getTimeEv")
             val method = handlerTable.method(image, "_ZNK16InputHandlerAgui7getTimeEv")
-            require(baseMethod.slot == method.slot) { "Concrete input clock does not override the base slot" }
+            require(baseMethod.slot == method.slot) {
+                "Concrete input clock does not override the base slot"
+            }
             val function = image.symbol("_ZN4agui3Gui11handleHoverEv")
             EhFrames(image).function(function)
             require(function.size in 1..8192)
             val bytes = image.functionBytes(function, 8192)
-            val call = X64Instructions(bytes).all(2048).firstOrNull { instruction ->
-                val operand = instruction.destination as? Memory
-                instruction.operation == Operation.CALL && operand != null && !operand.relative &&
-                        operand.index == null && operand.width == 8 && operand.displacement == method.slot * 8L
-            } ?: error("GUI hover has no call through the typed clock slot")
-            val member = SysVMemberCalls.virtualAt(bytes, function.address, method.slot, guiSize, call.offset)
+            val call =
+                X64Instructions(bytes).all(2048).firstOrNull { instruction ->
+                    val operand = instruction.destination as? Memory
+                    instruction.operation == Operation.CALL &&
+                        operand != null &&
+                        !operand.relative &&
+                        operand.index == null &&
+                        operand.width == 8 &&
+                        operand.displacement == method.slot * 8L
+                } ?: error("GUI hover has no call through the typed clock slot")
+            val member =
+                SysVMemberCalls.virtualAt(
+                    bytes,
+                    function.address,
+                    method.slot,
+                    guiSize,
+                    call.offset,
+                )
             return InputClockBinding(
-                guiSize, member, handlerSize, handlerTable.addressPoint,
-                method.slot, method.function.address, InputClock.resolve(image)
+                guiSize,
+                member,
+                handlerSize,
+                handlerTable.addressPoint,
+                method.slot,
+                method.function.address,
+                InputClock.resolve(image),
             )
         }
     }

@@ -1,4 +1,5 @@
 #include "resident.h"
+#include "keyboard_fixture.h"
 #include "linux_ipc.h"
 #include <cassert>
 #include <cerrno>
@@ -13,18 +14,23 @@ struct Event {
     uint32_t type = 77;
     double time = 0;
     uint32_t key = 0;
+    uint16_t modifiers = 0;
 };
 
 class Gui {
-public:
+  public:
     uintptr_t caller = 0;
-    virtual void logic() { caller = reinterpret_cast<uintptr_t>(__builtin_return_address(0)); }
+
+    virtual void logic() {
+        caller = reinterpret_cast<uintptr_t>(__builtin_return_address(0));
+    }
 };
 
 class Window {
-public:
+  public:
     uintptr_t caller = 0;
     bool real = false;
+
     virtual bool poll(Event &event) {
         caller = reinterpret_cast<uintptr_t>(__builtin_return_address(0));
         if (real)
@@ -69,7 +75,8 @@ __attribute__((noinline)) static bool wrongCaller(Window *window, Event &output)
 }
 
 static bool failClock;
-static uint32_t ticks() {
+
+static uint64_t ticks() {
     if (failClock)
         throw 1;
     return 1250;
@@ -111,16 +118,31 @@ int main() {
     invoke(&gui);
     assert(!pump(&window, event));
     Table guiTable(&gui), windowTable(&window);
-    shared->config = {reinterpret_cast<uintptr_t>(guiTable.addressPoint), *guiTable.original,
-        reinterpret_cast<uintptr_t>(&instance), gui.caller, gui.caller - 1, gui.caller + 1, PROT_READ};
-    shared->pollConfig = {reinterpret_cast<uintptr_t>(windowTable.addressPoint), *windowTable.original,
-        reinterpret_cast<uintptr_t>(windowTable.addressPoint), window.caller, outerCaller,
-        static_cast<uint32_t>(returnAddress - stack), static_cast<uint32_t>(eventAddress - stack),
-        sizeof(Event), PROT_READ};
+    shared->config = {reinterpret_cast<uintptr_t>(guiTable.addressPoint),
+                      *guiTable.original,
+                      reinterpret_cast<uintptr_t>(&instance),
+                      gui.caller,
+                      gui.caller - 1,
+                      gui.caller + 1,
+                      PROT_READ};
+    shared->pollConfig = {reinterpret_cast<uintptr_t>(windowTable.addressPoint),
+                          *windowTable.original,
+                          reinterpret_cast<uintptr_t>(windowTable.addressPoint),
+                          window.caller,
+                          outerCaller,
+                          static_cast<uint32_t>(returnAddress - stack),
+                          static_cast<uint32_t>(eventAddress - stack),
+                          sizeof(Event),
+                          PROT_READ};
     shared->keyConfig.event.extent = sizeof(Event);
     shared->keyConfig.event.type = offsetof(Event, type);
     shared->keyConfig.event.time = offsetof(Event, time);
     shared->keyConfig.event.code = offsetof(Event, key);
+    shared->keyConfig.event.modifiers = offsetof(Event, modifiers);
+    FixtureKeyboardService service;
+    shared->keyConfig.owner =
+        service.owner(sizeof(Event), offsetof(Event, type), offsetof(Event, time), offsetof(Event, key));
+    shared->keyConfig.modifiers = service.modifiers();
     shared->keyConfig.event.emptyType = 77;
     shared->keyConfig.event.press = 19;
     shared->keyConfig.event.release = 39;

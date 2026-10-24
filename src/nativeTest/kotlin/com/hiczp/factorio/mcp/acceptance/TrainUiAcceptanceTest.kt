@@ -4,7 +4,6 @@ package com.hiczp.factorio.mcp.acceptance
 
 import com.hiczp.factorio.mcp.McpHttpClient
 import com.hiczp.factorio.mcp.toolValue
-import kotlin.math.roundToInt
 import kotlin.test.*
 import kotlinx.cinterop.toKString
 import kotlinx.coroutines.delay
@@ -215,19 +214,6 @@ class TrainUiAcceptanceTest {
                         .getValue("attributes")
                         .jsonObject
                 val position = train.getValue("position").jsonObject
-                val viewport =
-                    client.tool("world_overview").toolValue().getValue("viewport").jsonObject
-                val area = viewport.getValue("area").jsonObject
-                fun pixel(axis: String, dimension: String): Int {
-                    val low =
-                        area.getValue("left_top").jsonObject.getValue(axis).jsonPrimitive.double
-                    val high =
-                        area.getValue("right_bottom").jsonObject.getValue(axis).jsonPrimitive.double
-                    return ((position.getValue(axis).jsonPrimitive.double - low) / (high - low) *
-                            viewport.getValue(dimension).jsonPrimitive.int)
-                        .roundToInt()
-                }
-
                 val binding =
                     client
                         .tool(
@@ -270,9 +256,9 @@ class TrainUiAcceptanceTest {
                                 addJsonObject {
                                     put("device", "mouse")
                                     putJsonObject("position") {
-                                        put("space", "viewport")
-                                        put("x", pixel("x", "width"))
-                                        put("y", pixel("y", "height"))
+                                        put("space", "world")
+                                        put("x", position.getValue("x"))
+                                        put("y", position.getValue("y"))
                                     }
                                     put("tick", "0-39")
                                 }
@@ -388,7 +374,7 @@ class TrainUiAcceptanceTest {
                             step("ScheduleStationGui", position = remaining),
                             step("agui::Frame", position = 1, axis = "child"),
                             step("agui::HorizontalFlow", position = 1, axis = "child"),
-                            step("IconButton", position = 2, axis = "child"),
+                            step("IconButton", position = 3, axis = "child"),
                         )
                     )
                     waitUi {

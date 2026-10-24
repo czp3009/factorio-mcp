@@ -69,6 +69,8 @@ void readChat(const Symbols &symbols, void *game, FmChatSnapshot &result) {
             record.playerIndex = read<uint16_t>(item, layout.playerIndex);
             auto *text = item + layout.text;
             record.truncated = copyString(symbols, text + layout.cached, record.text, sizeof(record.text));
+            record.truncated |= copyString(symbols, item + layout.playerName, record.playerName,
+                                           sizeof(record.playerName)) ? 4u : 0u;
             alignas(16) unsigned char raw[256];
             require(layout.stringSize <= sizeof(raw), "Unsupported chat string storage");
             // str_raw formats the localization expression without requesting/refreshing translation.
@@ -87,6 +89,9 @@ void readChat(const Symbols &symbols, void *game, FmChatSnapshot &result) {
 void sendChat(const Symbols &symbols, void *game, const FmChatRequest &request) {
     const auto &layout = symbols.chat;
     require(layout.sendSupported && symbols.world.supported && game, "Chat submission adapter is unavailable");
+    const auto *handler = read<void *>(game, layout.gameHandler);
+    require(handler && read<uint32_t>(handler, layout.handlerInputType) != layout.replayInput,
+            "Chat submission is unavailable for the current input handler");
     require(request.size > 0 && request.size < sizeof(request.text) && request.text[request.size] == 0 &&
                 !memchr(request.text, 0, request.size) && !memchr(request.text, '\n', request.size) &&
                 !memchr(request.text, '\r', request.size) && request.text[0] != '/',
@@ -97,9 +102,8 @@ void sendChat(const Symbols &symbols, void *game, const FmChatRequest &request) 
                 function<bool (*)(uint16_t, const void *)>(symbols, ActionDataType)(
                     uint16_t(layout.writeToConsole), reinterpret_cast<void *>(symbols.address[StringTypeInfo])),
             "Chat action data type changed");
-    alignas(16) unsigned char action[256]{}, context[256]{};
-    require(layout.actionSize <= sizeof(action) && layout.contextSize <= sizeof(context), "Chat storage exceeds bound");
-    write(context, layout.contextPlayer, player);
+    alignas(16) unsigned char action[256]{};
+    require(layout.actionSize <= sizeof(action), "Chat storage exceeds bound");
     write(action, layout.actionType, uint16_t(layout.writeToConsole));
     write(action, layout.actionPlayer, read<uint16_t>(player, symbols.world.playerIndex));
     // The game's constructor owns allocation; send may move the value, and its destructor handles either state.
@@ -115,5 +119,5 @@ void sendChat(const Symbols &symbols, void *game, const FmChatRequest &request) 
         }
     } cleanup{symbols, action};
 
-    function<void (*)(const void *, void *)>(symbols, GuiSend)(context, action);
+    function<void (*)(const void *, void *)>(symbols, PlayerSend)(player, action);
 }

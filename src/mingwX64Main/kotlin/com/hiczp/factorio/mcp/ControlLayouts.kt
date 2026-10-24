@@ -63,7 +63,11 @@ internal class ControlLayouts(types: DebugTypes) {
     private val bindingTypes =
         types.enumValues("ControlInputValue::Type").entries.associate { it.value to it.key }
     private val keys =
-        types.enumValues("SDL_Scancode").entries.associate {
+        types.enumValues("SDL_Scancode").filterKeys {
+            it.startsWith("SDL_SCANCODE_") && it !in setOf(
+                "SDL_SCANCODE_UNKNOWN", "SDL_SCANCODE_RESERVED", "SDL_SCANCODE_COUNT"
+            )
+        }.entries.associate {
             it.value to it.key.removePrefix("SDL_SCANCODE_")
         }
     private val wheels =

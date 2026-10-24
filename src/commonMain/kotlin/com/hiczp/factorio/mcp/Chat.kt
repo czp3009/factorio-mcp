@@ -11,6 +11,8 @@ internal data class ChatRecord(
     val raw: String,
     val textTruncated: Boolean = false,
     val rawTruncated: Boolean = false,
+    val playerName: String? = null,
+    val playerNameTruncated: Boolean = false,
 )
 
 internal data class ChatSnapshot(
@@ -153,6 +155,10 @@ internal class ChatHistory {
                         put("raw", record.raw)
                         put("text_truncated", record.textTruncated)
                         put("raw_truncated", record.rawTruncated)
+                        record.playerName?.let {
+                            put("player_name", it)
+                            put("player_name_truncated", record.playerNameTruncated)
+                        }
                     }
                 }
             }

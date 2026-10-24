@@ -3,9 +3,11 @@
 package com.hiczp.factorio.mcp
 
 import com.hiczp.factorio.mcp.linuxbridge.FmLinuxInputContextConfig
-import kotlinx.cinterop.set
 
-/** Fresh world/input/clock observations. Does not establish a hook, dispatch ABI or cross-frame lifetime. */
+/**
+ * Fresh world/input/clock observations. Does not establish a hook, dispatch ABI or cross-frame
+ * lifetime.
+ */
 internal data class InputContextMetadata(
     val world: WorldLayout,
     val script: LuaScriptLayout,
@@ -15,9 +17,6 @@ internal data class InputContextMetadata(
     val sourceType: ItaniumType,
     val playerType: ItaniumType,
     val viewType: ItaniumType,
-    val handlerType: ItaniumType,
-    val handlerSize: Long,
-    val handlers: List<Long>,
     val tick: ScriptTickField,
     val stop: Long,
     val pause: InputPauseField,
@@ -28,7 +27,11 @@ internal data class InputContextMetadata(
     private val pointers: Map<Long, Long> = emptyMap(),
 ) {
     fun writeTo(output: FmLinuxInputContextConfig, bias: Long) {
-        require(world.gameSize == source.gameSize && world.contextSize == context.size && handlers.size in 1..64)
+        require(
+            world.gameSize == source.gameSize &&
+                world.contextSize == context.size &&
+                gameSource == pause.gameSource
+        )
         world.writeTo(output.world, bias)
         context.writeTo(output.script, script, bias)
         fun address(value: Long): ULong {
@@ -43,13 +46,10 @@ internal data class InputContextMetadata(
         input.playerTypeInfo = address(playerType.typeInfo)
         input.viewVtable = address(viewType.addressPoint)
         input.viewTypeInfo = address(viewType.typeInfo)
-        input.handlerVtable = address(handlerType.addressPoint)
-        input.handlerTypeInfo = address(handlerType.typeInfo)
         input.sourceSize = source.sourceSize.toUInt()
         input.playerSize = source.playerSize.toUInt()
         input.mapSize = source.mapSize.toUInt()
         input.viewSize = source.viewSize.toUInt()
-        input.handlerSize = handlerSize.toUInt()
         input.globalSource = source.globalSource.toUInt()
         input.sourcePlayer = source.sourcePlayer.toUInt()
         input.playerMap = source.playerMap.toUInt()
@@ -61,36 +61,37 @@ internal data class InputContextMetadata(
         input.mapTick = tick.mapTick.toUInt()
         input.mapStop = stop.toUInt()
         input.mapPaused = pause.mapPaused.toUInt()
-        input.handlerMap = pause.handlerMap.toUInt()
-        input.handlerSource = pause.handlerSource.toUInt()
-        input.handlerCount = handlers.size.toUInt()
+        input.gameMap = pause.gameMap.toUInt()
         input.forwardedVtable = address(forwarded.type.addressPoint)
         input.forwardedTypeInfo = address(forwarded.type.typeInfo)
         input.forwardedSize = forwarded.size.toUInt()
         input.forwardedSource = forwarded.source.toUInt()
-        handlers.forEachIndexed { index, member -> input.handlers[index] = member.toUInt() }
     }
 
-    fun verifyLoaded(image: ElfImage, process: ProcessHandle, bias: Long) = verify(image, bias, process::readMemory)
+    fun verifyLoaded(image: ElfImage, process: ProcessHandle, bias: Long) =
+        verify(image, bias, process::readMemory)
 
     internal fun verify(image: ElfImage, bias: Long, read: (Long, Int) -> ByteArray) {
         require(bias >= 0)
         fun compare(address: Long, expected: ByteArray) {
             require(
-                expected.isNotEmpty() && expected.size <= 16 * 1024 * 1024 &&
-                        address > 0 && address <= Long.MAX_VALUE - bias - expected.size
+                expected.isNotEmpty() &&
+                    expected.size <= 16 * 1024 * 1024 &&
+                    address > 0 &&
+                    address <= Long.MAX_VALUE - bias - expected.size
             )
             require(read(address + bias, expected.size).contentEquals(expected)) {
                 "Live input context evidence differs from the selected executable"
             }
         }
-        for (function in functions)
-            compare(
-                function.address,
-                image.functionBytes(function, function.size.toInt()).bytes(0, function.size.toInt())
-            )
-        for (range in readonly)
-            compare(range.address, image.virtualBytes(range.address, range.size).bytes(0, range.size.toInt()))
+        for (function in functions) compare(
+            function.address,
+            image.functionBytes(function, function.size.toInt()).bytes(0, function.size.toInt()),
+        )
+        for (range in readonly) compare(
+            range.address,
+            image.virtualBytes(range.address, range.size).bytes(0, range.size.toInt()),
+        )
         for ((address, target) in pointers) {
             require(target >= 0 && target <= Long.MAX_VALUE - bias)
             val expected = if (target == 0L) 0L else target + bias
@@ -100,56 +101,87 @@ internal data class InputContextMetadata(
 
     companion object {
         fun resolve(image: ElfImage): InputContextMetadata {
-            val (resolved, readonly) = image.withReadonlyEvidence {
-                image.withFunctionEvidence {
-                    val world = WorldLayout.resolve(image)
-                    val script = LuaScriptLayout.resolve(image)
-                    val context = LuaContextLayout.resolve(image, script.size)
-                    val source = InputSourceLayout.resolve(image, world.global, world.globalSize)
-                    val gameSource = EventSenderStateCalls.sourceDispatch(image, source).gameSource
-                    val forwarded = ForwardedInputSource.resolve(image, source.evaluation.slot)
-                    require(world.gameSize == source.gameSize && world.contextSize == context.size)
-                    val types = listOf(
-                        "17PlayerInputSource", "6Player", "8GameView", "17GameActionHandler",
-                        "10LuaContext", "13LuaGameScript", "11InputSource", "19NetworkInputHandler"
-                    ).associateWith { ItaniumType.resolve(image, it) }
-                    val handlerType = types.getValue("17GameActionHandler")
-                    val handlerSize = SysVObjectSize.resolve(image, "17GameActionHandler")
-                    val pause = InputPauseField.resolve(image, source.mapSize)
-                    val evaluationCaller = EvaluationCallSite.resolve(
-                        image, handlerSize, pause.handlerSource,
-                        source.evaluation.slot
-                    )
-                    val handlers = TypedMemberStores.resolve(
-                        image,
-                        "_ZN4GameC2ER3MapR8Scenario8LoadType9InputTypeP11InputSource", source.gameSize, handlerType
-                    )
-                    val pointers = image.pointers
-                    val words = mutableMapOf<Long, Long>()
-                    for (type in types.values) {
-                        words[type.addressPoint - 16] = 0
-                        words[type.addressPoint - 8] = type.typeInfo
-                        words[type.typeInfo + 8] = pointers.words(type.typeInfo + 8, 1).single().pointer()
-                    }
-                    // Complete primary tables consulted for method-slot derivation. Multiple-table groups used
-                    // only for concrete identity above do not imply any callable secondary slots.
-                    for (name in listOf("17PlayerInputSource", "11InputSource", "10LuaContext", "13LuaGameScript", "19NetworkInputHandler")) {
-                        val table = image.symbol("_ZTV$name")
-                        ItaniumVtable.resolve(image, table.name)
-                        pointers.words(table.address, (table.size / 8).toInt()).forEachIndexed { index, word ->
-                            words[table.address + index * 8L] = if (index == 0) word.scalar() else word.pointer()
+            val (resolved, readonly) =
+                image.withReadonlyEvidence {
+                    image.withFunctionEvidence {
+                        val world = WorldLayout.resolve(image)
+                        val script = LuaScriptLayout.resolve(image)
+                        val context = LuaContextLayout.resolve(image, script.size)
+                        val source =
+                            InputSourceLayout.resolve(image, world.global, world.globalSize)
+                        val gameSource =
+                            EventSenderStateCalls.sourceDispatch(image, source).gameSource
+                        val forwarded = ForwardedInputSource.resolve(image, source.evaluation.slot)
+                        require(
+                            world.gameSize == source.gameSize && world.contextSize == context.size
+                        )
+                        val types =
+                            listOf(
+                                    "17PlayerInputSource",
+                                    "6Player",
+                                    "8GameView",
+                                    "13LuaGameScript",
+                                    "11InputSource",
+                                    "19NetworkInputHandler",
+                                )
+                                .associateWith { ItaniumType.resolve(image, it) }
+                        val pause = InputPauseField.resolve(image, source.gameSize, source.mapSize)
+                        require(pause.gameSource == gameSource) {
+                            "Game evaluation and event dispatch use different input sources"
                         }
+                        val evaluationCaller =
+                            EvaluationCallSite.resolve(
+                                image,
+                                source.gameSize,
+                                gameSource,
+                                source.evaluation.slot,
+                            )
+                        val pointers = image.pointers
+                        val words = mutableMapOf<Long, Long>()
+                        for (type in types.values) {
+                            words[type.addressPoint - 16] = 0
+                            words[type.addressPoint - 8] = type.typeInfo
+                            words[type.typeInfo + 8] =
+                                pointers.words(type.typeInfo + 8, 1).single().pointer()
+                        }
+                        // Complete primary tables consulted for method-slot derivation.
+                        // Multiple-table groups used
+                        // only for concrete identity above do not imply any callable secondary
+                        // slots.
+                        for (name in
+                            listOf(
+                                "17PlayerInputSource",
+                                "11InputSource",
+                                "13LuaGameScript",
+                                "19NetworkInputHandler",
+                            )) {
+                            val table = image.symbol("_ZTV$name")
+                            ItaniumVtable.resolve(image, table.name)
+                            pointers
+                                .words(table.address, (table.size / 8).toInt())
+                                .forEachIndexed { index, word ->
+                                    words[table.address + index * 8L] =
+                                        if (index == 0) word.scalar() else word.pointer()
+                                }
+                        }
+                        InputContextMetadata(
+                            world,
+                            script,
+                            context,
+                            source,
+                            gameSource,
+                            types.getValue("17PlayerInputSource"),
+                            types.getValue("6Player"),
+                            types.getValue("8GameView"),
+                            ScriptTickField.resolve(image, script.size, source.mapSize),
+                            MapStopField.resolve(image, source.mapSize),
+                            pause,
+                            evaluationCaller,
+                            forwarded,
+                            pointers = words,
+                        )
                     }
-                    InputContextMetadata(
-                        world, script, context, source, gameSource, types.getValue("17PlayerInputSource"),
-                        types.getValue("6Player"), types.getValue("8GameView"), handlerType,
-                        handlerSize, handlers,
-                        ScriptTickField.resolve(image, script.size, source.mapSize),
-                        MapStopField.resolve(image, source.mapSize), pause, evaluationCaller, forwarded,
-                        pointers = words
-                    )
                 }
-            }
             return resolved.first.copy(functions = resolved.second, readonly = readonly)
         }
     }

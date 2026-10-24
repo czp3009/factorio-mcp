@@ -1,4 +1,5 @@
 #include "input_events.h"
+#include "keyboard_modifiers.h"
 #include <algorithm>
 #include <array>
 #include <cstring>
@@ -24,8 +25,8 @@ void require(bool condition, const char *message) {
 
 InputEventFunctions gameInputFunctions(const Symbols &symbols) {
     return {reinterpret_cast<void *(*)(void *, double, int)>(symbols.address[EventConstructor]),
-            reinterpret_cast<void *(*)(void *, unsigned)>(symbols.address[EventDestructor]),
-            reinterpret_cast<uint32_t (*)()>(symbols.address[SdlTicks]),
+            reinterpret_cast<void (*)(void *)>(symbols.address[EventDestructor]),
+            reinterpret_cast<uint64_t (*)()>(symbols.address[SdlTicksNS]),
             reinterpret_cast<void (*)(void *, const void *)>(symbols.address[InputStateUpdate]),
             reinterpret_cast<int (*)(const void *, bool)>(symbols.address[ProcessInputEvent]),
             reinterpret_cast<void (*)(void *, const void *)>(symbols.address[InputStatePostUpdate])};
@@ -64,7 +65,7 @@ void *gameInputState(const Symbols &symbols) {
 GameInputEvents::GameInputEvents(const InputEventLayout &values, const InputEventFunctions &api,
                                  InputEventButtons &ownedButtons, void *receiver, bool routeEvents)
     : layout(values), functions(api), buttons(ownedButtons), state(receiver), route(routeEvents) {
-    require(state && api.construct && api.destroy && api.ticks && api.update && api.process && api.postUpdate,
+    require(state && api.construct && api.destroy && api.ticksNS && api.update && api.process && api.postUpdate,
             "Game input event adapter is unavailable");
     require(layout.eventSize >= 4 && layout.eventSize <= 256 && layout.stateSize >= 4,
             "Unsupported game input event storage");
@@ -74,6 +75,9 @@ GameInputEvents::GameInputEvents(const InputEventLayout &values, const InputEven
     require(layout.stateMouseX <= layout.stateSize - 4 && layout.stateMouseY <= layout.stateSize - 4,
             "Input cursor field exceeds its validated receiver");
     require(layout.stateMouseInWindow < layout.stateSize, "Input cursor presence exceeds its validated receiver");
+    require(layout.modifiers.event <= layout.eventSize - sizeof(uint16_t) &&
+                layout.modifiers.state <= layout.stateSize - sizeof(uint16_t),
+            "Keyboard modifier field exceeds its validated storage");
     const std::array types{layout.keyDown, layout.keyUp, layout.mouseMove, layout.mouseDown,
                            layout.mouseUp, layout.wheel, layout.mouseEnter};
     for (size_t i = 0; i < types.size(); ++i)
@@ -84,19 +88,21 @@ GameInputEvents::GameInputEvents(const InputEventLayout &values, const InputEven
 void GameInputEvents::dispatch(int type, std::optional<uint32_t> key, std::optional<InputPosition> position,
                                std::optional<uint32_t> button, int32_t wheel, InputEventProgress *progress) {
     alignas(16) unsigned char event[256];
-    functions.construct(event, functions.ticks() / 1000.0, type);
+    functions.construct(event, functions.ticksNS() / 1e9, type);
 
     struct Destroy {
         const InputEventFunctions &functions;
         void *event;
 
         ~Destroy() {
-            functions.destroy(event, 0);
+            functions.destroy(event);
         }
     } destroy{functions, event};
 
-    if (key)
+    if (key) {
         write(event, layout.scancode, *key);
+        writeKeyboardModifiers(layout.modifiers, state, event, *key, type == layout.keyDown);
+    }
     if (position) {
         write(event, layout.mouseX, position->x);
         write(event, layout.mouseY, position->y);

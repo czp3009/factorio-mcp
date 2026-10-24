@@ -55,16 +55,28 @@ internal data class MemberEquality(val offset: Long, val value: Int) {
             }
             val comparison = instructions.first()
             require(comparison.operation == Operation.CMP)
-            val memory =
-                comparison.destination as? Memory
-                    ?: error("Member predicate does not compare a member")
             val value =
                 (comparison.source as? Immediate)?.value
                     ?: error("Member predicate has no enum constant")
-            require(memory.width == width && value in Int.MIN_VALUE..Int.MAX_VALUE)
+            require(value in Int.MIN_VALUE..Int.MAX_VALUE)
             val field =
-                SysVArgumentFlow(flow).memory(comparison.offset, memory)
-                    ?: error("Member predicate lost receiver provenance")
+                when (val operand = comparison.destination) {
+                    is Memory ->
+                        SysVArgumentFlow(flow).memory(comparison.offset, operand)
+                            ?: error("Member predicate lost receiver provenance")
+                    is Register -> {
+                        var scalar =
+                            ScalarExpression(flow, mapOf(7 to 16L * 1024 * 1024))
+                                .before(comparison.offset, operand)
+                        while (scalar is ScalarExpression.Narrow) {
+                            require(scalar.width >= width)
+                            scalar = scalar.value
+                        }
+                        (scalar as? ScalarExpression.Input)?.field
+                            ?: error("Member predicate changes the loaded scalar")
+                    }
+                    else -> error("Member predicate does not compare a member")
+                }
             require(field.reference.argument == 7 && field.width == width)
             // This is an analysis bound, not proof of a concrete object's extent.
             require(field.reference.offset in 0..16 * 1024 * 1024 - width)
@@ -72,22 +84,35 @@ internal data class MemberEquality(val offset: Long, val value: Int) {
             // range.
             // If the compiler includes materialization, it must be equality and must not modify the
             // object.
-            require(instructions.size in 1..2) {
-                "Equality range contains ${instructions.size} instructions"
-            }
-            if (instructions.size == 2) {
-                val materialize = instructions[1]
-                require(materialize.operation == Operation.SET && materialize.condition == 4) {
-                    "Equality range ends with ${materialize.operation}, condition ${materialize.condition}"
+            val frame by lazy { SysVLocalArgument(flow) }
+            for (instruction in instructions.drop(1)) {
+                when (instruction.operation) {
+                    Operation.NOP,
+                    Operation.ENDBR -> continue
+                    Operation.SET -> require(instruction.condition == 4)
+                    Operation.MOV,
+                    Operation.SCALAR_MOV,
+                    Operation.VECTOR_MOV,
+                    Operation.LEA -> Unit
+                    else ->
+                        error(
+                            "Inline equality changes flags or control flow: ${instruction.operation}"
+                        )
                 }
-                val destination = materialize.destination
-                require(
-                    destination !is Memory ||
-                        SysVArgumentFlow(flow, includeStack = true)
-                            .memory(materialize.offset, destination)
-                            ?.reference
-                            ?.argument == 4
-                )
+                when (val destination = instruction.destination) {
+                    is Register -> require(destination.number !in listOf(4, 5))
+                    is Memory -> {
+                        require(instruction.operation != Operation.LEA)
+                        val slot =
+                            frame.address(instruction.offset, destination)
+                                ?: error("Inline equality writes outside its private frame")
+                        require(
+                            slot >= checkNotNull(frame.registers(instruction.offset)[4]) &&
+                                slot <= -destination.width
+                        )
+                    }
+                    else -> error("Inline equality has an unsupported destination")
+                }
             }
             return Located(MemberEquality(field.reference.offset, value.toInt()), comparison.offset)
         }

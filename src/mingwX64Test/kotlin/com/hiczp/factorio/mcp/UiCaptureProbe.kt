@@ -13,7 +13,9 @@ import kotlinx.cinterop.*
 import platform.windows.*
 
 /**
- * Detect inherited GUI modifier state without resetting state owned by the user or another task.
+ * Check transient GUI key-down flags, not the player's persistent Alt display setting.
+ * InputHandlerAgui::processEvent sets these flags on modifier key-down and clears them on key-up.
+ * Do not reset inherited state here: a failed initial check does not establish an MCP cleanup failure.
  */
 internal fun assertGuiModifiersReleased(pid: UInt) {
     val process =

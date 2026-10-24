@@ -316,10 +316,35 @@ internal fun relatedSelectionProperties() = buildJsonObject {
             "Case-insensitive substring of internal names for catalogs; may combine with names.",
         )
     }
-    for (name in listOf("slots", "screen_pages")) putJsonObject(name) {
+    putJsonObject("slots") {
         put("type", "array")
         put("minItems", 1)
-        put("maxItems", if (name == "slots") 128 else 16)
+        put("maxItems", 128)
+        put("uniqueItems", true)
+        putJsonObject("items") {
+            put("type", "object")
+            put("additionalProperties", false)
+            putJsonArray("required") {
+                add("page_index")
+                add("slot_index")
+            }
+            putJsonObject("properties") {
+                for (name in listOf("page_index", "slot_index")) putJsonObject(name) {
+                    put("type", "integer")
+                    put("minimum", 1)
+                    put("maximum", 256)
+                }
+            }
+        }
+        put(
+            "description",
+            "quickbar only. One-based page/slot locations returning raw slot contents. Invalid game locations and empty slots remain per-entry error/nil results. Provide slots or screen_pages; fields/limit/offset/surface are not accepted.",
+        )
+    }
+    putJsonObject("screen_pages") {
+        put("type", "array")
+        put("minItems", 1)
+        put("maxItems", 16)
         put("uniqueItems", true)
         putJsonObject("items") {
             put("type", "integer")
@@ -328,7 +353,7 @@ internal fun relatedSelectionProperties() = buildJsonObject {
         }
         put(
             "description",
-            "quickbar only. Explicit one-based API indices. Slots return filters, not inventory counts; screen_pages return active quickbar page numbers. Per-index nil/error results remain explicit. Provide at least one index list; fields/limit/offset/surface are not accepted.",
+            "quickbar only. One-based screen-row indices returning active page numbers. Per-index nil/error results remain explicit.",
         )
     }
     for (name in listOf("product", "ingredient")) putJsonObject(name) {
@@ -373,14 +398,29 @@ private fun parseQuickbarQuery(args: JsonObject, selection: JsonObject): WorldQu
     require("slots" in selection || "screen_pages" in selection) {
         "Specify quickbar slots or screen_pages"
     }
-    for ((field, maximum) in listOf("slots" to 128, "screen_pages" to 16)) selection[field]?.let { value ->
+    selection["slots"]?.let { value ->
+        val locations = value.jsonArray.map { item ->
+            val location = item.jsonObject
+            require(location.keys == setOf("page_index", "slot_index")) {
+                "Each quickbar slot requires page_index and slot_index"
+            }
+            val page = location.getValue("page_index").intArgument()
+            val slot = location.getValue("slot_index").intArgument()
+            require(page in 1..256 && slot in 1..256) { "Quickbar page/slot indices must be in 1..256" }
+            page to slot
+        }
+        require(locations.size in 1..128 && locations.distinct().size == locations.size) {
+            "slots requires 1..128 distinct page/slot locations"
+        }
+    }
+    selection["screen_pages"]?.let { value ->
         val indices = value.jsonArray.map { it.intArgument() }
         require(
-            indices.size in 1..maximum &&
+            indices.size in 1..16 &&
                     indices.distinct().size == indices.size &&
                     indices.all { it in 1..65536 }
         ) {
-            "$field requires 1..$maximum distinct indices in 1..65536"
+            "screen_pages requires 1..16 distinct indices in 1..65536"
         }
     }
     return WorldQuery(

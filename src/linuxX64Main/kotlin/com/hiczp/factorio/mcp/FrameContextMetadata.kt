@@ -8,7 +8,6 @@ import com.hiczp.factorio.mcp.linuxbridge.FmLinuxFrameContextConfig
 internal data class FrameContextMetadata(
     val size: GraphicsFrameSize,
     val swap: GraphicsSwapCall,
-    val backends: List<SdlDeviceAllocation>,
     val apiSlots: Map<String, Long>,
     val evidence: ElfEvidence,
 ) {
@@ -27,9 +26,8 @@ internal data class FrameContextMetadata(
             return value.toUInt()
         }
         output.global = address(size.global)
-        output.device = address(swap.device)
         output.caller = address(swap.caller)
-        output.getter = address(size.getter.address)
+        output.pixels = address(size.pixels.implementation)
         output.graphicsTable = address(size.graphicsTable)
         output.windowTable = address(size.windowTable)
         output.globalSize = field(size.globalSize)
@@ -45,51 +43,58 @@ internal data class FrameContextMetadata(
         fun resolve(image: ElfImage): FrameContextMetadata {
             val pointers = mutableMapOf<Long, Long>()
             val scalars = mutableMapOf<Long, Long>()
-            val (resolved, readonly) = image.withReadonlyEvidence {
-                image.withFunctionEvidence {
-                    val size = GraphicsFrameSize.resolve(image)
-                    val swap = GraphicsSwapCall.resolve(image)
-                    val backends = listOf(
-                        "X11_CreateDevice" to "X11_GL_SwapWindow",
-                        "X11_CreateDevice" to "X11_GLES_SwapWindow",
-                        "Wayland_CreateDevice" to "Wayland_GLES_SwapWindow",
-                    ).map { (factory, backend) ->
-                        SdlDeviceAllocation.resolve(image, factory, backend).also {
-                            require(it.member == swap.member)
-                            pointers[it.allocator] = image.symbol("real_calloc").address
+            val (resolved, readonly) =
+                image.withReadonlyEvidence {
+                    image.withFunctionEvidence {
+                        val size = GraphicsFrameSize.resolve(image)
+                        val swap = GraphicsSwapCall.resolve(image, size)
+                        val lookup =
+                            SdlDynamicApi.resolve(image, "SDL_GL_GetProcAddress", listOf(7))
+                        for (api in listOf(size.pixels, swap.api, lookup)) pointers[api.slot] =
+                            api.implementation
+                        val apiSlots = GlLoaderBinding.resolve(image, FrameApiBinding.names, lookup)
+                        val words = image.pointers
+                        for (type in listOf("23GraphicsInterfaceOpenGL", "9SDLWindow")) {
+                            val identity = ItaniumType.resolve(image, type)
+                            scalars[identity.addressPoint - 16] = 0
+                            pointers[identity.addressPoint - 8] = identity.typeInfo
+                            pointers[identity.typeInfo + 8] =
+                                words.words(identity.typeInfo + 8, 1).single().pointer()
                         }
+                        val graphics = ItaniumVtable.resolve(image, "_ZTV23GraphicsInterfaceOpenGL")
+                        val window = ItaniumVtable.resolve(image, "_ZTV9SDLWindow")
+                        val methods =
+                            listOf(
+                                graphics.method(
+                                    image,
+                                    "_ZN23GraphicsInterfaceOpenGL11swapBuffersEv",
+                                ),
+                                window.method(image, "_ZN9SDLWindow9getWindowEv"),
+                                window.method(image, "_ZNK9SDLWindow4swapEv"),
+                            )
+                        // The poll slot only establishes the file-derived current-window
+                        // association. Capture
+                        // checks that object's concrete live type and does not invoke polling; our
+                        // keyboard
+                        // hook may legitimately own its slot. Keep actual graphics/getWindow
+                        // entries checked.
+                        for (method in methods) pointers[method.entryAddress] =
+                            method.function.address
+                        Resolved(size, swap, apiSlots)
                     }
-                    val apiSlots = GlLoaderBinding.resolve(image, FrameApiBinding.names, backends.minOf { it.size })
-                    val words = image.pointers
-                    for (type in listOf("23GraphicsInterfaceOpenGL", "9SDLWindow")) {
-                        val identity = ItaniumType.resolve(image, type)
-                        scalars[identity.addressPoint - 16] = 0
-                        pointers[identity.addressPoint - 8] = identity.typeInfo
-                        pointers[identity.typeInfo + 8] = words.words(identity.typeInfo + 8, 1).single().pointer()
-                    }
-                    val graphics = ItaniumVtable.resolve(image, "_ZTV23GraphicsInterfaceOpenGL")
-                    val window = ItaniumVtable.resolve(image, "_ZTV9SDLWindow")
-                    val methods = listOf(
-                        graphics.method(image, "_ZN23GraphicsInterfaceOpenGL11swapBuffersEv"),
-                        window.method(image, "_ZN9SDLWindow9getWindowEv"),
-                        window.method(image, "_ZNK9SDLWindow4swapEv"),
-                    )
-                    // The poll slot only establishes the file-derived current-window association. Capture
-                    // checks that object's concrete live type and does not invoke polling; our keyboard
-                    // hook may legitimately own its slot. Keep actual graphics/getWindow entries checked.
-                    for (method in methods) pointers[method.entryAddress] = method.function.address
-                    Resolved(size, swap, backends, apiSlots)
                 }
-            }
             return FrameContextMetadata(
-                resolved.first.size, resolved.first.swap, resolved.first.backends, resolved.first.apiSlots,
-                ElfEvidence(resolved.second, readonly, pointers, scalars)
+                resolved.first.size,
+                resolved.first.swap,
+                resolved.first.apiSlots,
+                ElfEvidence(resolved.second, readonly, pointers, scalars),
             )
         }
 
         private data class Resolved(
-            val size: GraphicsFrameSize, val swap: GraphicsSwapCall,
-            val backends: List<SdlDeviceAllocation>, val apiSlots: Map<String, Long>
+            val size: GraphicsFrameSize,
+            val swap: GraphicsSwapCall,
+            val apiSlots: Map<String, Long>,
         )
     }
 }

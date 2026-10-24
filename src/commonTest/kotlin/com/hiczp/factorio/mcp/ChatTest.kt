@@ -15,6 +15,24 @@ class ChatTest {
     }).offset)
 
     @Test
+    fun separateSenderPreservesTextAndDoesNotChangeContinuation() {
+        val history = ChatHistory()
+        val body = "[item=iron-plate] original body"
+        val value = record(1, text = body).copy(playerName = "[color=red]sender[/color]")
+        val first = history.read(snapshot(value), null, 5)
+        val message = first.getValue("messages").jsonArray.single().jsonObject
+        assertEquals(body, message.getValue("text").jsonPrimitive.content)
+        assertEquals(body, message.getValue("raw").jsonPrimitive.content)
+        assertEquals(value.playerName, message.getValue("player_name").jsonPrimitive.content)
+        assertFalse(message.getValue("player_name_truncated").jsonPrimitive.boolean)
+        val updated = history.read(snapshot(value.copy(playerName = "changed")), first.offset(), 5)
+        assertTrue(updated.getValue("messages").jsonArray.isEmpty())
+        val combined = history.read(snapshot(record(2)), null, 5)
+            .getValue("messages").jsonArray.single().jsonObject
+        assertFalse(combined.containsKey("player_name"))
+    }
+
+    @Test
     fun incrementalReadsPreserveDuplicatesAndPaging() {
         val history = ChatHistory()
         val first = history.read(snapshot(record(1)), null, 1)

@@ -226,7 +226,7 @@ internal fun createServer(game: GameSession): Server {
     }
     tool(
         "chat_read",
-        "Read retained local chat and notifications without opening UI; optionally wait for later messages. Requires a loaded world. Pass next_offset to continue the same player's history, including multiple messages at one native tick. Watermarks survive MCP restarts with unchanged history; reset them on world/player changes. text is existing cached display text and may be empty/stale; raw preserves the localization expression. Check history_lost, has_more and boundary/snapshot truncation. This is bounded observation, not a lossless subscription or server-wide log; unseen evicted messages cannot be recovered.",
+        "Read retained local chat and notifications without opening UI; optionally wait for later messages. Requires a loaded world. Pass next_offset to continue the same player's history, including multiple messages at one native tick. Watermarks survive MCP restarts with unchanged history; reset them on world/player changes. text is cached text and may be empty/stale; raw preserves its localization expression. player_name is present when the game stores the sender separately from the body. Check history_lost, has_more and boundary/snapshot truncation. This is bounded observation, not a lossless subscription or server-wide log; unseen evicted messages cannot be recovered.",
         chatReadSchema(),
     ) { args ->
         val request = parseChatRead(args)

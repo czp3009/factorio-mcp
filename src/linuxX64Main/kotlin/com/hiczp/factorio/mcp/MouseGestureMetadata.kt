@@ -5,7 +5,9 @@ package com.hiczp.factorio.mcp
 import com.hiczp.factorio.mcp.linuxbridge.FmLinuxMouseGestureConfig
 import kotlinx.cinterop.set
 
-/** Complete finite-widget-gesture configuration; input ownership and command admission are separate. */
+/**
+ * Complete finite-widget-gesture configuration; input ownership and command admission are separate.
+ */
 internal data class MouseGestureMetadata(
     val core: Core,
     val enter: MouseEnterConstruction,
@@ -27,22 +29,28 @@ internal data class MouseGestureMetadata(
     init {
         require(core.entries.size == 5 && core.entries.all { it > 0 })
         require(
-            core.clock.guiSize == enter.guiSize && enter.guiSize == capture.guiSize &&
-                    capture.guiSize == modal.guiSize && core.widgetSize == capture.widgetSize &&
-                    capture.widgetSize == modal.widgetSize
+            core.clock.guiSize == enter.guiSize &&
+                enter.guiSize == capture.guiSize &&
+                capture.guiSize == modal.guiSize &&
+                core.widgetSize == capture.widgetSize &&
+                capture.widgetSize == modal.widgetSize
         )
         require(
             enter.widgetTargetable == capture.widgetTargetable &&
-                    capture.widgetTargetable == modal.widgetTargetable
+                capture.widgetTargetable == modal.widgetTargetable
         )
         core.clickOnDown.withinObject(core.widgetSize)
         val previous = checkNotNull(enter.template.previous)
         val zeroBytes = (enter.template.zeroBytes + (previous until previous + 8)).sorted()
         require(
             listOf(
-                core.construction.down, core.construction.up, core.construction.click,
-                core.construction.leave
-            ).all { it.zeroBytes == zeroBytes && it.previous == null }) {
+                    core.construction.down,
+                    core.construction.up,
+                    core.construction.click,
+                    core.construction.leave,
+                )
+                .all { it.zeroBytes == zeroBytes && it.previous == null }
+        ) {
             "Gesture phases disagree on native event defaults"
         }
     }
@@ -54,8 +62,9 @@ internal data class MouseGestureMetadata(
         require(loadBias >= 0)
         fun compare(address: Long, bytes: ByteArray) {
             require(
-                bytes.size in 1..(16 * 1024 * 1024) && address >= 0 &&
-                        address <= Long.MAX_VALUE - loadBias - bytes.size
+                bytes.size in 1..(16 * 1024 * 1024) &&
+                    address >= 0 &&
+                    address <= Long.MAX_VALUE - loadBias - bytes.size
             )
             require(read(address + loadBias, bytes.size).contentEquals(bytes)) {
                 "Live mouse-gesture evidence differs from the selected executable"
@@ -65,15 +74,21 @@ internal data class MouseGestureMetadata(
             require(function.size in 1..(16 * 1024 * 1024))
             compare(
                 function.address,
-                image.functionBytes(function, function.size.toInt()).bytes(0, function.size.toInt())
+                image.functionBytes(function, function.size.toInt()).bytes(0, function.size.toInt()),
             )
         }
         for (range in core.readonly) {
             require(range.size in 1..(16 * 1024 * 1024))
-            compare(range.address, image.virtualBytes(range.address, range.size).bytes(0, range.size.toInt()))
+            compare(
+                range.address,
+                image.virtualBytes(range.address, range.size).bytes(0, range.size.toInt()),
+            )
         }
-        for (literal in core.construction.literals)
-            compare(literal.address, literal.bytes.map { it.toByte() }.toByteArray())
+        for (literal in core.construction.literals) compare(
+            literal.address,
+            literal.bytes.map { it.toByte() }.toByteArray(),
+        )
+        core.clock.verifyClock(loadBias, read)
         enter.verify(image, loadBias, read)
         capture.verify(image, loadBias, read)
         modal.verify(image, loadBias, read)
@@ -81,10 +96,11 @@ internal data class MouseGestureMetadata(
 
     fun writeTo(output: FmLinuxMouseGestureConfig, loadBias: Long) {
         require(loadBias >= 0)
-        val entries = core.entries.map {
-            require(it > 0 && it < Long.MAX_VALUE - loadBias)
-            (it + loadBias).toULong()
-        }
+        val entries =
+            core.entries.map {
+                require(it > 0 && it < Long.MAX_VALUE - loadBias)
+                (it + loadBias).toULong()
+            }
         core.event.writeTo(output.event)
         core.clock.writeTo(output.clock, loadBias)
         capture.writeTo(output.capture, loadBias)
@@ -107,49 +123,84 @@ internal data class MouseGestureMetadata(
         output.click = entries[2]
         output.up = entries[3]
         output.leave = entries[4]
-        listOf(SdlButtonAdmission.Button.LEFT, SdlButtonAdmission.Button.RIGHT, SdlButtonAdmission.Button.MIDDLE)
-            .forEachIndexed { index, button -> output.buttons[index] = core.buttons.values.getValue(button).toUShort() }
+        listOf(
+                SdlButtonAdmission.Button.LEFT,
+                SdlButtonAdmission.Button.RIGHT,
+                SdlButtonAdmission.Button.MIDDLE,
+            )
+            .forEachIndexed { index, button ->
+                output.buttons[index] = core.buttons.values.getValue(button).toUShort()
+            }
     }
 
     companion object {
         fun resolve(image: ElfImage): MouseGestureMetadata {
-            val (resolved, readonly) = image.withReadonlyEvidence {
-                image.withFunctionEvidence {
-                    val widgetSize = SysVObjectSize.resolve(image, "4agui6Widget")
-                    val targeter = image.symbol("_ZN4agui19GenericTargeterBase8attachToEPNS_17GenericTargetableE")
-                    val links = SysVTargeterRelease.resolve(image, targeter.name)
-                    SysVTargeterRelease.verifyFreshAttachment(image.functionBytes(targeter, 512), links)
-                    val clearing = image.symbol("_ZN4agui17GenericTargetable23clearTargetingMeGenericEv")
-                    EhFrames(image).function(clearing)
-                    SysVTargeterRelease.verifyClearing(image.functionBytes(clearing, 512), links)
-                    val event = MouseEventFields.resolve(image)
-                    val table = ItaniumVtable.resolve(image, "_ZTVN4agui6WidgetE")
-                    val entries = listOf(
-                        "18dispatchMouseEnter" to "10mouseEnter", "17dispatchMouseDown" to "9mouseDown",
-                        "13dispatchClick" to "10mouseClick", "15dispatchMouseUp" to "7mouseUp",
-                        "18dispatchMouseLeave" to "10mouseLeave"
-                    ).map { (entry, method) ->
-                        val symbol = image.symbol("_ZN4agui6Widget${entry}ERKNS_10MouseEventE")
-                        WidgetEventDispatch.verify(
-                            image, symbol, widgetSize,
-                            table.method(image, "_ZN4agui6Widget${method}ERKNS_10MouseEventE")
+            val (resolved, readonly) =
+                image.withReadonlyEvidence {
+                    image.withFunctionEvidence {
+                        val widgetSize = SysVObjectSize.resolve(image, "4agui6Widget")
+                        val targeter =
+                            image.symbol(
+                                "_ZN4agui19GenericTargeterBase8attachToEPNS_17GenericTargetableE"
+                            )
+                        val links = SysVTargeterRelease.resolve(image, targeter.name)
+                        SysVTargeterRelease.verifyFreshAttachment(
+                            image.functionBytes(targeter, 512),
+                            links,
                         )
-                        symbol.address
+                        val clearing =
+                            image.symbol("_ZN4agui17GenericTargetable23clearTargetingMeGenericEv")
+                        EhFrames(image).function(clearing)
+                        SysVTargeterRelease.verifyClearing(
+                            image.functionBytes(clearing, 512),
+                            links,
+                        )
+                        val event = MouseEventFields.resolve(image)
+                        val table = ItaniumVtable.resolve(image, "_ZTVN4agui6WidgetE")
+                        val entries =
+                            listOf(
+                                    "18dispatchMouseEnter" to "10mouseEnter",
+                                    "17dispatchMouseDown" to "9mouseDown",
+                                    "13dispatchClick" to "10mouseClick",
+                                    "15dispatchMouseUp" to "7mouseUp",
+                                    "18dispatchMouseLeave" to "10mouseLeave",
+                                )
+                                .map { (entry, method) ->
+                                    val symbol =
+                                        image.symbol("_ZN4agui6Widget${entry}ERKNS_10MouseEventE")
+                                    WidgetEventDispatch.verify(
+                                        image,
+                                        symbol,
+                                        widgetSize,
+                                        table.method(
+                                            image,
+                                            "_ZN4agui6Widget${method}ERKNS_10MouseEventE",
+                                        ),
+                                    )
+                                    symbol.address
+                                }
+                        Core(
+                            widgetSize,
+                            event,
+                            MouseEventConstruction.resolve(image, event),
+                            InputClockBinding.resolve(image),
+                            WidgetClickGate.resolve(image),
+                            MouseButtonMasks.resolve(
+                                image,
+                                MouseInputLayout.resolve(image),
+                                SdlButtonConversion.resolve(image),
+                                event,
+                            ),
+                            entries,
+                        )
                     }
-                    Core(
-                        widgetSize, event, MouseEventConstruction.resolve(image, event),
-                        InputClockBinding.resolve(image), WidgetClickGate.resolve(image),
-                        MouseButtonMasks.resolve(
-                            image, MouseInputLayout.resolve(image),
-                            SdlButtonConversion.resolve(image), event
-                        ), entries
-                    )
                 }
-            }
             val core = resolved.first.copy(functions = resolved.second, readonly = readonly)
             return MouseGestureMetadata(
-                core, MouseEnterConstruction.resolve(image, core.event),
-                UiCaptureMetadata.resolve(image), UiModalMetadata.resolve(image)
+                core,
+                MouseEnterConstruction.resolve(image, core.event),
+                UiCaptureMetadata.resolve(image),
+                UiModalMetadata.resolve(image),
             )
         }
     }

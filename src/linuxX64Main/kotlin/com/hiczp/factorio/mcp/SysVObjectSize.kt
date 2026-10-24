@@ -22,17 +22,14 @@ internal object SysVObjectSize {
         if (destructor.size > 256) return SysVDeletingTailSize.resolve(image, destructor)
         require(destructor.size in 1..256) { "Deleting destructor exceeds analysis bound" }
         val names = setOf("_ZN${encodedType}D1Ev", "_ZN${encodedType}D2Ev")
+        // Reuse the image's checked name index instead of rescanning every symbol for each object
+        // type.
+        // Optimizers may retain only one D1/D2 alias; an alias used by a call must still be
+        // present.
         val ordinary =
-            image
-                .symbols()
-                .filter { it.name in names }
-                .toList()
-                .groupBy { it.name }
-                .map { (_, matches) ->
-                    // Optimizers may retain only one of the D1/D2 aliases. Any alias used by a call
-                    // must still be present.
-                    val function =
-                        matches.distinct().singleOrNull() ?: error("Ambiguous destructor symbol")
+            names
+                .mapNotNull { image.findSymbol(it) }
+                .map { function ->
                     image.functionBytes(function, 1)
                     function.address
                 }
@@ -82,8 +79,9 @@ internal object SysVObjectSize {
     /** An inlined leaf destructor can retain its receiver in RDI throughout destruction. */
     fun analyzeLeaf(bytes: BinaryView, address: Long, deallocate: Long): Long {
         require(bytes.size in 1..256)
-        val body = X64Instructions(bytes).all()
-        val terminal = body.last()
+        val control = X64ControlFlow(X64Instructions(bytes).all())
+        val body = control.instructions.filter { it.offset in control.reachable }
+        val terminal = body.single { control.successors.getValue(it.offset).isEmpty() }
         require(
             terminal.operation == Operation.JMP &&
                 (terminal.destination as? Immediate)?.value == deallocate - address
@@ -95,15 +93,27 @@ internal object SysVObjectSize {
                 .distinct()
                 .single()
         require(size in 8..(16 * 1024 * 1024))
-        for (instruction in body.dropLast(1)) {
+        for (instruction in body.filter { it != terminal }) {
             require(instruction.operation !in listOf(Operation.CALL, Operation.RET))
             if (instruction.operation in listOf(Operation.JMP, Operation.JCC)) {
                 val target =
                     (instruction.destination as? Immediate)?.value
                         ?: error("Indirect leaf destructor branch")
-                require(target > instruction.offset && target <= terminal.offset)
+                require(target in control.body)
             }
         }
+        // Code layout may place a cleanup block after the deleting tail. Require an acyclic
+        // normal flow to the unique deletion, rather than forward-only instruction addresses.
+        val completed = mutableSetOf<Long>()
+        val pending = mutableSetOf<Long>()
+        fun visit(site: Long) {
+            if (site in completed) return
+            require(pending.add(site)) { "Leaf deletion contains a control-flow cycle" }
+            control.successors.getValue(site).forEach(::visit)
+            pending.remove(site)
+            completed += site
+        }
+        visit(0)
         val flow = SysVReceiverFlow(bytes, address, size)
         val registers = flow.before(terminal.offset)
         require(

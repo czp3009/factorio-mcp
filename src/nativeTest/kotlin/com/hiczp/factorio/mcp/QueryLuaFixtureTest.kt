@@ -125,6 +125,57 @@ class QueryLuaFixtureTest {
         parseWorldQuery(Json.parseToJsonElement(json).jsonObject).arguments
 
     @Test
+    fun catalogGroupsPreserveTheGamesConcreteObjectNames() {
+        for (group in listOf("LuaItemGroup", "LuaItemSubGroup")) {
+            run(
+                query("""{"selection":{"kind":"prototypes","type":"item","names":["fixture-item"]},"fields":["group"]}"""),
+                setup = """
+                    prototypes={item={['fixture-item']=native{object_name="LuaItemPrototype",name="fixture-item",
+                      group=native{object_name="$group",name="fixture-group"}}}}
+                """,
+                assertions = """
+                    assert(captured.objects[1].attributes.group.object_name=="$group")
+                    assert(captured.objects[1].attributes.group.name=="fixture-group")
+                """,
+            )
+        }
+    }
+
+    @Test
+    fun quickbarPreservesExplicitLocationsAndNativeSlotContents() {
+        run(
+            query("""{"selection":{"kind":"quickbar","slots":[
+              {"page_index":1,"slot_index":1},{"page_index":1,"slot_index":7},
+              {"page_index":2,"slot_index":1},{"page_index":2,"slot_index":2},
+              {"page_index":256,"slot_index":256}],"screen_pages":[2]}}"""),
+            setup = """
+                me.quick_bar_width=7
+                me.get_active_quick_bar_page=function(index) assert(index==2) return 4 end
+                me.get_quick_bar_slot=function(page,slot)
+                  assert(page>=1 and slot>=1 and slot<=7)
+                  if page==1 and slot==1 then return {type="filter",filter={name="iron-plate",quality="uncommon"}} end
+                  if page==1 and slot==7 then return {type="record",record=native{object_name="LuaRecord",valid=true,type="blueprint"}} end
+                  if page==2 and slot==1 then return {type="item",item=native{object_name="LuaItem",valid=true,name="spidertron-remote",quality=quality}} end
+                  if page==2 and slot==2 then return nil end
+                  error("Invalid quickbar location")
+                end
+            """,
+            assertions = """
+                assert(captured.page_width==7)
+                assert(captured.observation=="quickbar_slots")
+                local rows=captured.objects
+                assert(rows[1].attributes.value.filter.quality=="uncommon")
+                assert(rows[2].attributes.value.record.type=="blueprint")
+                assert(rows[3].page_index==2 and rows[3].slot_index==1)
+                assert(rows[3].attributes.value.item.name=="spidertron-remote")
+                assert(rows[4].read_status.value.status=="nil")
+                assert(rows[5].read_status.value.status=="error")
+                assert(captured.active_pages[1].attributes.page==4)
+            """,
+        )
+    }
+
+    @Test
     fun discoversOtherPlayersAndTheirPositions() {
         run(
             query(

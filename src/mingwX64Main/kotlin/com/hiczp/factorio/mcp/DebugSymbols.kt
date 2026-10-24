@@ -55,12 +55,12 @@ private val symbolPrefixes =
         "?nextEvent@GlobalContext@@",
         "?processEvents@MainLoop@@",
         "??0Event@@QEAA@NW4Type@0@@Z",
-        "SDL_GetTicks",
+        "SDL_GetTicksNS_REAL",
         "??_R0?AVToggleButton@agui@@@8",
         "??_R0?AVButton@agui@@@8",
         "??_R0?AVDropDown@agui@@@8",
         "??_R0?AVSlider@agui@@@8",
-        "?getLocalPlayer@Game@@QEAAPEAV",
+        "?getLocalPlayer@Game@@QEBAPEBVPlayer@@XZ",
         "?getLuaContext@Scenario@@",
         "?getDefaultScript@LuaContext@@",
         "??BLuaState@@",
@@ -72,7 +72,7 @@ private val symbolPrefixes =
         "lua_tolstring",
         "lua_pushnumber",
         "lua_pushlstring",
-        "??_GEvent@@QEAAPEAXI@Z",
+        "??1Event@@QEAA@XZ",
         "?update@InputState@@",
         "?postUpdate@InputState@@",
         "?processEvent@MainLoop@@",
@@ -83,7 +83,7 @@ private val symbolPrefixes =
         "?getMapPosition@GameView@@QEBA?AVMapPosition@@VPixelPosition@@@Z",
         "?str_raw@LocalisedString@@",
         "??0?\$basic_string@DU?\$char_traits@D@std@@V?\$allocator@D@2@@std@@QEAA@QEBD@Z",
-        "?send@GuiContext@@QEBAX\$\$QEAVInputAction@@@Z",
+        "?sendToListeners@Player@@QEBAX\$\$QEAVInputAction@@@Z",
         "?destroyValue@InputAction@@",
         "?noData@InputAction@@",
         "?isCorrectDataTypeForAction@InputAction@@",
@@ -240,7 +240,7 @@ internal fun resolveSymbols(process: HANDLE, module: ProcessModule): ResolvedSym
                                 .add(info.pointed.Address)
                         symbolPrefixes.forEachIndexed { index, prefix ->
                             if (
-                                if (prefix == "SDL_GetTicks") name == prefix
+                                if (prefix == "SDL_GetTicksNS_REAL") name == prefix
                                 else name.startsWith(prefix)
                             ) {
                                 result.symbols.add(index, info.pointed.Address)

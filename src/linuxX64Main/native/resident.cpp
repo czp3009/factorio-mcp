@@ -476,10 +476,7 @@ extern "C" void fm_after_gui_logic(void *receiver, uintptr_t caller) noexcept {
         shared->frameSize = {};
         shared->frameBytes = 0;
         shared->frameGlError = 0;
-        result =
-            validFrameContext(shared->frameContext) && shared->frameSite.deviceGlobal == shared->frameContext.device
-                ? 0
-                : EINVAL;
+        result = validFrameContext(shared->frameContext) ? 0 : EINVAL;
         FrameReadbackApi api{};
         if (!result)
             result = readFrameApi(shared->frameApi, api);
@@ -578,7 +575,7 @@ extern "C" void fm_after_gui_logic(void *receiver, uintptr_t caller) noexcept {
     complete(shared, result, frame);
 }
 
-extern "C" void fm_before_frame(void *device, void *window, uintptr_t caller) noexcept {
+extern "C" void fm_before_frame(void *window, uintptr_t caller) noexcept {
     PreserveErrno preserve;
     if (syscall(SYS_gettid) != getpid())
         return;
@@ -590,8 +587,8 @@ extern "C" void fm_before_frame(void *device, void *window, uintptr_t caller) no
     FmLinuxFrameSize size{};
     FrameReadbackApi api{};
     size_t written = 0;
-    int result = readFrameSize(shared->frameContext, reinterpret_cast<uintptr_t>(device),
-                               reinterpret_cast<uintptr_t>(window), caller, &shared->cancel, size);
+    int result = readFrameSize(shared->frameContext, reinterpret_cast<uintptr_t>(window),
+                               caller, &shared->cancel, size);
     if (!result)
         result = readFrameApi(shared->frameApi, api);
     if (!result && fm_ipc_load(&shared->cancel))

@@ -22,9 +22,7 @@ int main() {
         MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
     assert(page != MAP_FAILED);
     page[2] = 0x1000;
-    uintptr_t device = reinterpret_cast<uintptr_t>(page);
-    const FmLinuxFrameHookSite site{reinterpret_cast<uintptr_t>(&device), device, page[2],
-        static_cast<uint32_t>(pageSize), 2 * sizeof(uintptr_t), PROT_READ};
+    const FmLinuxFrameHookSite site{reinterpret_cast<uintptr_t>(page + 2), page[2], PROT_READ};
     assert(mprotect(page, pageSize, PROT_READ) == 0);
     uint64_t forward = 0;
     FrameHookOwner owner(protect, forward);
@@ -34,11 +32,11 @@ int main() {
     });
     worker.join();
     auto invalid = site;
-    invalid.member = invalid.deviceSize;
+    invalid.slot += 1;
     assert(owner.install(invalid, 0x2000, pageSize) == EINVAL && !owner.hasOwnership());
-    device = 0;
-    assert(owner.install(site, 0x2000, pageSize) == ESTALE && !forward);
-    device = site.device;
+    invalid = site;
+    invalid.original += 1;
+    assert(owner.install(invalid, 0x2000, pageSize) == ESTALE && !forward);
     denyRestore = true;
     assert(owner.install(site, 0x2000, pageSize) == EACCES);
     assert(owner.ownsPointer() && owner.ownsProtection() && page[2] == 0x2000 && forward == site.original);
@@ -49,9 +47,6 @@ int main() {
     assert(owner.remove() == 0 && !owner.hasOwnership());
     assert(owner.install(site, 0x2000, pageSize) == 0);
     assert(owner.install(site, 0x2000, pageSize) == 0);
-    device = 0;
-    assert(owner.remove() == ESTALE && owner.ownsPointer() && page[2] == 0x2000);
-    device = site.device;
     assert(mprotect(page, pageSize, PROT_READ | PROT_WRITE) == 0);
     page[2] = 0x3000;
     assert(mprotect(page, pageSize, PROT_READ) == 0);
@@ -66,7 +61,6 @@ int main() {
     assert(owner.install(invalid, 0x2000, pageSize) == ESTALE && forward == site.original);
     assert(owner.install(site, 0x2000, pageSize) == 0);
     assert(munmap(page, pageSize) == 0);
-    // A vanished allocation is not dereferenced or treated as successfully unhooked. Process exit owns
-    // final reclamation when the original allocation cannot be revalidated for cooperative cleanup.
+    // An unreadable slot is not treated as successfully unhooked.
     assert(owner.remove() == EFAULT && owner.hasOwnership());
 }

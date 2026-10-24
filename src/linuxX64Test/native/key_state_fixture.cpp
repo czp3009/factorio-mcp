@@ -1,9 +1,11 @@
 #include "key_state.h"
+#include "keyboard_fixture.h"
 #include <cassert>
 #include <cerrno>
 #include <cstddef>
 #include <cstring>
 #include <limits>
+#include <initializer_list>
 #include <stdexcept>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -29,6 +31,7 @@ struct Map {
 struct State {
     uint32_t buttons = 0;
     Map keys;
+    uint16_t modifiers = 0;
 };
 
 struct Global {
@@ -39,6 +42,7 @@ struct Global {
 struct Event {
     uint32_t type, code;
     double time;
+    uint16_t modifiers;
 };
 
 namespace {
@@ -54,6 +58,7 @@ void update(void *receiver, const void *bytes) {
     Event event;
     std::memcpy(&event, bytes, sizeof(event));
     assert(event.type == 11 || event.type == 13);
+    active->state->modifiers = event.modifiers;
     auto &map = active->state->keys;
     Record *record = nullptr;
     for (auto *cursor = map.begin; cursor != map.end; ++cursor)
@@ -109,10 +114,35 @@ int main() {
                                   9,
                                   {1, 2, 3},
                                   {2, 4, 8}};
-    const FmLinuxKeyStateLayout layout{offsetof(State, keys), offsetof(Map, begin),  offsetof(Map, end),
-                                       sizeof(Record),        offsetof(Record, key), offsetof(Record, value),
-                                       sizeof(Value),         offsetof(Value, held), offsetof(Value, blocked)};
+    const FmLinuxKeyStateLayout layout{offsetof(State, keys),
+                                       offsetof(Map, begin),
+                                       offsetof(Map, end),
+                                       sizeof(Record),
+                                       offsetof(Record, key),
+                                       offsetof(Record, value) + offsetof(Value, held),
+                                       fixtureModifiers(offsetof(State, modifiers))};
     assert(validKeyStateLayout(owner, layout));
+    const uint16_t masks[]{1, 2, 0x40, 0x80, 0x100, 0x200, 0x400, 0x800, 0x4000, 0x1000, 0x2000, 0x8000};
+    for (unsigned index = 0; index < 12; ++index) {
+        for (bool down : {false, true}) {
+            state.modifiers = 0x2222;
+            uint16_t result = 0;
+            assert(readKeyboardModifiers(owner, layout.modifiers, reinterpret_cast<uintptr_t>(&global),
+                                         reinterpret_cast<uintptr_t>(&state), layout.modifiers.keys[index], down,
+                                         result) == 0);
+            const uint16_t expected = index < 9
+                                          ? (down ? state.modifiers | masks[index] : state.modifiers & ~masks[index])
+                                          : (down ? state.modifiers ^ masks[index] : state.modifiers);
+            assert(result == expected && state.modifiers == 0x2222);
+        }
+    }
+    uint16_t unchanged = 0;
+    assert(readKeyboardModifiers(owner, layout.modifiers, reinterpret_cast<uintptr_t>(&global),
+                                 reinterpret_cast<uintptr_t>(&state), 999, true, unchanged) == 0 &&
+           unchanged == state.modifiers);
+    assert(readKeyboardModifiers(owner, layout.modifiers, reinterpret_cast<uintptr_t>(&global),
+                                 reinterpret_cast<uintptr_t>(&state) + 8, 7, true, unchanged) == ESTALE);
+    state.modifiers = 0;
     InputStateObjects objects;
     KeyStateValue result;
     auto read = [&](int32_t code) { return readKeyState(owner, layout, code, objects, result); };
@@ -126,9 +156,9 @@ int main() {
     state.keys = {{}, records, records + 3};
     Record original[3];
     std::memcpy(original, records, sizeof(records));
-    assert(read(-3) == 0 && result.present && !result.held && !result.blocked);
-    assert(read(7) == 0 && result.present && result.held && !result.blocked);
-    assert(read(19) == 0 && result.present && !result.held && result.blocked);
+    assert(read(-3) == 0 && result.present && !result.held);
+    assert(read(7) == 0 && result.present && result.held);
+    assert(read(19) == 0 && result.present && !result.held);
     assert(read(11) == 0 && !result.present);
     assert(std::memcmp(original, records, sizeof(records)) == 0);
     records[2].key = 7;
@@ -145,10 +175,16 @@ int main() {
                                                 sizeof(Record) * (FM_LINUX_KEY_RECORDS + 1ULL));
     assert(read(7) == EPROTO);
     auto invalid = layout;
-    invalid.held = invalid.clear;
+    invalid.held = invalid.stride;
     assert(readKeyState(owner, invalid, 7, objects, result) == EINVAL && !result.present && !objects.state);
     invalid = layout;
-    invalid.value = invalid.key;
+    invalid.held = invalid.key;
+    assert(!validKeyStateLayout(owner, invalid));
+    invalid = layout;
+    invalid.modifiers.state = invalid.map + invalid.begin;
+    assert(!validKeyStateLayout(owner, invalid));
+    invalid = layout;
+    invalid.modifiers.keys[1] = invalid.modifiers.keys[0];
     assert(!validKeyStateLayout(owner, invalid));
     const auto page = static_cast<size_t>(sysconf(_SC_PAGESIZE));
     void *guard = mmap(nullptr, page, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -168,7 +204,8 @@ int main() {
     state.keys = {{}, records, records + 3};
     records[1].value.held = 0;
     records[0].value.held = 1;
-    const FmLinuxKeyboardStateConfig config{layout, offsetof(Event, code), 11, 13, {7, 19, 31}};
+    const FmLinuxKeyboardStateConfig config{layout,     offsetof(Event, code), offsetof(Event, modifiers), 11, 13,
+                                            {7, 19, 31}};
     const InputStateFunctions functions{update, post};
     assert(validKeyboardStateConfig(owner, config));
     {

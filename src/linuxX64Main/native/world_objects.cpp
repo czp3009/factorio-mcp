@@ -16,24 +16,13 @@ bool size(uint32_t value) {
 } // namespace
 
 bool validWorldLayout(const FmLinuxWorldLayout &layout) {
-    if (!object(layout.global, sizeof(uintptr_t)) || !object(layout.contextVtable, sizeof(uintptr_t)) ||
-        layout.contextVtable < 2 * sizeof(uintptr_t) || !object(layout.contextTypeInfo, 2 * sizeof(uintptr_t)) ||
-        !size(layout.globalSize) || !size(layout.scenarioSize) || !size(layout.gameSize) || !size(layout.contextSize) ||
+    if (!object(layout.global, sizeof(uintptr_t)) || !size(layout.globalSize) || !size(layout.scenarioSize) ||
+        !size(layout.gameSize) || !size(layout.contextSize) ||
         !fm::member(layout.scenario, sizeof(uintptr_t), layout.globalSize) ||
         !fm::member(layout.game, sizeof(uintptr_t), layout.scenarioSize) ||
-        !layout.contextCount || layout.contextCount > FM_LINUX_CONTEXT_CANDIDATES)
+        !fm::member(layout.context, sizeof(uintptr_t), layout.scenarioSize) || layout.context % alignof(uintptr_t) ||
+        !(layout.context + sizeof(uintptr_t) <= layout.game || layout.game + sizeof(uintptr_t) <= layout.context))
         return false;
-    for (uint32_t index = 0; index < layout.contextCount; ++index) {
-        const auto offset = layout.contexts[index];
-        if (!fm::member(offset, sizeof(uintptr_t), layout.scenarioSize) ||
-            !(offset + sizeof(uintptr_t) <= layout.game || layout.game + sizeof(uintptr_t) <= offset))
-            return false;
-        for (uint32_t previous = 0; previous < index; ++previous) {
-            const auto other = layout.contexts[previous];
-            if (!(offset + sizeof(uintptr_t) <= other || other + sizeof(uintptr_t) <= offset))
-                return false;
-        }
-    }
     return true;
 }
 
@@ -60,34 +49,15 @@ int readWorldObjects(const FmLinuxWorldLayout &layout, const uint32_t *cancel, W
         return EAGAIN;
     if (!object(found.game, layout.gameSize))
         return EFAULT;
-    // Header words are defined by the primary Itanium ABI, not by a game's class layout.
-    uintptr_t adjustment, typeInfo;
-    if (!fm::read(layout.contextVtable - 2 * sizeof(uintptr_t), adjustment) ||
-        !fm::read(layout.contextVtable - sizeof(uintptr_t), typeInfo))
+    if (fm_ipc_load(cancel))
+        return ECANCELED;
+    // LuaContext is nonpolymorphic. Its unique owner and extent are proven from typed destruction.
+    if (!fm::read(found.scenario + layout.context, found.context))
         return EFAULT;
-    if (adjustment || typeInfo != layout.contextTypeInfo)
-        return ESTALE;
-    for (uint32_t index = 0; index < layout.contextCount; ++index) {
-        if (fm_ipc_load(cancel))
-            return ECANCELED;
-        uintptr_t candidate, table;
-        if (!fm::read(found.scenario + layout.contexts[index], candidate))
-            return EFAULT;
-        if (!candidate)
-            continue;
-        // Unrelated polymorphic children need only a readable primary vptr, not LuaContext's object size.
-        if (!object(candidate, sizeof(uintptr_t)) || !fm::read(candidate, table))
-            return EFAULT;
-        if (table != layout.contextVtable)
-            continue;
-        if (!object(candidate, layout.contextSize))
-            return EFAULT;
-        if (found.context)
-            return ENOTUNIQ;
-        found.context = candidate;
-    }
     if (!found.context)
-        return ENOTSUP;
+        return EAGAIN;
+    if (!object(found.context, layout.contextSize))
+        return EFAULT;
     output = found;
     return 0;
 }
@@ -95,10 +65,9 @@ int readWorldObjects(const FmLinuxWorldLayout &layout, const uint32_t *cancel, W
 bool validScriptLayout(const FmLinuxScriptLayout &layout) {
     if (!object(layout.vtable, sizeof(uintptr_t)) || layout.vtable < 2 * sizeof(uintptr_t) ||
         !object(layout.typeInfo, 2 * sizeof(uintptr_t)) || !size(layout.contextSize) || !size(layout.scriptSize) ||
-        layout.begin < 8 || layout.end < 8 || !fm::member(layout.begin, 8, layout.contextSize) ||
-        !fm::member(layout.end, 8, layout.contextSize) ||
-        !(layout.begin + 8 <= layout.end || layout.end + 8 <= layout.begin) ||
-        layout.state < 8 || !fm::member(layout.state, 8, layout.scriptSize) || layout.stringData > 4096 || layout.stringLength > 4096 ||
+        !fm::member(layout.begin, 8, layout.contextSize) || !fm::member(layout.end, 8, layout.contextSize) ||
+        !(layout.begin + 8 <= layout.end || layout.end + 8 <= layout.begin) || layout.state < 8 ||
+        !fm::member(layout.state, 8, layout.scriptSize) || layout.stringData > 4096 || layout.stringLength > 4096 ||
         !(layout.stringData + 8 <= layout.stringLength || layout.stringLength + 8 <= layout.stringData) ||
         !layout.expectedSize || layout.expectedSize > FM_LINUX_SCRIPT_NAME ||
         !fm::member(layout.name, layout.stringData + 8, layout.scriptSize) ||
@@ -109,16 +78,16 @@ bool validScriptLayout(const FmLinuxScriptLayout &layout) {
     if (layout.loading == layout.enabled)
         return false;
     for (auto flag : {layout.loading, layout.enabled}) {
-        if (flag < 8 || flag >= layout.scriptSize ||
-            (flag >= data && flag < data + 8) || (flag >= length && flag < length + 8) ||
-            (flag >= layout.state && flag < layout.state + 8))
+        if (flag < 8 || flag >= layout.scriptSize || (flag >= data && flag < data + 8) ||
+            (flag >= length && flag < length + 8) || (flag >= layout.state && flag < layout.state + 8))
             return false;
     }
     return data >= 8 && length >= 8 && (layout.state + 8 <= data || data + 8 <= layout.state) &&
            (layout.state + 8 <= length || length + 8 <= layout.state);
 }
 
-int readDefaultScript(uintptr_t context, const FmLinuxScriptLayout &layout, const uint32_t *cancel, ScriptObjects &output) {
+int readDefaultScript(uintptr_t context, const FmLinuxScriptLayout &layout, const uint32_t *cancel,
+                      ScriptObjects &output) {
     output = {};
     if (!cancel || !validScriptLayout(layout))
         return EINVAL;
@@ -126,8 +95,8 @@ int readDefaultScript(uintptr_t context, const FmLinuxScriptLayout &layout, cons
         return ECANCELED;
     uintptr_t begin, end;
     if (!object(context, layout.contextSize) || !fm::read(context + layout.begin, begin) ||
-        !fm::read(context + layout.end, end) || begin > end || end > INTPTR_MAX ||
-        begin % alignof(uintptr_t) || end % alignof(uintptr_t) || (!begin && end))
+        !fm::read(context + layout.end, end) || begin > end || end > INTPTR_MAX || begin % alignof(uintptr_t) ||
+        end % alignof(uintptr_t) || (!begin && end))
         return EFAULT;
     if (begin == end)
         return ENOENT;
@@ -148,7 +117,8 @@ int readDefaultScript(uintptr_t context, const FmLinuxScriptLayout &layout, cons
         return ENOENT;
     uintptr_t data;
     uint8_t name[FM_LINUX_SCRIPT_NAME];
-    if (!fm::read(found.script + layout.name + layout.stringData, data) || !fm::readBytes(data, name, layout.expectedSize))
+    if (!fm::read(found.script + layout.name + layout.stringData, data) ||
+        !fm::readBytes(data, name, layout.expectedSize))
         return EFAULT;
     if (std::memcmp(name, layout.expected, layout.expectedSize))
         return ENOENT;

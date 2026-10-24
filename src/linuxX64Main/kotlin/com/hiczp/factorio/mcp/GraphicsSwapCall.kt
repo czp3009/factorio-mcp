@@ -2,46 +2,87 @@ package com.hiczp.factorio.mcp
 
 import com.hiczp.factorio.mcp.X64Instructions.*
 
-/** Native SDL backend-call location. This alone does not authorize patching its device or calling its entries. */
-internal data class GraphicsSwapCall(val device: Long, val member: Long, val caller: Long) {
+/**
+ * The game's presentation call with its native-window argument established from the typed getter.
+ */
+internal data class GraphicsSwapCall(val api: SdlDynamicApi, val caller: Long) {
     companion object {
-        fun resolve(image: ElfImage): GraphicsSwapCall {
+        fun resolve(image: ElfImage, size: GraphicsFrameSize): GraphicsSwapCall {
+            val api = SdlDynamicApi.resolve(image, "SDL_GL_SwapWindow", listOf(7))
             val function = image.symbol("_ZN23GraphicsInterfaceOpenGL11swapBuffersEv")
+            require(function.size in 1..16384) { "Presentation caller exceeds complete-function bounds" }
             EhFrames(image).function(function)
-            val device = image.symbol("_this")
-            require(device.type == 1 && device.size == 8L)
-            val bytes = image.functionBytes(function, 16384)
-            // No values are carried across instructions outside the three-instruction candidate window.
-            // A wide multiply's RAX/RDX effects cannot be skipped inside a candidate.
-            return analyze(
-                X64Instructions(bytes, allowUnsignedWideMultiply = true).all(4096),
-                function.address, device.address
+            val body =
+                X64Instructions(
+                        image.functionBytes(function, 16384),
+                        allowUnsignedWideMultiply = true,
+                    )
+                    .all(4096)
+            val tables =
+                X64JumpTables.resolve(body, function.address) { address, length ->
+                    require(
+                        image.sections.any {
+                            it.flags and 3L == 2L &&
+                                address >= it.address &&
+                                length <= it.size &&
+                                address - it.address <= it.size - length
+                        }
+                    )
+                    image.virtualBytes(address, length)
+                }
+            val flow = X64ControlFlow(body, tables)
+            val native =
+                ItaniumVtable.resolve(image, "_ZTV9SDLWindow")
+                    .method(image, "_ZN9SDLWindow9getWindowEv")
+            val call =
+                SdlDynamicApi.calls(flow, function.address, api.slot).singleOrNull()
+                    ?: error("SDL presentation call is absent or ambiguous")
+            require(
+                windowMember(flow, call.offset, native.slot, size.graphicsSize) ==
+                    size.graphicsWindow
             )
+            return GraphicsSwapCall(api, function.address + call.offset + call.size)
         }
 
-        fun analyze(instructions: List<X64Instructions.Instruction>, address: Long, device: Long): GraphicsSwapCall {
-            require(address > 0 && device > 0 && device % 8 == 0L && instructions.size in 3..4096)
-            val matches = instructions.windowed(3).mapNotNull { (load, window, call) ->
-                val global = load.source as? Memory ?: return@mapNotNull null
-                val entry = call.destination as? Memory ?: return@mapNotNull null
-                if (load.operation != Operation.MOV || load.destination != Register(7, 8) ||
-                    !global.relative || global.base != null || global.index != null || global.width != 8 ||
-                    window.operation != Operation.MOV || window.destination != Register(6, 8) ||
-                    window.source != Register(0, 8) || call.operation != Operation.CALL ||
-                    entry.base != 7 || entry.index != null || entry.relative || entry.width != 8 ||
-                    entry.displacement !in 0..65528 || entry.displacement % 8 != 0L ||
-                    load.offset + load.size != window.offset || window.offset + window.size != call.offset
-                )
-                    return@mapNotNull null
-                val next = address + load.offset + load.size
-                require(next > address && next <= Long.MAX_VALUE - 65536)
-                if (global.displacement < -next || global.displacement > Long.MAX_VALUE - next ||
-                    next + global.displacement != device
-                )
-                    return@mapNotNull null
-                GraphicsSwapCall(device, entry.displacement, address + call.offset + call.size)
-            }
-            return matches.singleOrNull() ?: error("SDL swap backend call is missing or ambiguous")
+        /**
+         * Shared by presentation and pixel-size observation; no call ordinal or adjacent setup is
+         * assumed.
+         */
+        fun windowMember(
+            flow: X64ControlFlow,
+            call: Long,
+            nativeSlot: Int,
+            graphicsSize: Long,
+        ): Long {
+            val result =
+                ReturnedPointerOrigins(flow).register(call, 7)
+                    ?: error("SDL window does not originate from a native getter")
+            require(result.members.isEmpty() && result.adjustment == 0L)
+            val getter = flow.body.getValue(result.call)
+            val target =
+                getter.destination as? Memory ?: error("Native window getter is not virtual")
+            require(
+                getter.operation == Operation.CALL &&
+                    !target.relative &&
+                    target.index == null &&
+                    target.width == 8 &&
+                    target.displacement == nativeSlot * 8L
+            )
+            val origins = OriginalPointerOrigins(flow)
+            val receiver =
+                origins.register(getter.offset, 7) as? OriginalPointerOrigins.Load
+                    ?: error("Native getter does not use a graphics member")
+            val table =
+                target.base?.let { origins.register(getter.offset, it) }
+                    as? OriginalPointerOrigins.Load
+            require(
+                receiver.base == OriginalPointerOrigins.Argument(7) &&
+                    receiver.member in 8..graphicsSize - 8 &&
+                    receiver.member % 8 == 0L &&
+                    table?.base == receiver &&
+                    table.member == 0L
+            )
+            return receiver.member
         }
     }
 }

@@ -4,9 +4,8 @@
 // Addresses and member locations derived from, and checked against, the selected executable.
 typedef struct FmLinuxFrameContextConfig {
     uint64_t global;
-    uint64_t device;
     uint64_t caller;
-    uint64_t getter;
+    uint64_t pixels;
     uint64_t graphicsTable;
     uint64_t windowTable;
     uint32_t globalSize;
@@ -25,8 +24,8 @@ typedef struct FmLinuxFrameSize {
 
 #ifdef __cplusplus
 bool validFrameContext(const FmLinuxFrameContextConfig &config);
-// Invoke only from the verified SDL backend swap callback, before forwarding presentation. The callback's
-// device/window and return address must be supplied unchanged. Reacquires every object; retains no pointer.
-int readFrameSize(const FmLinuxFrameContextConfig &config, uintptr_t device, uintptr_t window,
+// Invoke only from the verified SDL presentation callback. Its window and return address must be
+// supplied unchanged. Reacquires every object; retains no pointer.
+int readFrameSize(const FmLinuxFrameContextConfig &config, uintptr_t window,
                   uintptr_t caller, const uint32_t *cancel, FmLinuxFrameSize &output) noexcept;
 #endif

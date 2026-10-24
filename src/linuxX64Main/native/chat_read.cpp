@@ -14,27 +14,28 @@ bool disjoint(uint32_t first, uint32_t width, uint32_t second, uint32_t otherWid
 
 bool valid(const FmLinuxChatReadLayout &l) {
     if (l.consoleSize < 8 || l.consoleSize > 4096 || !fm::member(l.consolePlayer, 8, l.consoleSize) ||
-        l.nodeSize < 24 || l.nodeSize > 4096 || !l.value || l.value >= l.nodeSize ||
-        !fm::member(l.next, 8, l.value) || !fm::member(l.previous, 8, l.value) ||
-        !disjoint(l.next, 8, l.previous, 8) || !l.textSize || l.textSize > 4096 ||
-        !l.stringSize || l.stringSize > 256 || !fm::member(l.cached, l.stringSize, l.textSize) ||
+        l.nodeSize < 24 || l.nodeSize > 4096 || !l.value || l.value >= l.nodeSize || !fm::member(l.next, 8, l.value) ||
+        !fm::member(l.previous, 8, l.value) || !disjoint(l.next, 8, l.previous, 8) || !l.textSize ||
+        l.textSize > 4096 || !l.stringSize || l.stringSize > 256 || !fm::member(l.cached, l.stringSize, l.textSize) ||
         !fm::member(l.stringData, 8, l.stringSize) || !fm::member(l.stringLength, 8, l.stringSize) ||
         !disjoint(l.stringData, 8, l.stringLength, 8) || (l.indexWidth != 1 && l.indexWidth != 2))
         return false;
     const auto payload = l.nodeSize - l.value;
     if (!fm::member(l.tick, 8, payload) || !fm::member(l.playerIndex, l.indexWidth, payload) ||
         !fm::member(l.text, l.textSize, payload) || !disjoint(l.tick, 8, l.playerIndex, l.indexWidth) ||
-        !disjoint(l.tick, 8, l.text, l.textSize) || !disjoint(l.playerIndex, l.indexWidth, l.text, l.textSize))
+        !disjoint(l.tick, 8, l.text, l.textSize) || !disjoint(l.playerIndex, l.indexWidth, l.text, l.textSize) ||
+        !fm::member(l.playerName, l.stringSize, payload) || !disjoint(l.playerName, l.stringSize, l.tick, 8) ||
+        !disjoint(l.playerName, l.stringSize, l.playerIndex, l.indexWidth) ||
+        !disjoint(l.playerName, l.stringSize, l.text, l.textSize))
         return false;
     for (unsigned i = 0; i < 2; ++i) {
         if (!fm::member(l.sentinel[i], l.value, l.consoleSize) || !fm::member(l.count[i], 8, l.consoleSize) ||
-            !disjoint(l.sentinel[i], l.value, l.count[i], 8) ||
-            !disjoint(l.sentinel[i], l.value, l.consolePlayer, 8) || !disjoint(l.count[i], 8, l.consolePlayer, 8))
+            !disjoint(l.sentinel[i], l.value, l.count[i], 8) || !disjoint(l.sentinel[i], l.value, l.consolePlayer, 8) ||
+            !disjoint(l.count[i], 8, l.consolePlayer, 8))
             return false;
         for (unsigned j = 0; j < i; ++j)
-            if (!disjoint(l.sentinel[i], l.value, l.sentinel[j], l.value) ||
-                !disjoint(l.count[i], 8, l.count[j], 8) || !disjoint(l.count[i], 8, l.sentinel[j], l.value) ||
-                !disjoint(l.count[j], 8, l.sentinel[i], l.value))
+            if (!disjoint(l.sentinel[i], l.value, l.sentinel[j], l.value) || !disjoint(l.count[i], 8, l.count[j], 8) ||
+                !disjoint(l.count[i], 8, l.sentinel[j], l.value) || !disjoint(l.count[j], 8, l.sentinel[i], l.value))
                 return false;
     }
     return true;
@@ -81,8 +82,8 @@ int ChatReadCommand::cleanup() {
     return failure_;
 }
 
-int ChatReadCommand::start(const ChatReadConfig &config, uintptr_t console, uintptr_t player,
-                           const uint32_t *cancel, FmLinuxChatSnapshot &output) {
+int ChatReadCommand::start(const ChatReadConfig &config, uintptr_t console, uintptr_t player, const uint32_t *cancel,
+                           FmLinuxChatSnapshot &output) {
     if (syscall(SYS_gettid) != getpid())
         return EPERM;
     if (started_)
@@ -153,6 +154,11 @@ int ChatReadCommand::start(const ChatReadConfig &config, uintptr_t console, uint
                 if (const auto error = copyString(item + l.text + l.cached, l, row.text, row.textSize, truncated))
                     return error;
                 row.truncated = truncated ? 1 : 0;
+                if (const auto error =
+                        copyString(item + l.playerName, l, row.playerName, row.playerNameSize, truncated))
+                    return error;
+                if (truncated)
+                    row.truncated |= 4;
                 std::memset(string_, 0, sizeof(string_));
                 config.raw(string_, reinterpret_cast<const void *>(item + l.text));
                 owned_ = true;

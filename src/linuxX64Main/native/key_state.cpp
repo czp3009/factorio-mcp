@@ -10,15 +10,62 @@
 bool validKeyStateLayout(const FmLinuxMouseStateLayout &owner, const FmLinuxKeyStateLayout &layout) {
     if (!validMouseStateLayout(owner) || layout.map > owner.stateSize || layout.map % alignof(uintptr_t) ||
         layout.stride < sizeof(int32_t) || layout.stride > 512 || layout.stride % alignof(uintptr_t) ||
-        !layout.valueSize || layout.valueSize > FM_LINUX_KEY_VALUE_BYTES ||
-        !fm::member(layout.key, sizeof(int32_t), layout.stride) ||
-        !fm::member(layout.value, layout.valueSize, layout.stride) || !fm::member(layout.held, 1, layout.valueSize) ||
-        !fm::member(layout.clear, 1, layout.valueSize) || layout.held == layout.clear ||
-        !(layout.key + sizeof(int32_t) <= layout.value || layout.value + layout.valueSize <= layout.key))
+        !fm::member(layout.key, sizeof(int32_t), layout.stride) || !fm::member(layout.held, 1, layout.stride) ||
+        !(layout.key + sizeof(int32_t) <= layout.held || layout.held + 1 <= layout.key) ||
+        !validKeyboardModifiers(owner, layout.modifiers))
         return false;
     const auto size = owner.stateSize - layout.map;
+    for (const auto field : {layout.begin, layout.end}) {
+        if (!fm::member(field, sizeof(uintptr_t), size))
+            return false;
+        const auto absolute = layout.map + field;
+        if (!(absolute + sizeof(uintptr_t) <= layout.modifiers.state || layout.modifiers.state + 2 <= absolute))
+            return false;
+    }
     return fm::member(layout.begin, sizeof(uintptr_t), size) && fm::member(layout.end, sizeof(uintptr_t), size) &&
            layout.begin % alignof(uintptr_t) == 0 && layout.end % alignof(uintptr_t) == 0 && layout.begin != layout.end;
+}
+
+bool validKeyboardModifiers(const FmLinuxMouseStateLayout &owner, const FmLinuxKeyboardModifiers &layout) {
+    if (!validMouseStateLayout(owner) || !fm::member(layout.state, sizeof(uint16_t), owner.stateSize) ||
+        !(owner.heldMask + sizeof(uint32_t) <= layout.state || layout.state + 2 <= owner.heldMask))
+        return false;
+    for (unsigned index = 0; index < 12; ++index) {
+        if (!layout.keys[index] || layout.keys[index] > uint32_t(std::numeric_limits<int32_t>::max()))
+            return false;
+        for (unsigned previous = 0; previous < index; ++previous)
+            if (layout.keys[index] == layout.keys[previous])
+                return false;
+    }
+    return true;
+}
+
+int readKeyboardModifiers(const FmLinuxMouseStateLayout &owner, const FmLinuxKeyboardModifiers &layout,
+                          uintptr_t global, uintptr_t state, uint32_t code, bool down, uint16_t &output) {
+    output = 0;
+    if (!validKeyboardModifiers(owner, layout))
+        return EINVAL;
+    InputStateObjects current;
+    if (const int error = readInputState(owner, current))
+        return error;
+    if (current.global != global || current.state != state)
+        return ESTALE;
+    uint16_t modifiers;
+    if (!fm::read(current.state + layout.state, modifiers))
+        return EFAULT;
+    // Public SDL3 SDL_Keymod ABI; the selected executable's converter establishes this field's identity.
+    // https://github.com/libsdl-org/SDL/blob/release-3.2.28/include/SDL3/SDL_keycode.h
+    constexpr uint16_t masks[]{0x0001, 0x0002, 0x0040, 0x0080, 0x0100, 0x0200,
+                               0x0400, 0x0800, 0x4000, 0x1000, 0x2000, 0x8000};
+    for (unsigned index = 0; index < 12; ++index)
+        if (code == layout.keys[index]) {
+            if (index < 9)
+                modifiers = down ? modifiers | masks[index] : modifiers & ~masks[index];
+            else if (down)
+                modifiers ^= masks[index];
+        }
+    output = modifiers;
+    return 0;
 }
 
 int readKeyState(const FmLinuxMouseStateLayout &owner, const FmLinuxKeyStateLayout &layout, int32_t code,
@@ -51,13 +98,12 @@ int readKeyState(const FmLinuxMouseStateLayout &owner, const FmLinuxKeyStateLayo
             return EPROTO;
         previous = key;
         if (key == code) {
-            uint8_t held, blocked;
-            if (!fm::read(record + layout.value + layout.held, held) ||
-                !fm::read(record + layout.value + layout.clear, blocked))
+            uint8_t held;
+            if (!fm::read(record + layout.held, held))
                 return EFAULT;
-            if (held > 1 || blocked > 1)
+            if (held > 1)
                 return EPROTO;
-            found = {true, held != 0, blocked != 0};
+            found = {true, held != 0};
         }
     }
     objects = current;
@@ -67,11 +113,18 @@ int readKeyState(const FmLinuxMouseStateLayout &owner, const FmLinuxKeyStateLayo
 
 bool validKeyboardStateConfig(const FmLinuxMouseStateLayout &owner, const FmLinuxKeyboardStateConfig &config) {
     if (!validKeyStateLayout(owner, config.layout) || config.press == config.release ||
-        !fm::member(config.eventCode, sizeof(uint32_t), owner.eventSize))
+        !fm::member(config.eventCode, sizeof(uint32_t), owner.eventSize) ||
+        !fm::member(config.eventModifiers, sizeof(uint16_t), owner.eventSize))
         return false;
     for (const auto field :
-         {std::pair{owner.eventType, uint32_t(sizeof(uint32_t))}, std::pair{owner.eventTime, uint32_t(sizeof(double))}})
+         {std::pair{owner.eventType, uint32_t(sizeof(uint32_t))}, std::pair{owner.eventTime, uint32_t(sizeof(double))},
+          std::pair{config.eventModifiers, uint32_t(sizeof(uint16_t))}})
         if (!(config.eventCode + sizeof(uint32_t) <= field.first || field.first + field.second <= config.eventCode))
+            return false;
+    for (const auto field :
+         {std::pair{owner.eventType, uint32_t(sizeof(uint32_t))}, std::pair{owner.eventTime, uint32_t(sizeof(double))}})
+        if (!(config.eventModifiers + sizeof(uint16_t) <= field.first ||
+              field.first + field.second <= config.eventModifiers))
             return false;
     for (unsigned index = 0; index < 3; ++index) {
         if (config.codes[index] > uint32_t(std::numeric_limits<int32_t>::max()))
@@ -94,11 +147,16 @@ int dispatchKeyState(const FmLinuxMouseStateLayout &owner, const FmLinuxKeyboard
         known |= candidate == code;
     if (!known)
         return EINVAL;
+    uint16_t modifiers;
+    if (const int error = readKeyboardModifiers(owner, config.layout.modifiers, objects.global, objects.state, code,
+                                                pressed, modifiers))
+        return error;
     alignas(16) unsigned char event[FM_LINUX_INPUT_EVENT_BYTES]{};
     const auto type = pressed ? config.press : config.release;
     std::memcpy(event + owner.eventType, &type, sizeof(type));
     std::memcpy(event + owner.eventTime, &time, sizeof(time));
     std::memcpy(event + config.eventCode, &code, sizeof(code));
+    std::memcpy(event + config.eventModifiers, &modifiers, sizeof(modifiers));
     return dispatchInputStateEvent(owner, functions, objects, event, output);
 }
 

@@ -7,9 +7,15 @@ import kotlin.test.assertFails
 
 class PollEventCopiesTest {
     private val header = EventHeader(64, 4, 16)
+
     private fun fixture(): X64ControlFlow {
         val code = mutableListOf<Instruction>()
-        fun add(operation: Operation, target: Operand? = null, source: Operand? = null, condition: Int? = null) {
+        fun add(
+            operation: Operation,
+            target: Operand? = null,
+            source: Operand? = null,
+            condition: Int? = null,
+        ) {
             code += Instruction(code.size.toLong(), 1, operation, target, source, condition)
         }
         add(Operation.PUSH, Register(5, 8))
@@ -34,7 +40,8 @@ class PollEventCopiesTest {
         add(Operation.POP, Register(3, 8))
         add(Operation.POP, Register(5, 8))
         add(Operation.RET)
-        // Keep branch targets explicit so malformed CFG and unsupported destructor paths remain separate failures.
+        // Keep branch targets explicit so malformed CFG and unsupported destructor paths remain
+        // separate failures.
         while (code.size < 29) add(Operation.NOP)
         add(Operation.RET)
         add(Operation.CALL, Immediate(2000))
@@ -54,13 +61,58 @@ class PollEventCopiesTest {
     }
 
     @Test
+    fun evaluatesScalarAddressArithmeticWithRegisterWidthTruncation() {
+        val original = fixture()
+        fun shifted(offset: Long) = offset + if (offset >= 11) 1 else 0
+        val body =
+            original.instructions
+                .map { instruction ->
+                    instruction.copy(
+                        offset = shifted(instruction.offset),
+                        destination =
+                            if (instruction.operation in listOf(Operation.JCC, Operation.JMP))
+                                Immediate(shifted((instruction.destination as Immediate).value))
+                            else instruction.destination,
+                    )
+                }
+                .toMutableList()
+        body.add(11, Instruction(11, 1, Operation.LEA, Register(0, 4), Memory(0, null, 1, -2, 8)))
+        val flow = X64ControlFlow(body)
+        assertEquals(
+            setOf(3L, 5L),
+            PollEventCopies.analyze(flow, emptyList(), header, 7, setOf(3, 5)).keys,
+        )
+        // Unsigned underflow must select the destructor path, not silently clamp to zero.
+        assertFails { PollEventCopies.analyze(flow, emptyList(), header, 7, setOf(1)) }
+        assertFails {
+            PollEventCopies.analyze(
+                X64ControlFlow(
+                    body.map {
+                        if (it.offset == 11L) it.copy(source = Memory(1, null, 1, -2, 8)) else it
+                    }
+                ),
+                emptyList(),
+                header,
+                7,
+                setOf(3),
+            )
+        }
+    }
+
+    @Test
     fun rejectsChangedBytesBorrowedPointersUnknownBranchesAndLocalMutation() {
         val flow = fixture()
         fun rejects(at: Long, replacement: Instruction) {
             assertFails {
-                PollEventCopies.analyze(X64ControlFlow(flow.instructions.map {
-                    if (it.offset == at) replacement else it
-                }), emptyList(), header, 7, setOf(3, 5))
+                PollEventCopies.analyze(
+                    X64ControlFlow(
+                        flow.instructions.map { if (it.offset == at) replacement else it }
+                    ),
+                    emptyList(),
+                    header,
+                    7,
+                    setOf(3, 5),
+                )
             }
         }
 
@@ -75,9 +127,15 @@ class PollEventCopiesTest {
         rejects(14, store.copy(source = Register(3, 8)))
         val kind = flow.body.getValue(10)
         rejects(10, kind.copy(source = (kind.source as Memory).copy(displacement = -32)))
-        rejects(14, store.copy(operation = Operation.CALL, destination = Immediate(2000), source = null))
+        rejects(
+            14,
+            store.copy(operation = Operation.CALL, destination = Immediate(2000), source = null),
+        )
         val engaged = flow.body.getValue(21)
         rejects(21, engaged.copy(source = Immediate(0)))
-        rejects(21, engaged.copy(destination = (engaged.destination as Memory).copy(displacement = 80)))
+        rejects(
+            21,
+            engaged.copy(destination = (engaged.destination as Memory).copy(displacement = 80)),
+        )
     }
 }

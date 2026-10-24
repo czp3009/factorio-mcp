@@ -9,8 +9,8 @@ using InputEventLayout = FmInputEventLayout;
 
 struct InputEventFunctions {
     void *(*construct)(void *, double, int);
-    void *(*destroy)(void *, unsigned);
-    uint32_t (*ticks)();
+    void (*destroy)(void *);
+    uint64_t (*ticksNS)();
     void (*update)(void *, const void *);
     int (*process)(const void *, bool);
     void (*postUpdate)(void *, const void *);

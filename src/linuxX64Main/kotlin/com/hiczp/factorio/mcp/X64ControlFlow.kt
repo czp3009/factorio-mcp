@@ -42,6 +42,20 @@ private constructor(
         return true
     }
 
+    fun requiresEdge(target: Long, from: Long, to: Long): Boolean {
+        require(target in reachable && to in successors.getValue(from))
+        val pending = ArrayDeque<Long>()
+        val visited = mutableSetOf<Long>()
+        pending.add(0)
+        while (pending.isNotEmpty()) {
+            val site = pending.removeFirst()
+            if (site == target) return false
+            if (visited.add(site))
+                pending.addAll(successors.getValue(site).filterNot { site == from && it == to })
+        }
+        return true
+    }
+
     /**
      * Result-producing analyzers must discard normal call results on this edge, including a shared
      * continuation.
@@ -61,7 +75,7 @@ private constructor(
             }
         )
         val end = instructions.last().offset + instructions.last().size
-        require(end in 1..32768)
+        require(end in 1..8192 * 15L)
         require(
             cleanupEdges.all { (call, landing) ->
                 body[call]?.operation == Operation.CALL && landing in body
@@ -72,13 +86,19 @@ private constructor(
         require(
             branches.all { (site, target) ->
                 val branch = body[site]
-                branch?.operation == Operation.JCC &&
-                    target in body &&
-                    (target == site + branch.size ||
-                        target == (branch.destination as? Immediate)?.value)
+                target in body &&
+                    when (branch?.operation) {
+                        Operation.JCC ->
+                            target == site + branch.size ||
+                                target == (branch.destination as? Immediate)?.value
+                        Operation.JMP ->
+                            branch.destination !is Immediate &&
+                                tables.any { it.jump == site && target in it.targets }
+                        else -> false
+                    }
             }
         ) {
-            "Specialized branch is not an original conditional edge"
+            "Specialized branch is not an original conditional or verified switch edge"
         }
         val switches = tables.associateBy { it.jump }
         require(
@@ -106,7 +126,8 @@ private constructor(
                 // arguments.
                 val targets =
                     when (instruction.operation) {
-                        Operation.RET -> emptyList()
+                        Operation.RET,
+                        Operation.TRAP -> emptyList()
                         Operation.JMP ->
                             direct?.let { listOf(it) }
                                 ?: switches[instruction.offset]?.targets

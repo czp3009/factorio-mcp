@@ -87,6 +87,28 @@ class DebugMetadataAcceptanceTest {
             )
         try {
             val symbols = resolveSymbols(process, checkNotNull(processModule(pid)))
+            val adapters = mapOf(
+                "controls" to symbols.controls,
+                "frontend_input" to symbols.input,
+                "world" to symbols.world,
+                "timed_input" to symbols.timedInput,
+                "viewport" to symbols.viewport,
+                "properties" to symbols.properties,
+                "slots" to symbols.slots,
+                "numbers" to symbols.numbers,
+                "visibility" to symbols.visibility,
+                "progress" to symbols.progress,
+                "elements" to symbols.elements,
+                "icons" to symbols.icons,
+                "conditions" to symbols.conditions,
+                "switches" to symbols.switches,
+                "chat" to symbols.chat,
+            )
+            adapters.forEach { (name, result) ->
+                println("factorio-mcp: metadata $name: ${result.exceptionOrNull()?.message ?: "OK"}")
+            }
+            assertTrue(adapters.values.all { it.isSuccess }, "Every advertised adapter must resolve")
+            assertTrue(symbols.pauseOffsets != null, "Pause state must resolve")
             symbols.viewport.getOrThrow()
             symbols.properties.getOrThrow().options.getOrThrow()
             symbols.slots.getOrThrow()

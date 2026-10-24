@@ -4,6 +4,7 @@ package com.hiczp.factorio.mcp.acceptance
 
 import com.hiczp.factorio.mcp.McpHttpClient
 import com.hiczp.factorio.mcp.toolValue
+import com.hiczp.factorio.mcp.uiSelector
 import kotlin.math.abs
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -57,7 +58,17 @@ class WheelInputAcceptanceTest {
                 value
             }
 
-        suspend fun wheel(direction: String, ticks: Int, x: Int, y: Int) {
+        suspend fun fixture(text: String) = client.tool("ui_action", buildJsonObject {
+            put("action", "click")
+            put("selector", uiSelector(text, "agui::TextButton"))
+        }).toolValue()
+
+        suspend fun player() = client.tool("world_query", buildJsonObject {
+            putJsonObject("selection") { put("kind", "player") }
+        }).toolValue().getValue("player").jsonObject
+
+        suspend fun wheel(direction: String, ticks: Int) {
+            val position = player().getValue("position").jsonObject
             val result =
                 client
                     .tool(
@@ -67,9 +78,9 @@ class WheelInputAcceptanceTest {
                                 addJsonObject {
                                     put("device", "mouse")
                                     putJsonObject("position") {
-                                        put("space", "viewport")
-                                        put("x", x)
-                                        put("y", y)
+                                        put("space", "world")
+                                        put("x", position.getValue("x"))
+                                        put("y", position.getValue("y"))
                                     }
                                     put("tick", "0-${ticks - 1}")
                                 }
@@ -86,19 +97,21 @@ class WheelInputAcceptanceTest {
             assertEquals(ticks, result.getValue("evaluated_ticks").jsonPrimitive.int)
         }
         withTimeout(90_000) {
+            var entered = false
             try {
                 client.initialize()
                 client.tool("attach", buildJsonObject { put("pid", pid) }).toolValue()
-                val view = client.tool("world_overview").toolValue().getValue("viewport").jsonObject
-                val x = view.getValue("width").jsonPrimitive.int * 3 / 4
-                val y = view.getValue("height").jsonPrimitive.int / 2
+                fixture("MCP timeline fixture")
+                entered = true
+                while (player().getValue("surface").jsonObject.getValue("name").jsonPrimitive.content !=
+                    "mcp-input-timeline") delay(20)
                 val before = zoom()
-                wheel("up", 1, x, y)
+                wheel("up", 1)
                 // Task completion acknowledges dispatch, not the later authoritative effect.
                 val one = awaitZoom("Wheel up must increase zoom") { it > before }
-                wheel("down", 1, x, y)
+                wheel("down", 1)
                 awaitZoom("Wheel down must restore zoom") { abs(it - before) < 0.0001 }
-                wheel("up", 30, x, y)
+                wheel("up", 30)
                 awaitZoom("Wheel up must reach its prior zoom") { abs(it - one) < 0.0001 }
                 val settledClientCrc = crc(clientLog)
                 val settledServerCrc = crc(serverLog)
@@ -109,7 +122,7 @@ class WheelInputAcceptanceTest {
                     abs(zoom() - one) < 0.0001,
                     "Holding ticks must not repeat a wheel impulse",
                 )
-                wheel("down", 1, x, y)
+                wheel("down", 1)
                 awaitZoom("Wheel down must restore zoom") { abs(it - before) < 0.0001 }
 
                 val clientCrc = crc(clientLog)
@@ -118,7 +131,11 @@ class WheelInputAcceptanceTest {
                 assertFalse(read(clientLog).contains("desynchron", ignoreCase = true))
                 assertFalse(read(serverLog).contains("desynchron", ignoreCase = true))
             } finally {
-                client.close()
+                try {
+                    if (entered) fixture("MCP timeline restore")
+                } finally {
+                    client.close()
+                }
             }
         }
     }

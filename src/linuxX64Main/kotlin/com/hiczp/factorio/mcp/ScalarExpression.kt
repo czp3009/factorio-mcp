@@ -9,7 +9,7 @@ import com.hiczp.factorio.mcp.X64Instructions.*
 internal class ScalarExpression(
     private val flow: X64ControlFlow,
     private val extents: Map<Int, Long> = emptyMap(),
-    private val arguments: SysVArgumentFlow = SysVArgumentFlow(flow),
+    private val arguments: SysVArgumentFlow? = null,
 ) {
     sealed interface Value {
         val width: Int
@@ -39,13 +39,15 @@ internal class ScalarExpression(
     ) : Value
 
     private val values = mutableMapOf<Pair<Long, Register>, Value>()
+    // Reaching definitions do not need pointer provenance or its additional instruction domain.
+    private val pointerArguments by lazy { arguments ?: SysVArgumentFlow(flow) }
     private val active = mutableSetOf<Pair<Long, Register>>()
     private var work = 0
 
     init {
         require(
             extents.all { (argument, extent) ->
-                argument in listOf(7, 6, 2, 1, 8, 9) && extent in 1..4096
+                argument in listOf(7, 6, 2, 1, 8, 9) && extent in 1..16 * 1024 * 1024
             }
         )
     }
@@ -223,6 +225,12 @@ internal class ScalarExpression(
         return conditional(instruction, Literal(1, 1), Literal(0, 1), 1)
     }
 
+    fun set(site: Long): Value {
+        val instruction = flow.body.getValue(site)
+        require(site in flow.reachable && instruction.operation == Operation.SET)
+        return conditional(instruction, Literal(1, 1), Literal(0, 1), 1)
+    }
+
     private fun conditional(instruction: Instruction, yes: Value, no: Value, width: Int): Value {
         val comparison = reaching(instruction.offset, ::changesFlags)
         require(comparison.operation in listOf(Operation.CMP, Operation.TEST)) {
@@ -259,7 +267,7 @@ internal class ScalarExpression(
             is Memory -> {
                 require(operand.width in listOf(1, 2, 4))
                 val read =
-                    arguments.memory(site, operand)
+                    pointerArguments.memory(site, operand)
                         ?: error(
                             "Scalar input at $site has no original argument provenance: $operand"
                         )
@@ -301,6 +309,7 @@ internal class ScalarExpression(
     }
 
     private fun defines(instruction: Instruction, register: Int): Boolean {
+        if (instruction.operation == Operation.MULTIPLY_WIDE) return register in setOf(0, 2)
         if (instruction.operation == Operation.BYTE_COMPARE_EXCHANGE) return register == 0
         if (instruction.operation == Operation.CALL)
             return register in listOf(0, 1, 2, 6, 7, 8, 9, 10, 11) + (16..31)

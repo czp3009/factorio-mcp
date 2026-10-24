@@ -23,7 +23,9 @@ struct Value {
             case mouseKind:
                 if (event.kind != 17 || code != event.button) return false;
                 return fixture_accept(this);
-            case 1: return event.other == code + 11;
+            case 1:
+                if (event.other != code) return false;
+                return fixture_accept(this);
             case 3: return event.other == code + 22;
             case 5: return event.other == code + 33;
             case 6: return event.other == code + 44;

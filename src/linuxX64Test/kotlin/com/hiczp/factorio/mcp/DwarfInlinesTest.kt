@@ -11,86 +11,32 @@ import platform.posix.getenv
 
 class DwarfInlinesTest {
     @Test
-    fun crossChecksIncomingStackFieldsWithTheSameAbstractGetters() {
+    fun resolvesNamedInlineRangesWithoutClassLayoutsInDwarf4And5() {
         val directory = checkNotNull(getenv("FACTORIO_MCP_TEST_NATIVE")).toKString()
         for (version in 4..5) MappedBinary("$directory/inline_fixture_$version").use { file ->
             val image = ElfImage(file.view)
-            fun constant(name: String) =
-                image.symbol(name).let { image.virtualBytes(it.address, 8).unsigned(0, 8) }
-            val extent = constant("fixture_inline_extent")
             val debug = DwarfInlines(image)
-            val anchors =
-                listOf(Triple("getButton", "button", 2), Triple("control", "control", 1))
-                    .flatMap { (getter, suffix, width) ->
-                        val owner = "fixture_read_$suffix"
-                        InlineArgumentFields.resolveEvidence(
-                                image,
-                                image.symbol(owner),
-                                owner,
-                                6,
-                                extent,
-                                mapOf(getter to width),
-                                debug,
-                            )
-                            .entries
-                            .map { it.toPair() }
-                    }
-                    .toMap()
-            val owner = "fixture_read_stack"
-            val function = image.symbol(owner)
-            val widths = mapOf("getButton" to 2, "control" to 1, "getStamp" to 8)
-            fun resolve(selected: Map<String, InlineArgumentFields.Evidence>, size: Long = extent) =
-                InlineArgumentFields.resolveStack(
-                    image,
-                    function,
-                    owner,
-                    size,
-                    selected,
-                    widths,
-                    debug,
-                )
-
-            val result = resolve(anchors)
-            assertEquals(8, result.base)
-            assertEquals(
-                InlineArgumentFields.Field(constant("fixture_inline_stamp"), 8),
-                result.fields["getStamp"],
-            )
-            assertEquals(
-                anchors.mapValues { it.value.field },
-                result.fields.filterKeys { it in anchors },
-            )
-            val button = anchors.getValue("getButton")
-            assertFails {
-                resolve(anchors + ("getButton" to button.copy(origin = button.origin + 1)))
-            }
-            assertFails {
-                resolve(
-                    anchors +
-                        ("getButton" to
-                            button.copy(
-                                field = button.field.copy(offset = button.field.offset + 1)
-                            ))
-                )
-            }
-            assertFails { resolve(anchors, 1) }
-            assertFails { resolve(anchors.filterKeys { it == "getButton" }) }
-            assertFails {
-                InlineArgumentFields.resolveStack(
-                    image,
-                    image.symbol("fixture_read_stack_folded"),
-                    "fixture_read_stack_folded",
-                    extent,
-                    anchors,
-                    widths,
-                    debug,
-                )
+            assertFails { DwarfTypes(DwarfInfo(image), setOf("InlinePacket")).size("InlinePacket") }
+            for ((name, suffix) in listOf("getButton" to "button", "control" to "control")) {
+                val owner = "fixture_read_$suffix"
+                val function = image.symbol(owner)
+                val instance = debug.find(function, owner, setOf(name)).single()
+                assertEquals(name, instance.name)
+                assertTrue(instance.ranges.isNotEmpty())
+                val boundaries =
+                    X64Instructions(image.functionBytes(function, 1024))
+                        .all()
+                        .map { it.offset + function.address }
+                        .toSet() + (function.address + function.size)
+                assertTrue(instance.ranges.all { it.start in boundaries && it.end in boundaries })
+                assertFails { debug.find(function, "foreign_owner", setOf(name)) }
+                assertFails { debug.find(function, owner, setOf("missing_getter")) }
             }
         }
     }
 
     @Test
-    fun rejectsEscapingOrSplitRangesCyclicOriginsAndTruncatedContributions() {
+    fun rejectsEscapingRangesCyclicOriginsAndTruncatedContributions() {
         val directory = checkNotNull(getenv("FACTORIO_MCP_TEST_NATIVE")).toKString()
         for (version in 4..5) MappedBinary("$directory/inline_fixture_$version").use { file ->
             val original = file.view.bytes(0, file.view.size.toInt())
@@ -129,16 +75,6 @@ class DwarfInlinesTest {
                         )
                         .find(function, "fixture_read_button", setOf("getButton"))
                 }
-                assertFails {
-                    InlineArgumentFields.resolve(
-                        change(".debug_info", position, 8, start + 1),
-                        function,
-                        "fixture_read_button",
-                        6,
-                        64,
-                        mapOf("getButton" to 2),
-                    )
-                }
                 assertEquals(0x13, entry.forms[0x31])
                 val origin = inline.origin - info.unit(entry.offset).start
                 val reference =
@@ -166,77 +102,6 @@ class DwarfInlinesTest {
                     DwarfInlines(change(".debug_addr", 6, 1, 4))
                         .find(function, "fixture_read_button", setOf("getButton"))
                 }
-            }
-        }
-    }
-
-    @Test
-    fun resolvesInlineGetterFieldsWithoutClassLayoutsInDwarf4And5() {
-        val directory = checkNotNull(getenv("FACTORIO_MCP_TEST_NATIVE")).toKString()
-        for (version in 4..5) MappedBinary("$directory/inline_fixture_$version").use { file ->
-            val image = ElfImage(file.view)
-            fun constant(name: String) =
-                image.symbol(name).let { image.virtualBytes(it.address, 8).unsigned(0, 8) }
-            val extent = constant("fixture_inline_extent")
-            val debug = DwarfInlines(image)
-            val layouts = DwarfTypes(DwarfInfo(image), setOf("InlinePacket"))
-            assertFails { layouts.size("InlinePacket") }
-            for ((name, suffix, width) in
-                listOf(Triple("getButton", "button", 2), Triple("control", "control", 1))) {
-                val owner = "fixture_read_$suffix"
-                val function = image.symbol(owner)
-                val result =
-                    InlineArgumentFields.resolve(
-                        image,
-                        function,
-                        owner,
-                        6,
-                        extent,
-                        mapOf(name to width),
-                        debug,
-                    )
-                assertEquals(
-                    mapOf(
-                        name to
-                            InlineArgumentFields.Field(constant("fixture_inline_$suffix"), width)
-                    ),
-                    result,
-                )
-                assertFails {
-                    InlineArgumentFields.resolve(
-                        image,
-                        function,
-                        owner,
-                        7,
-                        extent,
-                        mapOf(name to width),
-                        debug,
-                    )
-                }
-                assertFails {
-                    InlineArgumentFields.resolve(
-                        image,
-                        function,
-                        owner,
-                        6,
-                        1,
-                        mapOf(name to width),
-                        debug,
-                    )
-                }
-                assertFails {
-                    InlineArgumentFields.resolve(
-                        image,
-                        function,
-                        owner,
-                        6,
-                        extent,
-                        mapOf(name to 8),
-                        debug,
-                    )
-                }
-                assertFails { debug.find(function, "foreign_owner", setOf(name)) }
-                assertFails { debug.find(function, owner, setOf("missing_getter")) }
             }
         }
     }

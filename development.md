@@ -1,6 +1,6 @@
 # Development
 
-Contributor instructions for the Windows implementation and Linux adapter. User setup and the tool catalog belong in
+Contributor instructions for the Linux and Windows implementations. User setup and the tool catalog belong in
 [README](README.md); public arguments and result semantics belong in [tools.md](tools.md). Follow
 [AGENTS.md](AGENTS.md) for project conventions. Research, plans, measurements and test-run evidence stay under ignored
 `temp/`; they are not prerequisites for using or building a checkout.
@@ -197,7 +197,8 @@ On Windows:
 The task builds the host release binary and uses the plugin's normal generation tasks. It checks the release matrix,
 exact optional dependency versions and package contents, then runs `npm pack` and installs the unmodified launcher
 and host tarballs together into a temporary consumer with `npm install --offline --ignore-scripts`. npm uses isolated
-empty configuration files and a temporary cache. No registry, credentials, global installation or publication is
+empty configuration files and a temporary cache, and ignores inherited `npm_config_*` variables.
+No registry, credentials, global installation or publication is
 involved. The installed executable and resident must match the release build byte for byte; Linux executable
 permissions are checked before launch. The installed launcher must answer MCP `initialize` and detached `status`,
 write only protocol output to stdout, and exit cleanly when stdin closes.
@@ -283,6 +284,9 @@ Space Age objects. Do not operate the client concurrently with tools. Some exist
 Simplified Chinese UI text and default keyboard/mouse bindings; these are test prerequisites, not product assumptions.
 `TrainUiAcceptanceTest` uses `FACTORIO_MCP_TEST_UI_LANGUAGE=en` for English or `zh-CN` for Simplified Chinese
 (the default). The test selects the fixture's original text; the product does not translate it.
+UI navigation uses live widget selectors. Mouse gesture tests obtain bounds from the selected widgets and choose
+destinations within the current viewport; world actions use world coordinates projected during execution. Do not
+replace these targets with fixed screen pixels or viewport fractions when adapting a fixture to another display.
 
 1. Copy `src/nativeTest/resources/ui-actions` into a new directory such as
    `temp/ui-acceptance/scenarios/ui-actions`.

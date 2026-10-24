@@ -11,6 +11,7 @@ import platform.posix.sysconf
 
 internal data class UiKeyMetadata(
     val event: KeyboardEventMetadata,
+    val state: KeyboardStateMetadata,
     val focus: Long,
     val capture: UiCaptureMetadata,
     val modal: UiModalMetadata,
@@ -23,6 +24,8 @@ internal data class UiKeyMetadata(
         }
         event.writeTo(output.event)
         event.writeTo(output.clock, bias)
+        state.owner.writeTo(output.owner, bias)
+        state.writeTo(output.modifiers)
         capture.writeTo(output.capture, bias)
         modal.writeTo(output.modal)
         output.focus = address(focus)
@@ -30,41 +33,68 @@ internal data class UiKeyMetadata(
     }
 
     companion object {
-        fun resolve(image: ElfImage, process: ProcessHandle, bias: Long): UiKeyMetadata {
-            val event = KeyboardEventMetadata.resolve(image).also { it.verifyLoaded(image, process, bias) }
-            val (focus, functions) = image.withFunctionEvidence {
-                WidgetFocusEntry.verify(image, SysVObjectSize.resolve(image, "4agui6Widget"))
-            }
+        fun resolve(
+            image: ElfImage,
+            process: ProcessHandle,
+            bias: Long,
+            existingState: KeyboardStateMetadata? = null,
+        ): UiKeyMetadata {
+            val event =
+                KeyboardEventMetadata.resolve(image).also { it.verifyLoaded(image, process, bias) }
+            val state =
+                existingState
+                    ?: KeyboardStateMetadata.resolve(image, MouseStateMetadata.resolve(image))
+                        .also { it.verifyLoaded(image, process, bias) }
+            require(event.update == state.update && event.payload == state.payload)
+            val (focus, functions) =
+                image.withFunctionEvidence {
+                    WidgetFocusEntry.verify(image, SysVObjectSize.resolve(image, "4agui6Widget"))
+                }
             for (function in functions) {
                 val bytes = image.functionBytes(function, function.size.toInt())
                 require(
-                    process.readMemory(bias + function.address, bytes.size.toInt())
+                    process
+                        .readMemory(bias + function.address, bytes.size.toInt())
                         .contentEquals(bytes.bytes(0, bytes.size.toInt()))
-                ) { "Live widget focus evidence differs from the selected executable" }
+                ) {
+                    "Live widget focus evidence differs from the selected executable"
+                }
             }
-            val capture = UiCaptureMetadata.resolve(image).also { it.verify(image, bias, process::readMemory) }
-            val modal = UiModalMetadata.resolve(image).also { it.verify(image, bias, process::readMemory) }
+            val capture =
+                UiCaptureMetadata.resolve(image).also {
+                    it.verify(image, bias, process::readMemory)
+                }
+            val modal =
+                UiModalMetadata.resolve(image).also { it.verify(image, bias, process::readMemory) }
             require(
-                capture.guiSize == modal.guiSize && capture.widgetSize == modal.widgetSize &&
-                        capture.widgetTargetable == modal.widgetTargetable
+                capture.guiSize == modal.guiSize &&
+                    capture.widgetSize == modal.widgetSize &&
+                    capture.widgetTargetable == modal.widgetTargetable
             )
             val entry = bias + event.poll.table + event.poll.slot * 8L
             val pageSize = sysconf(_SC_PAGESIZE)
             val page = entry and -pageSize
-            val region = process.executableMappings().singleOrNull {
-                it.start <= page && it.end >= page + pageSize &&
-                        it.readable && !it.executable && it.permissions[3] == 'p'
-            }
-                ?: error("Event poll entry is not private readable data within one mapped page")
-            require(BinaryView(process.readMemory(entry, 8)).unsigned(0, 8) == bias + event.poll.poll.address) {
+            val region =
+                process.executableMappings().singleOrNull {
+                    it.start <= page &&
+                        it.end >= page + pageSize &&
+                        it.readable &&
+                        !it.executable &&
+                        it.permissions[3] == 'p'
+                } ?: error("Event poll entry is not private readable data within one mapped page")
+            require(
+                BinaryView(process.readMemory(entry, 8)).unsigned(0, 8) ==
+                    bias + event.poll.poll.address
+            ) {
                 "Event poll virtual entry is already modified"
             }
             return UiKeyMetadata(
                 event,
+                state,
                 focus.address,
                 capture,
                 modal,
-                PROT_READ or if (region.writable) PROT_WRITE else 0
+                PROT_READ or if (region.writable) PROT_WRITE else 0,
             )
         }
     }

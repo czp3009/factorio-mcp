@@ -115,7 +115,8 @@ internal class SysVLocalArgument(private val flow: X64ControlFlow) {
                 Operation.ENDBR,
                 Operation.JMP,
                 Operation.JCC,
-                Operation.RET -> Unit
+                Operation.RET,
+                Operation.TRAP -> Unit
 
                 else -> write(instruction.destination, null)
             }

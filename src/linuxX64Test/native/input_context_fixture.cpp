@@ -8,43 +8,46 @@
 
 namespace {
 struct Game;
+
 struct Map {
     uint64_t tick = std::numeric_limits<uint64_t>::max();
     Game *game = nullptr;
     uint8_t stopped = 0;
     uint8_t paused = 0;
 };
+
 struct Player {
     virtual ~Player() = default;
     Map *map = nullptr;
 };
+
 struct Source {
     virtual ~Source() = default;
     Player *player = nullptr;
 };
+
 struct ForwardedSource {
     virtual ~ForwardedSource() = default;
     Source *source = nullptr;
 };
+
 struct View {
     virtual ~View() = default;
     Player *player = nullptr;
 };
-struct Handler {
-    virtual ~Handler() = default;
-    Map *map = nullptr;
-    Source *source = nullptr;
-};
+
 struct Game {
     View *view = nullptr;
-    Handler *handler = nullptr;
+    Map *map = nullptr;
     void *other = nullptr;
     Source *source = nullptr;
 };
+
 struct Name {
     const char *data;
     uint64_t length;
 };
+
 struct Script {
     virtual ~Script() = default;
     Name name{"fixture", 7};
@@ -53,15 +56,17 @@ struct Script {
     uint8_t enabled = 1;
     Map *map = nullptr;
 };
+
 struct Context {
-    virtual ~Context() = default;
     Script **begin = nullptr;
     Script **end = nullptr;
 };
+
 struct Scenario {
     Game *game;
     Context *context;
 };
+
 struct Global {
     Scenario *scenario;
     Source *source;
@@ -83,14 +88,11 @@ int main() {
     Player player, otherPlayer;
     Source source, otherSource;
     View view;
-    Handler handler;
-    Game game{&view, &handler, &source, &source}, otherGame;
+    Game game{&view, &map, &source, &source}, otherGame;
     map.game = &game;
     player.map = &map;
     source.player = &player;
     view.player = &player;
-    handler.map = &map;
-    handler.source = &source;
     Script script;
     uintptr_t state = 0;
     script.state = &state;
@@ -111,9 +113,7 @@ int main() {
     world.contextSize = sizeof(context);
     world.scenario = offset(&global, &global.scenario);
     world.game = offset(&scenario, &scenario.game);
-    world.contextCount = 1;
-    world.contexts[0] = offset(&scenario, &scenario.context);
-    identity(&context, world.contextVtable, world.contextTypeInfo);
+    world.context = offset(&scenario, &scenario.context);
     auto &lua = config.script;
     identity(&script, lua.vtable, lua.typeInfo);
     lua.contextSize = sizeof(context);
@@ -132,12 +132,10 @@ int main() {
     identity(&source, input.sourceVtable, input.sourceTypeInfo);
     identity(&player, input.playerVtable, input.playerTypeInfo);
     identity(&view, input.viewVtable, input.viewTypeInfo);
-    identity(&handler, input.handlerVtable, input.handlerTypeInfo);
     input.sourceSize = sizeof(source);
     input.playerSize = sizeof(player);
     input.mapSize = sizeof(map);
     input.viewSize = sizeof(view);
-    input.handlerSize = sizeof(handler);
     input.globalSource = offset(&global, &global.source);
     input.sourcePlayer = offset(&source, &source.player);
     input.playerMap = offset(&player, &player.map);
@@ -149,11 +147,7 @@ int main() {
     input.mapTick = offset(&map, &map.tick);
     input.mapStop = offset(&map, &map.stopped);
     input.mapPaused = offset(&map, &map.paused);
-    input.handlerMap = offset(&handler, &handler.map);
-    input.handlerSource = offset(&handler, &handler.source);
-    input.handlerCount = 2;
-    input.handlers[0] = offset(&game, &game.handler);
-    input.handlers[1] = offset(&game, &game.other);
+    input.gameMap = offset(&game, &game.map);
     uint32_t cancel = 0;
     InputContext output;
     auto read = [&] { return readInputContext(config, &cancel, output); };
@@ -174,13 +168,10 @@ int main() {
         input.forwardedSize = sizeof(forwarded);
         input.forwardedSource = offset(&forwarded, &forwarded.source);
         game.source = reinterpret_cast<Source *>(&forwarded);
-        handler.source = game.source;
         assert(read() == 0 && output.source == reinterpret_cast<uintptr_t>(&source));
         forwarded.source = &otherSource;
         reject(ESTALE);
         forwarded.source = &source;
-        handler.source = &source;
-        reject(ESTALE);
         game.source = &otherSource;
         reject(ENOTSUP);
         game.source = &source;
@@ -225,21 +216,9 @@ int main() {
     script.map = nullptr;
     reject(ESTALE);
     script.map = &map;
-    handler.map = nullptr;
+    game.map = nullptr;
     reject(ESTALE);
-    handler.map = &map;
-    handler.source = &otherSource;
-    reject(ESTALE);
-    handler.source = &source;
-    game.handler = nullptr;
-    reject(ENOTSUP);
-    game.handler = &handler;
-    game.other = &handler;
-    reject(ENOTUNIQ);
-    game.other = &source;
-    input.handlerTypeInfo += 8;
-    reject(ESTALE);
-    input.handlerTypeInfo -= 8;
+    game.map = &map;
     const auto original = config;
     input.gameSource = input.gameView;
     reject(EINVAL);
@@ -247,7 +226,7 @@ int main() {
     input.gameSource = config.world.gameSize - 1;
     reject(EINVAL);
     config = original;
-    input.handlers[1] = input.gameSource;
+    input.gameMap = input.gameSource;
     reject(EINVAL);
     config = original;
     input.mapTick = input.mapSize - 1;
@@ -256,20 +235,20 @@ int main() {
     input.mapPaused = input.mapTick;
     reject(EINVAL);
     config = original;
-    input.handlerSource = input.handlerMap;
+    input.gameMap = input.gameView;
     reject(EINVAL);
     config = original;
     input.scriptMap = lua.state;
     reject(EINVAL);
     config = original;
-    input.handlers[1] = input.handlers[0];
+    input.gameMap = config.world.gameSize;
     reject(EINVAL);
     config = original;
     const size_t pageSize = sysconf(_SC_PAGESIZE);
     void *guard = mmap(nullptr, pageSize, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     assert(guard != MAP_FAILED);
     game.other = guard;
-    reject(EFAULT);
+    assert(read() == 0); // Unrelated children are not candidates for the typed evaluation owner.
     game.other = nullptr;
     player.map = static_cast<Map *>(guard);
     reject(EFAULT);
@@ -296,7 +275,6 @@ int main() {
     otherSource.player = &player;
     global.source = &otherSource;
     game.source = &otherSource;
-    handler.source = &otherSource;
     assert(read() == 0 && output.source == reinterpret_cast<uintptr_t>(&otherSource));
     assert(sourceTask.read(output) == ESTALE && !output.source && sourceTask.owned());
     sourceTask.release();

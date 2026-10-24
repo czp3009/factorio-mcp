@@ -1,5 +1,6 @@
 #include "keyboard_route.h"
 #include "../../nativeMain/native/input_sequence.h"
+#include "keyboard_fixture.h"
 #include <cassert>
 #include <cerrno>
 #include <cstddef>
@@ -25,6 +26,7 @@ struct Record {
 struct State {
     uint64_t buttons = 0;
     Record *begin = nullptr, *end = nullptr;
+    uint16_t modifiers = 0;
 };
 
 struct Global {
@@ -34,11 +36,12 @@ struct Global {
 struct Event {
     uint32_t type, code;
     double time;
+    uint16_t modifiers;
 };
 
 bool failClock = false;
 
-uint32_t ticks() {
+uint64_t ticks() {
     if (failClock)
         throw std::runtime_error("fixture clock");
     return 1234;
@@ -80,14 +83,13 @@ struct Fixture {
                        offsetof(State, end),
                        sizeof(Record),
                        offsetof(Record, code),
-                       offsetof(Record, value),
-                       sizeof(Value),
-                       offsetof(Value, held),
-                       offsetof(Value, blocked)};
+                       offsetof(Record, value) + offsetof(Value, held),
+                       fixtureModifiers(offsetof(State, modifiers), 42, 43, 44)};
         config.event.extent = sizeof(Event);
         config.event.type = offsetof(Event, type);
         config.event.time = offsetof(Event, time);
         config.event.code = offsetof(Event, code);
+        config.event.modifiers = offsetof(Event, modifiers);
         config.event.press = 1;
         config.event.release = 2;
         config.clock = {reinterpret_cast<uintptr_t>(ticks), 1000};
@@ -159,6 +161,7 @@ struct Fixture {
     static void update(void *self, const void *bytes) {
         auto &fixture = *static_cast<Fixture *>(self);
         const auto &value = event(bytes);
+        fixture.state.modifiers = value.modifiers;
         if (value.type == 1 || !fixture.ignoreUp)
             fixture.records[value.code - 42].value.held = value.type == 1;
         fixture.entered(EventRouteStage::Update);

@@ -58,8 +58,10 @@ extern "C" Returned fm_fixture_frame_body(void *actualDevice, void *actualWindow
     return {a + b + c + d + e + f, number};
 }
 
-extern "C" void fm_before_frame(void *actualDevice, void *actualWindow, uintptr_t caller) noexcept {
-    assert(actualDevice == device && actualWindow == window &&
+extern "C" void fm_before_frame(void *firstArgument, uintptr_t caller) noexcept {
+    // Observe the first SDL argument. The deliberately wider fixture still proves preservation of
+    // every register, stack argument, vector, flag and return value across the observer.
+    assert(firstArgument == device &&
         caller == reinterpret_cast<uintptr_t>(&fm_fixture_frame_return));
     ++observed;
     void *frames[16];

@@ -83,7 +83,7 @@ class UiFlowAcceptanceTest {
                 }
 
                 val observedCheckStates = mutableMapOf<Boolean, Int>()
-                suspend fun assertProperties(checked: Boolean) {
+                suspend fun assertProperties(checked: Boolean, sliderValue: Double = 50.0) {
                     val snapshot = client.tool("ui_read").toolValue()
                     val fullBudgetTarget =
                         snapshot
@@ -255,7 +255,7 @@ class UiFlowAcceptanceTest {
                             .single { it["type"]?.jsonPrimitive?.content == "agui::Slider" }
                             .getValue("properties")
                             .jsonObject
-                    assertEquals(50.0, slider["value"]!!.jsonPrimitive.double)
+                    assertEquals(sliderValue, slider["value"]!!.jsonPrimitive.double)
                     assertEquals(0.0, slider["minimum"]!!.jsonPrimitive.double)
                     assertEquals(100.0, slider["maximum"]!!.jsonPrimitive.double)
                 }
@@ -424,7 +424,11 @@ class UiFlowAcceptanceTest {
                             data["toggle"]?.jsonPrimitive?.boolean == true
                     }
                 }
-                assertProperties(true)
+                // Widget-local click positions are rounded by the game. Compare its actual
+                // authoritative value instead of assuming that the midpoint means exactly 50.
+                val sliderValue = events.last { it["kind"]?.jsonPrimitive?.content == "checkpoint" }
+                    .getValue("data").jsonObject.getValue("slider").jsonPrimitive.double
+                assertProperties(true, sliderValue)
                 assertTrue(
                     events.any { event ->
                         val data = event["data"] as? JsonObject

@@ -8,13 +8,44 @@
 #include <vector>
 
 namespace {
-struct String { const char *data; uint64_t size; char local[16]; };
-struct Text { String cached; const char *raw; size_t size; };
-struct Item { uint64_t tick; Text text; uint16_t index; };
-struct Links { uintptr_t next, previous; };
-struct Node { Links links; Item item; };
-struct List { Links head; uint64_t count; };
-struct Console { void *player; List lists[2]; };
+struct String {
+    const char *data;
+    uint64_t size;
+    char local[16];
+};
+
+struct Text {
+    String cached;
+    const char *raw;
+    size_t size;
+};
+
+struct Item {
+    uint64_t tick;
+    String playerName;
+    Text text;
+    uint16_t index;
+};
+
+struct Links {
+    uintptr_t next, previous;
+};
+
+struct Node {
+    Links links;
+    Item item;
+};
+
+struct List {
+    Links head;
+    uint64_t count;
+};
+
+struct Console {
+    void *player;
+    List lists[2];
+};
+
 static FmLinuxChatSnapshot result;
 unsigned formatted, destroyed;
 bool failRaw, failDestroy;
@@ -55,6 +86,7 @@ ChatReadConfig config() {
     l.playerIndex = offsetof(Item, index);
     l.indexWidth = sizeof(Item::index);
     l.text = offsetof(Item, text);
+    l.playerName = offsetof(Item, playerName);
     l.textSize = sizeof(Text);
     l.cached = offsetof(Text, cached);
     l.stringSize = sizeof(String);
@@ -69,6 +101,7 @@ struct Fixture {
     Console console{};
     Node nodes[2]{};
     std::string special = "[gps=1,2] [item=iron-plate] 中文 Ω";
+
     Fixture() {
         formatted = destroyed = 0;
         failRaw = failDestroy = false;
@@ -81,11 +114,17 @@ struct Fixture {
             head.next = head.previous = reinterpret_cast<uintptr_t>(&node);
             node.links.next = node.links.previous = reinterpret_cast<uintptr_t>(&head);
             console.lists[i].count = 1;
-            node.item = {123 + i, {{special.data(), special.size(), {}}, special.data(), special.size()}, uint16_t(500 + i)};
+            static constexpr char name[] = "[color=red]name[/color]";
+            node.item = {123 + i,
+                         {name, sizeof(name) - 1, {}},
+                         {{special.data(), special.size(), {}}, special.data(), special.size()},
+                         uint16_t(500 + i)};
         }
     }
+
     int start(ChatReadCommand &command, ChatReadConfig c = config()) {
-        return command.start(c, reinterpret_cast<uintptr_t>(&console), reinterpret_cast<uintptr_t>(&player), &cancel, result);
+        return command.start(c, reinterpret_cast<uintptr_t>(&console), reinterpret_cast<uintptr_t>(&player), &cancel,
+                             result);
     }
 };
 } // namespace
@@ -103,6 +142,7 @@ int main() {
             assert(row.tick == 123 + i && row.stream == i && row.playerIndex == 500 + i && !row.truncated);
             assert(row.textSize == f.special.size() && row.rawSize == f.special.size());
             assert(std::string(row.text, row.textSize) == f.special && std::string(row.raw, row.rawSize) == f.special);
+            assert(std::string(row.playerName, row.playerNameSize) == "[color=red]name[/color]");
         }
         assert(f.start(command) == EALREADY);
     }
@@ -133,23 +173,37 @@ int main() {
         head.previous = reinterpret_cast<uintptr_t>(&nodes.back());
         f.console.lists[0].count = nodes.size();
         for (size_t i = 0; i < nodes.size(); ++i) {
-            nodes[i].links.previous = i ? reinterpret_cast<uintptr_t>(&nodes[i - 1]) : reinterpret_cast<uintptr_t>(&head);
-            nodes[i].links.next = i + 1 < nodes.size() ? reinterpret_cast<uintptr_t>(&nodes[i + 1]) : reinterpret_cast<uintptr_t>(&head);
+            nodes[i].links.previous =
+                i ? reinterpret_cast<uintptr_t>(&nodes[i - 1]) : reinterpret_cast<uintptr_t>(&head);
+            nodes[i].links.next =
+                i + 1 < nodes.size() ? reinterpret_cast<uintptr_t>(&nodes[i + 1]) : reinterpret_cast<uintptr_t>(&head);
         }
         ChatReadCommand command;
         assert(f.start(command) == 0 && result.count == FM_LINUX_CHAT_RECORDS / 2 + 1);
         assert(result.totals[0] == nodes.size() && formatted == result.count && destroyed == result.count);
     }
-    for (unsigned failure = 0; failure < 8; ++failure) {
+    for (unsigned failure = 0; failure < 10; ++failure) {
         Fixture f;
-        if (failure == 0) f.console.player = nullptr;
-        if (failure == 1) f.nodes[0].links.previous = 0;
-        if (failure == 2) f.nodes[0].links.next = 1;
-        if (failure == 3) f.console.lists[0].count = 65537;
-        if (failure == 4) f.console.lists[0].count = 2;
-        if (failure == 5) f.nodes[0].item.text.cached.data = reinterpret_cast<const char *>(1);
-        if (failure == 6) f.nodes[0].item.text.cached.size = 1024 * 1024 + 1;
-        if (failure == 7) f.cancel = 1;
+        if (failure == 0)
+            f.console.player = nullptr;
+        if (failure == 1)
+            f.nodes[0].links.previous = 0;
+        if (failure == 2)
+            f.nodes[0].links.next = 1;
+        if (failure == 3)
+            f.console.lists[0].count = 65537;
+        if (failure == 4)
+            f.console.lists[0].count = 2;
+        if (failure == 5)
+            f.nodes[0].item.text.cached.data = reinterpret_cast<const char *>(1);
+        if (failure == 6)
+            f.nodes[0].item.text.cached.size = 1024 * 1024 + 1;
+        if (failure == 7)
+            f.cancel = 1;
+        if (failure == 8)
+            f.nodes[0].item.playerName.data = reinterpret_cast<const char *>(1);
+        if (failure == 9)
+            f.nodes[0].item.playerName.size = 1024 * 1024 + 1;
         ChatReadCommand command;
         assert(f.start(command) != 0 && command.finished() && result.count == 0);
         assert(formatted == destroyed);
@@ -188,5 +242,28 @@ int main() {
         std::thread worker([&] { assert(f.start(command) == EPERM); });
         worker.join();
         assert(f.start(command) == 0);
+    }
+    {
+        Fixture f;
+        std::string name(FM_LINUX_CHAT_RECORD_BYTES - 2, 'x');
+        name += "\xce\xa9";
+        f.nodes[0].item.playerName = {name.data(), name.size(), {}};
+        ChatReadCommand command;
+        assert(f.start(command) == 0 && result.records[0].truncated == 4);
+        assert(result.records[0].playerNameSize == FM_LINUX_CHAT_RECORD_BYTES - 2);
+    }
+    {
+        Fixture f;
+        f.nodes[0].item.playerName = {"a\0b", 3, {}};
+        ChatReadCommand command;
+        assert(f.start(command) == 0 && result.records[0].playerNameSize == 3);
+        assert(std::memcmp(result.records[0].playerName, "a\0b", 3) == 0);
+    }
+    {
+        Fixture f;
+        auto c = config();
+        c.layout.playerName = c.layout.text;
+        ChatReadCommand command;
+        assert(f.start(command, c) == EINVAL && command.finished() && formatted == 0);
     }
 }

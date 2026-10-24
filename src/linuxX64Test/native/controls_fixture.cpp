@@ -156,6 +156,15 @@ template<unsigned Padding> void run() {
     assert(observe() == EINVAL);
     entries[2] = &linked;
     const auto good = layout;
+    layout.guiMask = 255;
+    linked.gui = 1;
+    assert(observe() == 0 && result->controls[2].gui);
+    linked.gui = 2;
+    assert(observe() == EINVAL);
+    linked.gui = 4;
+    layout.guiMask = 3;
+    assert(!validControlsLayout(layout));
+    layout = good;
     layout.code = layout.type;
     assert(observe() == EINVAL);
     layout = good;

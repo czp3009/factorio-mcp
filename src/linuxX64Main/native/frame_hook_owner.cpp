@@ -6,17 +6,13 @@
 
 namespace {
 bool valid(const FmLinuxFrameHookSite &site) {
-    return fm::addressRange(site.deviceGlobal, sizeof(uintptr_t)) && site.deviceGlobal % alignof(uintptr_t) == 0 &&
-        site.deviceSize >= sizeof(uintptr_t) && site.deviceSize <= 65536 &&
-        fm::addressRange(site.device, site.deviceSize) && site.device % alignof(uintptr_t) == 0 &&
-        fm::member(site.member, sizeof(uintptr_t), site.deviceSize) && site.member % alignof(uintptr_t) == 0 &&
+    return fm::addressRange(site.slot, sizeof(uintptr_t)) && site.slot % alignof(uintptr_t) == 0 &&
         fm::addressRange(site.original, 1) &&
         (site.protection == PROT_READ || site.protection == (PROT_READ | PROT_WRITE));
 }
 
 bool same(const FmLinuxFrameHookSite &a, const FmLinuxFrameHookSite &b) {
-    return a.deviceGlobal == b.deviceGlobal && a.device == b.device && a.original == b.original &&
-        a.deviceSize == b.deviceSize && a.member == b.member && a.protection == b.protection;
+    return a.slot == b.slot && a.original == b.original && a.protection == b.protection;
 }
 } // namespace
 
@@ -28,13 +24,6 @@ bool FrameHookOwner::ownsProtection() const { return hook.ownsProtection(); }
 
 bool FrameHookOwner::hasOwnership() const { return hook.hasOwnership(); }
 
-int FrameHookOwner::currentDevice() const {
-    uintptr_t device;
-    if (!fm::read(bound.deviceGlobal, device))
-        return EFAULT;
-    return device == bound.device ? 0 : ESTALE;
-}
-
 int FrameHookOwner::install(const FmLinuxFrameHookSite &site, uintptr_t next, size_t pageSize) {
     if (syscall(SYS_gettid) != getpid())
         return EPERM;
@@ -44,10 +33,8 @@ int FrameHookOwner::install(const FmLinuxFrameHookSite &site, uintptr_t next, si
     if (hasOwnership()) {
         if (!same(site, bound) || replacement != next || ownsProtection())
             return EBUSY;
-        if (const int error = currentDevice())
-            return error;
         uintptr_t value;
-        if (!fm::read(bound.device + bound.member, value))
+        if (!fm::read(bound.slot, value))
             return EFAULT;
         return ownsPointer() && value == replacement ? 0 : ESTALE;
     }
@@ -55,16 +42,14 @@ int FrameHookOwner::install(const FmLinuxFrameHookSite &site, uintptr_t next, si
     if (forward && forward != site.original)
         return ESTALE;
     bound = site;
-    if (const int error = currentDevice())
-        return error;
     uintptr_t value;
-    if (!fm::read(site.device + site.member, value))
+    if (!fm::read(site.slot, value))
         return EFAULT;
     if (value != site.original)
         return ESTALE;
     replacement = next;
     forward = site.original;
-    return hook.install(site.device + site.member, site.original, next, pageSize, site.protection);
+    return hook.install(site.slot, site.original, next, pageSize, site.protection);
 }
 
 int FrameHookOwner::remove() {
@@ -72,10 +57,8 @@ int FrameHookOwner::remove() {
         return EPERM;
     if (!hasOwnership())
         return 0;
-    if (const int error = currentDevice())
-        return error;
     uintptr_t value;
-    if (!fm::read(bound.device + bound.member, value))
+    if (!fm::read(bound.slot, value))
         return EFAULT;
     if (value != (ownsPointer() ? replacement : bound.original))
         return ESTALE;

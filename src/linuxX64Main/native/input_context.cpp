@@ -46,47 +46,33 @@ bool validInputContextConfig(const FmLinuxInputContextConfig &config) {
     const auto &input = config.input;
     if (!validWorldLayout(world) || !validScriptLayout(script) || world.contextSize != script.contextSize)
         return false;
-    for (auto size : {input.sourceSize, input.playerSize, input.mapSize, input.viewSize, input.handlerSize}) {
+    for (auto size : {input.sourceSize, input.playerSize, input.mapSize, input.viewSize}) {
         if (size < 8 || size > 64 * 1024 * 1024)
             return false;
     }
     if (!table(input.sourceVtable, input.sourceTypeInfo) || !table(input.playerVtable, input.playerTypeInfo) ||
-        !table(input.viewVtable, input.viewTypeInfo) || !table(input.handlerVtable, input.handlerTypeInfo) ||
-        !pointerMember(input.globalSource, world.globalSize) ||
-        !separate(input.globalSource, 8, world.scenario, 8) ||
-        input.sourcePlayer < 8 || !pointerMember(input.sourcePlayer, input.sourceSize) ||
-        input.playerMap < 8 || !pointerMember(input.playerMap, input.playerSize) ||
-        !pointerMember(input.mapGame, input.mapSize) || !pointerMember(input.gameView, world.gameSize) ||
-        !pointerMember(input.gameSource, world.gameSize) || input.gameSource == input.gameView ||
-        input.viewPlayer < 8 || !pointerMember(input.viewPlayer, input.viewSize) ||
-        input.scriptMap < 8 || !pointerMember(input.scriptMap, script.scriptSize) ||
+        !table(input.viewVtable, input.viewTypeInfo) || !pointerMember(input.globalSource, world.globalSize) ||
+        !separate(input.globalSource, 8, world.scenario, 8) || input.sourcePlayer < 8 ||
+        !pointerMember(input.sourcePlayer, input.sourceSize) || input.playerMap < 8 ||
+        !pointerMember(input.playerMap, input.playerSize) || !pointerMember(input.mapGame, input.mapSize) ||
+        !pointerMember(input.gameView, world.gameSize) || !pointerMember(input.gameSource, world.gameSize) ||
+        input.gameSource == input.gameView || input.viewPlayer < 8 ||
+        !pointerMember(input.viewPlayer, input.viewSize) || input.scriptMap < 8 ||
+        !pointerMember(input.scriptMap, script.scriptSize) ||
         !separate(input.scriptMap, 8, script.name + script.stringData, 8) ||
         !separate(input.scriptMap, 8, script.name + script.stringLength, 8) ||
-        !separate(input.scriptMap, 8, script.state, 8) ||
-        !separate(input.scriptMap, 8, script.loading, 1) || !separate(input.scriptMap, 8, script.enabled, 1) ||
-        !pointerMember(input.mapTick, input.mapSize) ||
+        !separate(input.scriptMap, 8, script.state, 8) || !separate(input.scriptMap, 8, script.loading, 1) ||
+        !separate(input.scriptMap, 8, script.enabled, 1) || !pointerMember(input.mapTick, input.mapSize) ||
         !fm::member(input.mapStop, 1, input.mapSize) || !fm::member(input.mapPaused, 1, input.mapSize) ||
-        !separate(input.mapTick, 8, input.mapGame, 8) ||
-        !separate(input.mapStop, 1, input.mapGame, 8) || !separate(input.mapStop, 1, input.mapTick, 8) ||
-        !separate(input.mapPaused, 1, input.mapGame, 8) || !separate(input.mapPaused, 1, input.mapTick, 8) ||
-        input.mapStop == input.mapPaused || input.handlerMap < 8 || input.handlerSource < 8 ||
-        !pointerMember(input.handlerMap, input.handlerSize) || !pointerMember(input.handlerSource, input.handlerSize) ||
-        input.handlerMap == input.handlerSource || !input.handlerCount ||
-        input.handlerCount > FM_LINUX_INPUT_HANDLER_CANDIDATES)
+        !separate(input.mapTick, 8, input.mapGame, 8) || !separate(input.mapStop, 1, input.mapGame, 8) ||
+        !separate(input.mapStop, 1, input.mapTick, 8) || !separate(input.mapPaused, 1, input.mapGame, 8) ||
+        !separate(input.mapPaused, 1, input.mapTick, 8) || input.mapStop == input.mapPaused ||
+        !pointerMember(input.gameMap, world.gameSize) || input.gameMap == input.gameSource ||
+        input.gameMap == input.gameView)
         return false;
-    for (uint32_t index = 0; index < input.handlerCount; ++index) {
-        if (!pointerMember(input.handlers[index], world.gameSize) || input.handlers[index] == input.gameView ||
-            input.handlers[index] == input.gameSource)
-            return false;
-        for (uint32_t previous = 0; previous < index; ++previous) {
-            if (input.handlers[previous] == input.handlers[index])
-                return false;
-        }
-    }
-    if (input.forwardedVtable &&
-        (!table(input.forwardedVtable, input.forwardedTypeInfo) || input.forwardedSize < 16 ||
-         input.forwardedSize > 64 * 1024 * 1024 || input.forwardedSource < 8 ||
-         !pointerMember(input.forwardedSource, input.forwardedSize)))
+    if (input.forwardedVtable && (!table(input.forwardedVtable, input.forwardedTypeInfo) || input.forwardedSize < 16 ||
+                                  input.forwardedSize > 64 * 1024 * 1024 || input.forwardedSource < 8 ||
+                                  !pointerMember(input.forwardedSource, input.forwardedSize)))
         return false;
     if (!input.forwardedVtable && (input.forwardedTypeInfo || input.forwardedSize || input.forwardedSource))
         return false;
@@ -116,8 +102,8 @@ int readInputContext(const FmLinuxInputContextConfig &config, const uint32_t *ca
     if (gameSource != found.source) {
         if (!layout.forwardedVtable || !gameSource)
             return ESTALE;
-        if (const int error = identity(gameSource, layout.forwardedSize, layout.forwardedVtable,
-                                       layout.forwardedTypeInfo))
+        if (const int error =
+                identity(gameSource, layout.forwardedSize, layout.forwardedVtable, layout.forwardedTypeInfo))
             return error;
         uintptr_t forwarded;
         if (!fm::read(gameSource + layout.forwardedSource, forwarded))
@@ -148,33 +134,10 @@ int readInputContext(const FmLinuxInputContextConfig &config, const uint32_t *ca
         return EFAULT;
     if (game != found.game || scriptMap != found.map)
         return ESTALE;
-    if (const int error = header(layout.handlerVtable, layout.handlerTypeInfo))
-        return error;
-    uintptr_t handler = 0;
-    for (uint32_t index = 0; index < layout.handlerCount; ++index) {
-        if (fm_ipc_load(cancel))
-            return ECANCELED;
-        uintptr_t candidate, table;
-        if (!fm::read(found.game + layout.handlers[index], candidate))
-            return EFAULT;
-        if (!candidate)
-            continue;
-        if (!object(candidate, 8) || !fm::read(candidate, table))
-            return EFAULT;
-        if (table != layout.handlerVtable)
-            continue;
-        if (!object(candidate, layout.handlerSize))
-            return EFAULT;
-        if (handler)
-            return ENOTUNIQ;
-        handler = candidate;
-    }
-    if (!handler)
-        return ENOTSUP;
-    uintptr_t handlerMap, handlerSource;
-    if (!fm::read(handler + layout.handlerMap, handlerMap) || !fm::read(handler + layout.handlerSource, handlerSource))
+    uintptr_t gameMap;
+    if (!fm::read(found.game + layout.gameMap, gameMap))
         return EFAULT;
-    if (handlerMap != found.map || handlerSource != gameSource)
+    if (gameMap != found.map)
         return ESTALE;
     uint8_t paused;
     if (!fm::read(found.map + layout.mapTick, found.tick) || !fm::read(found.map + layout.mapStop, found.stopped) ||

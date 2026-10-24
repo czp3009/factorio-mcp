@@ -5,7 +5,7 @@ package com.hiczp.factorio.mcp.offline
 import com.hiczp.factorio.mcp.ElfImage
 import com.hiczp.factorio.mcp.GlLoaderBinding
 import com.hiczp.factorio.mcp.MappedBinary
-import com.hiczp.factorio.mcp.SdlDeviceAllocation
+import com.hiczp.factorio.mcp.SdlDynamicApi
 import kotlinx.cinterop.toKString
 import platform.posix.getenv
 import kotlin.test.Test
@@ -17,12 +17,12 @@ class GlLoaderAcceptanceTest {
         val path = checkNotNull(getenv("FACTORIO_MCP_TEST_ELF")).toKString()
         MappedBinary(path).use {
             val image = ElfImage(it.view)
-            val device = SdlDeviceAllocation.resolve(image, "X11_CreateDevice", "X11_GL_SwapWindow")
+            val lookup = SdlDynamicApi.resolve(image, "SDL_GL_GetProcAddress", listOf(7))
             val result = GlLoaderBinding.resolve(
                 image, listOf(
                     "glGetIntegerv", "glBindFramebuffer", "glBindBuffer",
                     "glPixelStorei", "glReadPixels", "glGetError"
-                ), device.size
+                ), lookup
             )
             println("Verified OpenGL SDK lookup bindings: $result")
         }

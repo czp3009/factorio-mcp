@@ -24,7 +24,7 @@ extern "C" {
 typedef struct FmChatRecord {
     uint64_t identity, tick;
     uint32_t stream, playerIndex, truncated;
-    char text[4096], raw[4096];
+    char text[4096], raw[4096], playerName[4096];
 } FmChatRecord;
 
 typedef struct FmChatSnapshot {
@@ -162,7 +162,7 @@ typedef enum FmSymbol {
     NextEvent,
     ProcessEvents,
     EventConstructor,
-    SdlTicks,
+    SdlTicksNS,
     ToggleButtonType,
     ButtonType,
     DropDownType,
@@ -190,7 +190,7 @@ typedef enum FmSymbol {
     ViewMapPosition,
     LocalisedRaw,
     ChatStringConstructor,
-    GuiSend,
+    PlayerSend,
     ActionDestroy,
     ActionNoData,
     ActionDataType,
@@ -202,7 +202,7 @@ typedef struct EventLayout {
     uint32_t mouseSize, mouseX, mouseY, wheel, button, eventType, mouseTime, mouseAlt, mouseControl, mouseShift,
         mouseSource, previous;
     uint32_t keySize, unichar, keyTime, keyCode, extKey, key, keyAlt, keyControl, keyShift, keyMeta, handled, keySource;
-    uint32_t left, right, middle, enter, down, up, leave, keyNone, keyA, keyBackspace;
+    uint32_t left, right, middle, enter, down, click, up, leave, keyNone, keyA, keyBackspace;
     uint32_t widgetFlags, fireOnDown, extKeyNone;
     uint32_t guiCaptureTarget, widgetTargetable;
 } EventLayout;
@@ -213,8 +213,14 @@ typedef struct ControlLayout {
     uint32_t enabled, spectating, cutscene, stringSize, mouseValue;
 } ControlLayout;
 
+typedef struct KeyboardModifierLayout {
+    uint32_t event, state, keys[12];
+} KeyboardModifierLayout;
+
 typedef struct FrontendInputLayout {
     uint32_t supported, optionalValue, optionalEngaged, eventSize, keyboard, scancode, keyDown, keyUp;
+    uint32_t globalInputState;
+    KeyboardModifierLayout modifiers;
 } FrontendInputLayout;
 
 typedef struct WidgetPropertyLayout {
@@ -278,6 +284,7 @@ typedef struct FmInputEventLayout {
     int32_t wheel;
     uint32_t stateMouseInWindow;
     int32_t mouseEnter;
+    KeyboardModifierLayout modifiers;
 } FmInputEventLayout;
 
 typedef struct TimedInputLayout {
@@ -302,9 +309,10 @@ typedef struct FmInputTask {
 
 typedef struct ChatLayout {
     uint32_t supported, console, lists[2], head, count, next, previous, value;
-    uint32_t tick, playerIndex, text, cached, stringSize;
-    uint32_t sendSupported, contextSize, contextPlayer, actionSize, actionType, actionPlayer, actionBuffer;
+    uint32_t tick, playerIndex, text, cached, stringSize, playerName;
+    uint32_t sendSupported, actionSize, actionType, actionPlayer, actionBuffer;
     uint32_t writeToConsole;
+    uint32_t gameHandler, handlerInputType, replayInput;
 } ChatLayout;
 
 typedef struct Symbols {

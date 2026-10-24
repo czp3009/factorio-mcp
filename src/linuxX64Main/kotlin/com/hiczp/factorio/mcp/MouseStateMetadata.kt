@@ -6,7 +6,10 @@ import com.hiczp.factorio.mcp.linuxbridge.FmLinuxMouseStateConfig
 import com.hiczp.factorio.mcp.linuxbridge.FmLinuxMouseStateLayout
 import kotlinx.cinterop.set
 
-/** Resolved adapter data. Calling entries still requires loaded-image evidence and complete gesture admission. */
+/**
+ * Resolved adapter data. Calling entries still requires loaded-image evidence and complete gesture
+ * admission.
+ */
 internal data class MouseStateMetadata(
     val state: InputStateLayout,
     val conversion: SdlButtonConversion,
@@ -26,15 +29,28 @@ internal data class MouseStateMetadata(
     internal fun verify(image: ElfImage, loadBias: Long, read: (Long, Int) -> ByteArray) {
         require(loadBias >= 0)
         fun compare(address: Long, size: Long, expected: BinaryView) {
-            require(size in 1..(16 * 1024 * 1024) && address >= 0 && address <= Long.MAX_VALUE - loadBias - size)
-            require(read(address + loadBias, size.toInt()).contentEquals(expected.bytes(0, size.toInt()))) {
+            require(
+                size in 1..(16 * 1024 * 1024) &&
+                    address >= 0 &&
+                    address <= Long.MAX_VALUE - loadBias - size
+            )
+            require(
+                read(address + loadBias, size.toInt())
+                    .contentEquals(expected.bytes(0, size.toInt()))
+            ) {
                 "Live mouse-state evidence differs from the selected executable"
             }
         }
-        for (function in functions)
-            compare(function.address, function.size, image.functionBytes(function, function.size.toInt()))
-        for (range in readonly)
-            compare(range.address, range.size, image.virtualBytes(range.address, range.size))
+        for (function in functions) compare(
+            function.address,
+            function.size,
+            image.functionBytes(function, function.size.toInt()),
+        )
+        for (range in readonly) compare(
+            range.address,
+            range.size,
+            image.virtualBytes(range.address, range.size),
+        )
     }
 
     fun writeTo(output: FmLinuxMouseStateLayout, loadBias: Long) {
@@ -52,17 +68,25 @@ internal data class MouseStateMetadata(
         output.release = conversion.kinds.getValue(SdlButtonAdmission.Transition.RELEASE).toUInt()
         // This wire layout mirrors the three buttons supported by direct widget gestures.
         // Timed-input integration must use all five verified entries, including X1/X2.
-        listOf(SdlButtonAdmission.Button.LEFT, SdlButtonAdmission.Button.MIDDLE, SdlButtonAdmission.Button.RIGHT)
+        listOf(
+                SdlButtonAdmission.Button.LEFT,
+                SdlButtonAdmission.Button.MIDDLE,
+                SdlButtonAdmission.Button.RIGHT,
+            )
             .forEachIndexed { index, button ->
-                output.codes[index] = checkNotNull(conversion.admission.table.value(button.sdkValue)).toUInt()
+                output.codes[index] =
+                    checkNotNull(conversion.admission.table.value(button.sdkValue)).toUInt()
                 output.masks[index] = update.masks.getValue(button).toUInt()
             }
     }
 
     fun writeTo(output: FmLinuxMouseStateConfig, loadBias: Long) {
         require(
-            loadBias >= 0 && updateEntry > 0 && postEntry > 0 &&
-                    updateEntry < Long.MAX_VALUE - loadBias && postEntry < Long.MAX_VALUE - loadBias
+            loadBias >= 0 &&
+                updateEntry > 0 &&
+                postEntry > 0 &&
+                updateEntry < Long.MAX_VALUE - loadBias &&
+                postEntry < Long.MAX_VALUE - loadBias
         )
         writeTo(output.layout, loadBias)
         output.update = (updateEntry + loadBias).toULong()
@@ -71,20 +95,25 @@ internal data class MouseStateMetadata(
 
     companion object {
         fun resolve(image: ElfImage): MouseStateMetadata {
-            val (resolved, readonly) = image.withReadonlyEvidence {
-                image.withFunctionEvidence {
-                    val conversion = SdlButtonConversion.resolve(image)
-                    val state = InputStateLayout.resolve(image, MouseInputLayout.resolve(image))
-                    MouseStateMetadata(
-                        state, conversion, InputStateMouseUpdate.resolve(image, state, conversion),
-                        MousePostUpdate.resolve(image, conversion), EventCopyCases.resolve(image, conversion),
-                        InputEventUses.resolve(image, conversion),
-                        image.symbol("_ZN10InputState6updateERK5Event").address,
-                        image.symbol("_ZN10InputState10postUpdateERK5Event").address,
-                        emptyList(), emptyList()
-                    )
+            val (resolved, readonly) =
+                image.withReadonlyEvidence {
+                    image.withFunctionEvidence {
+                        val conversion = SdlButtonConversion.resolve(image)
+                        val state = InputStateLayout.resolve(image)
+                        MouseStateMetadata(
+                            state,
+                            conversion,
+                            InputStateMouseUpdate.resolve(image, state, conversion),
+                            MousePostUpdate.resolve(image, conversion),
+                            EventCopyCases.resolve(image, conversion),
+                            InputEventUses.resolve(image, conversion),
+                            image.symbol("_ZN10InputState6updateERK5Event").address,
+                            image.symbol("_ZN10InputState10postUpdateERK5Event").address,
+                            emptyList(),
+                            emptyList(),
+                        )
+                    }
                 }
-            }
             return resolved.first.copy(functions = resolved.second, readonly = readonly)
         }
     }

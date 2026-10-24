@@ -19,6 +19,7 @@ struct Event {
     int32_t dw{};
     int32_t dy{};
     std::string owned = std::string(100, 'x');
+    uint16_t modifiers{};
 };
 
 struct State {
@@ -26,6 +27,7 @@ struct State {
     int32_t x{11}, y{29};
     bool inside{};
     std::set<uint32_t> held;
+    uint16_t modifiers{};
 };
 
 State *expectedState{};
@@ -44,31 +46,31 @@ void fail(Failure stage) {
 }
 
 void *construct(void *output, double timestamp, int type) {
-    assert(timestamp == 123.456);
+    assert(timestamp == 123.456789);
     trace.push_back("construct");
     fail(Failure::Construct);
     ++constructed;
     return new (output) Event{timestamp, type};
 }
 
-void *destroy(void *object, unsigned flags) {
-    assert(flags == 0);
+void destroy(void *object) {
     auto *event = static_cast<Event *>(object);
     assert(event->owned.size() == 100);
     event->~Event();
     ++destroyed;
     trace.push_back("destroy");
-    return object;
 }
 
-uint32_t ticks() {
-    return 123456;
+uint64_t ticksNS() {
+    return 123456789000;
 }
 
 void update(void *object, const void *input) {
     assert(object == expectedState);
     auto &state = *static_cast<State *>(object);
     const auto &event = *static_cast<const Event *>(input);
+    if (event.type == keyDown || event.type == keyUp)
+        state.modifiers = event.modifiers;
     trace.push_back("update");
     if (event.type == mouseEnter) {
         state.inside = true;
@@ -99,7 +101,7 @@ void post(void *object, const void *) {
     fail(Failure::Post);
 }
 
-const InputEventFunctions api{construct, destroy, ticks, update, process, post};
+const InputEventFunctions api{construct, destroy, ticksNS, update, process, post};
 const InputEventLayout layout{sizeof(Event),
                               offsetof(Event, key),
                               offsetof(Event, x),
@@ -117,7 +119,30 @@ const InputEventLayout layout{sizeof(Event),
                               offsetof(Event, dy),
                               wheel,
                               offsetof(State, inside),
-                              mouseEnter};
+                              mouseEnter,
+                              {offsetof(Event, modifiers), offsetof(State, modifiers), {201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212}}};
+
+void keyboardModifiersFollowPressReleaseAndCancellation() {
+    State state;
+    expectedState = &state;
+    InputEventButtons buttons;
+    GameInputEvents emitter(layout, api, buttons, &state);
+    emitter.button({InputDevice::Keyboard, 201}, true);
+    emitter.button({InputDevice::Keyboard, 202}, true);
+    emitter.button({InputDevice::Keyboard, 203}, true);
+    emitter.button({InputDevice::Keyboard, 83}, true);
+    assert(state.modifiers == 0x43 && events.back().modifiers == 0x43);
+    emitter.button({InputDevice::Keyboard, 201}, false);
+    assert(state.modifiers == 0x42);
+    buttons.release(emitter);
+    assert(state.modifiers == 0 && state.held.empty());
+    emitter.button({InputDevice::Keyboard, 211}, true);
+    buttons.release(emitter);
+    assert(state.modifiers == 0x2000 && state.held.empty());
+    emitter.button({InputDevice::Keyboard, 211}, true);
+    buttons.release(emitter);
+    assert(state.modifiers == 0);
+}
 
 void normalRoutingAndLiveMousePosition() {
     State state;
@@ -389,6 +414,7 @@ void onlyTheOwnedRunningWorldSuppliesAnInputClock() {
 } // namespace
 
 int main() {
+    keyboardModifiersFollowPressReleaseAndCancellation();
     normalRoutingAndLiveMousePosition();
     mouseEntryRevalidatesBeforeTheFollowingMove();
     failedDispatchRemainsReleasable();

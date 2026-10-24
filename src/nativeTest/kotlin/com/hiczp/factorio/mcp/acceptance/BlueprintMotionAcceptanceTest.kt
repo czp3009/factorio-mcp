@@ -10,7 +10,9 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlinx.cinterop.toKString
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.io.buffered
 import kotlinx.io.files.Path
@@ -40,9 +42,12 @@ class BlueprintMotionAcceptanceTest {
                 }
                 .toList()
         withTimeout(90_000) {
+            var fixtureVisibility: Boolean? = null
             try {
                 client.initialize()
                 client.tool("attach", buildJsonObject { put("pid", pid) }).toolValue()
+                fixtureVisibility = client.fixtureVisible()
+                client.setFixtureVisible(false)
                 val bindings =
                     client
                         .tool(
@@ -260,7 +265,13 @@ class BlueprintMotionAcceptanceTest {
                 client.tool("screenshot").toolValue()
                 Unit
             } finally {
-                client.close()
+                withContext(NonCancellable) {
+                    try {
+                        fixtureVisibility?.let { client.setFixtureVisible(it) }
+                    } finally {
+                        client.close()
+                    }
+                }
             }
         }
     }

@@ -14,7 +14,7 @@ internal object WidgetSwitchNames {
             }
         val (proof, functions) = resolved
         val pointers =
-            proof.pointers
+            (if (proof.relative) emptyList() else proof.pointers)
                 .mapIndexed { index, pointer -> proof.table + index * 8L to pointer }
                 .toMap()
         return Layout(proof, ElfEvidence(functions, readonly, pointers, emptyMap()))
@@ -30,6 +30,13 @@ internal object WidgetSwitchNames {
                 "_ZN13LuaGuiElement18luaReadSwitchStateEP9lua_State",
                 wrapper,
                 custom,
+                LuaElementIdentity.resolve(
+                    image,
+                    "_ZN13LuaGuiElement10getElementI12CustomSwitchEEPT_v",
+                    "_ZTV12CustomSwitch",
+                    "_ZN12CustomSwitch14asCustomSwitchEv",
+                    custom,
+                ),
             )
         val constructor =
             image.symbol(

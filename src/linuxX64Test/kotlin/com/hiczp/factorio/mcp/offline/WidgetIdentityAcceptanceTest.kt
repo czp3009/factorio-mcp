@@ -15,7 +15,8 @@ class WidgetIdentityAcceptanceTest {
     fun resolvesRawQualityConditionFieldsAndNativeComparisonStrings() {
         val path = checkNotNull(getenv("FACTORIO_MCP_TEST_ELF")).toKString()
         MappedBinary(path).use { file ->
-            val fields = QualityConditionFields.resolve(ElfImage(file.view))
+            val image = ElfImage(file.view)
+            val fields = QualityConditionFields.resolve(image)
             assertTrue(fields.quality != fields.comparison && fields.comparisons.isNotEmpty())
             assertTrue(fields.registryBegin != fields.registryEnd)
             println("Raw condition: quality=${fields.quality}, comparison=${fields.comparison}, values=${fields.comparisons}")

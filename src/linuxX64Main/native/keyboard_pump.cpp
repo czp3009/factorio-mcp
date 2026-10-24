@@ -35,7 +35,11 @@ int KeyboardPumpKey::write(void *event, size_t capacity, void *context) noexcept
     // A clock callback is still a native call; reacquire ownership before touching the empty Event.
     if (const int error = self.current(value))
         return error;
-    return writeKeyboardEvent(self.config_.event, event, capacity, self.code_, self.writingDown_, time);
+    uint16_t modifiers;
+    if (const int error = readKeyboardModifiers(self.config_.owner, self.config_.keys.modifiers, self.global_,
+                                                self.state_, self.code_, self.writingDown_, modifiers))
+        return error;
+    return writeKeyboardEvent(self.config_.event, event, capacity, self.code_, self.writingDown_, time, modifiers);
 }
 
 int KeyboardPumpKey::press(uint32_t code) {

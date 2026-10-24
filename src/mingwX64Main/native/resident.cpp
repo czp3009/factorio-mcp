@@ -165,7 +165,7 @@ static void performAction(void *root, void *gui) {
         field<bool>(event, layout.mouseControl, action.control != 0);
         field<bool>(event, layout.mouseShift, action.shift != 0);
         field<void *>(event, layout.mouseSource, widget);
-        field<double>(event, layout.mouseTime, GetTickCount64() / 1000.0);
+        field<double>(event, layout.mouseTime, fn<uint64_t (*)()>(SdlTicksNS)() / 1e9);
         alignas(16) unsigned char absoluteEvent[256];
         memcpy(absoluteEvent, event, sizeof(event));
         const auto coordinate = [](int origin, int extent, double fraction) {
@@ -180,7 +180,7 @@ static void performAction(void *root, void *gui) {
             symbols, gui, [&] { return currentGui(root, gui); }, [&](void *target) { return live(target, root, gui); });
         void *releasedWidget = nullptr;
         const Symbol dispatch[] = {DispatchEnter, DispatchDown, DispatchClick, DispatchUp, DispatchLeave};
-        const unsigned types[] = {layout.enter, layout.down, layout.up, layout.up, layout.leave};
+        const unsigned types[] = {layout.enter, layout.down, layout.click, layout.up, layout.leave};
         // Some widgets consult ControlInput rather than only the GUI event's button/modifier fields.
         // Mirror the chord in InputState without routing a second click through the GUI or world.
         const auto functions = gameInputFunctions(symbols);
@@ -268,7 +268,7 @@ static void performAction(void *root, void *gui) {
             field<unsigned>(event, layout.unichar, character);
             field<bool>(event, layout.keyControl, control);
             field<void *>(event, layout.keySource, widget);
-            field<double>(event, layout.keyTime, GetTickCount64() / 1000.0);
+            field<double>(event, layout.keyTime, fn<uint64_t (*)()>(SdlTicksNS)() / 1e9);
             fn<bool (*)(void *, const void *)>(TextKeyDown)(textBox, event);
         };
         key(layout.keyA, 0, true);

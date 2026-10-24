@@ -254,8 +254,18 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
     private fun uiKey(): UiKeyMetadata =
         keyMetadata
             ?: process
-                .withExecutable { image -> UiKeyMetadata.resolve(image, process, loadBias) }
-                .also { keyMetadata = it }
+                .withExecutable { image ->
+                    UiKeyMetadata.resolve(
+                        image,
+                        process,
+                        loadBias,
+                        keyboardStateMetadata ?: clickMetadata?.keyboard,
+                    )
+                }
+                .also {
+                    keyMetadata = it
+                    keyboardStateMetadata = it.state
+                }
 
     private suspend fun screenshot(): GameSnapshot {
         val metadata =
@@ -272,7 +282,6 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
             frameBinding
                 ?: FrameHookBinding.bind(
                         metadata.swap,
-                        metadata.backends,
                         loadBias,
                         sysconf(_SC_PAGESIZE),
                         mappings,
@@ -703,10 +712,11 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
                         require(
                             row.identity != 0uL &&
                                 row.stream <= 1u &&
-                                row.truncated <= 3u &&
+                                row.truncated <= 7u &&
                                 row.playerIndex < (1u shl (metadata.player.index.width * 8)) &&
                                 row.textSize < FM_LINUX_CHAT_RECORD_BYTES.toUInt() &&
-                                row.rawSize < FM_LINUX_CHAT_RECORD_BYTES.toUInt()
+                                row.rawSize < FM_LINUX_CHAT_RECORD_BYTES.toUInt() &&
+                                row.playerNameSize < FM_LINUX_CHAT_RECORD_BYTES.toUInt()
                         )
                         ChatRecord(
                             row.identity,
@@ -717,6 +727,8 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
                             row.raw.readBytes(row.rawSize.toInt()).decodeToString(),
                             row.truncated and 1u != 0u,
                             row.truncated and 2u != 0u,
+                            row.playerName.readBytes(row.playerNameSize.toInt()).decodeToString(),
+                            row.truncated and 4u != 0u,
                         )
                     }
                 require(

@@ -29,8 +29,8 @@ bool validFrameContext(const FmLinuxFrameContextConfig &config) {
         if (extent < sizeof(uintptr_t) || extent > 64 * 1024 * 1024)
             return false;
     }
-    return pointer(config.global) && pointer(config.device) && config.global != config.device &&
-        fm::addressRange(config.caller, 1) && fm::addressRange(config.getter, 1) &&
+    return pointer(config.global) &&
+        fm::addressRange(config.caller, 1) && fm::addressRange(config.pixels, 1) &&
         pointer(config.graphicsTable) && pointer(config.windowTable) &&
         config.graphicsTable != config.windowTable && member(config.globalWindow, config.globalSize) &&
         config.graphicsWindow >= sizeof(uintptr_t) && member(config.graphicsWindow, config.graphicsSize) &&
@@ -39,7 +39,7 @@ bool validFrameContext(const FmLinuxFrameContextConfig &config) {
         config.windowGraphics != config.nativeWindow;
 }
 
-int readFrameSize(const FmLinuxFrameContextConfig &config, uintptr_t device, uintptr_t window,
+int readFrameSize(const FmLinuxFrameContextConfig &config, uintptr_t window,
                   uintptr_t caller, const uint32_t *cancel, FmLinuxFrameSize &output) noexcept {
     output = {};
     if (!cancel || !validFrameContext(config))
@@ -48,13 +48,11 @@ int readFrameSize(const FmLinuxFrameContextConfig &config, uintptr_t device, uin
         return EPERM;
     if (fm_ipc_load(cancel))
         return ECANCELED;
-    if (!device || !window)
+    if (!window)
         return ENOENT;
-    uintptr_t currentDevice, global, owner, graphics, back, native;
-    if (!fm::read(config.device, currentDevice) || !fm::read(config.global, global))
+    uintptr_t global, owner, graphics, back, native;
+    if (!fm::read(config.global, global))
         return EFAULT;
-    if (currentDevice != device)
-        return ESTALE;
     if (!global)
         return ENOENT;
     if (!pointer(global) || !fm::addressRange(global, config.globalSize) ||
@@ -74,18 +72,18 @@ int readFrameSize(const FmLinuxFrameContextConfig &config, uintptr_t device, uin
         return ESTALE;
     if (fm_ipc_load(cancel))
         return ECANCELED;
-    uint64_t dimensions;
+    int width = 0, height = 0;
     try {
-        dimensions = reinterpret_cast<uint64_t (*)(void *)>(config.getter)(reinterpret_cast<void *>(graphics));
+        if (!reinterpret_cast<bool (*)(void *, int *, int *)>(config.pixels)(
+                reinterpret_cast<void *>(window), &width, &height))
+            return EIO;
     } catch (...) {
         return EIO;
     }
     if (fm_ipc_load(cancel))
         return ECANCELED;
-    const auto width = static_cast<uint32_t>(dimensions);
-    const auto height = static_cast<uint32_t>(dimensions >> 32);
-    if (!width || !height || width > 8192 || height > 8192 || uint64_t{width} * height > 16777216)
+    if (width <= 0 || height <= 0 || width > 8192 || height > 8192 || uint64_t(width) * height > 16777216)
         return EOVERFLOW;
-    output = {width, height};
+    output = {static_cast<uint32_t>(width), static_cast<uint32_t>(height)};
     return 0;
 }

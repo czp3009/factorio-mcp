@@ -5,7 +5,10 @@ package com.hiczp.factorio.mcp
 import com.hiczp.factorio.mcp.linuxbridge.FmLinuxChatReadConfig
 import kotlinx.cinterop.set
 
-/** Complete native fallback for retained console history, with evidence from one selected executable. */
+/**
+ * Complete native fallback for retained console history, with evidence from one selected
+ * executable.
+ */
 internal data class ChatReadMetadata(
     val world: WorldLayout,
     val player: PlayerLayout,
@@ -16,6 +19,7 @@ internal data class ChatReadMetadata(
     val node: NativeListNodeLayout,
     val previous: Long,
     val text: Long,
+    val playerName: Long,
     val localised: LocalisedTextLayout,
     val recordPlayer: ChatRecordPlayer,
     val tick: ChatRecordTick,
@@ -28,9 +32,14 @@ internal data class ChatReadMetadata(
 
     fun writeTo(output: FmLinuxChatReadConfig, bias: Long) {
         require(
-            bias >= 0 && bias % 8 == 0L && raw.output == 7 && raw.receiver == 6 &&
-                    raw.function > 0 && raw.function <= Long.MAX_VALUE - bias &&
-                    string.destructor.address > 0 && string.destructor.address <= Long.MAX_VALUE - bias
+            bias >= 0 &&
+                bias % 8 == 0L &&
+                raw.output == 7 &&
+                raw.receiver == 6 &&
+                raw.function > 0 &&
+                raw.function <= Long.MAX_VALUE - bias &&
+                string.destructor.address > 0 &&
+                string.destructor.address <= Long.MAX_VALUE - bias
         )
         world.writeTo(output.world, bias)
         player.writeTo(output.player, bias)
@@ -53,6 +62,7 @@ internal data class ChatReadMetadata(
         layout.playerIndex = recordPlayer.offset.toUInt()
         layout.indexWidth = player.index.width.toUInt()
         layout.text = text.toUInt()
+        layout.playerName = playerName.toUInt()
         layout.textSize = localised.size.toUInt()
         layout.cached = localised.cached.toUInt()
         layout.stringSize = string.size.toUInt()
@@ -64,64 +74,86 @@ internal data class ChatReadMetadata(
         fun resolve(image: ElfImage): ChatReadMetadata {
             val pointers = mutableMapOf<Long, Long>()
             val scalars = mutableMapOf<Long, Long>()
-            val (resolved, readonly) = image.withReadonlyEvidence {
-                image.withFunctionEvidence {
-                    val world = WorldLayout.resolve(image)
-                    val player = PlayerLayout.resolve(image, world.gameSize, LuaStateLayout.resolve(image))
-                    val node = NativeListNodeLayout.resolve(
-                        image,
-                        "_ZNSt7__cxx1110_List_baseIN13OutputConsole4ItemESaIS2_EED2Ev", "_ZN13OutputConsole4ItemD2Ev"
-                    )
-                    val string = NativeStringLayout.resolve(image)
-                    val localised = LocalisedTextLayout.resolve(image, string)
-                    val text = ChatRecordText.resolve(image, node)
-                    val console = ChatConsoleMember.resolve(image, player.playerSize)
-                    val lists = ChatConsoleLists.resolve(image, console, node)
-                    val size = ChatConsoleExtent.resolve(image, console, player.playerSize, lists)
-                    ChatConsoleCounts.verify(image, lists)
-                    val streams = ChatConsoleStreams.resolve(image, lists, node)
-                    val recordPlayer = ChatRecordPlayer.resolve(image, node, text, localised.size, player.index)
-                    val tick = ChatRecordTick.resolve(
-                        image,
-                        node,
-                        size,
-                        player.playerSize,
-                        text,
-                        localised.size,
-                        recordPlayer,
-                        player.index
-                    )
-                    val raw = LocalisedRawCall.resolve(image, string, localised)
-                    val reader = image.pointers
-                    for (type in listOf("10LuaContext", "6Player", "8GameView")) {
-                        val identity = ItaniumType.resolve(image, type)
-                        scalars[identity.addressPoint - 16] = 0
-                        pointers[identity.addressPoint - 8] = identity.typeInfo
-                        pointers[identity.typeInfo + 8] = reader.words(identity.typeInfo + 8, 1).single().pointer()
+            val (resolved, readonly) =
+                image.withReadonlyEvidence {
+                    image.withFunctionEvidence {
+                        val world = WorldLayout.resolve(image)
+                        val player =
+                            PlayerLayout.resolve(
+                                image,
+                                world.gameSize,
+                                LuaStateLayout.resolve(image),
+                            )
+                        val node =
+                            NativeListNodeLayout.resolve(
+                                image,
+                                "_ZNSt7__cxx1110_List_baseIN13OutputConsole4ItemESaIS2_EED2Ev",
+                                "_ZN13OutputConsole4ItemD2Ev",
+                            )
+                        val string = NativeStringLayout.resolve(image)
+                        val localised = LocalisedTextLayout.resolve(image, string)
+                        val text = ChatRecordText.resolve(image, node)
+                        val playerName = ChatRecordPlayerName.resolve(image, node, string)
+                        require(
+                            playerName + string.size <= text || text + localised.size <= playerName
+                        )
+                        val console = ChatConsoleMember.resolve(image, player.playerSize)
+                        val lists = ChatConsoleLists.resolve(image, console, node)
+                        val size =
+                            ChatConsoleExtent.resolve(image, console, player.playerSize, lists)
+                        ChatConsoleCounts.verify(image, lists)
+                        val streams = ChatConsoleStreams.resolve(image, lists, node)
+                        val recordPlayer =
+                            ChatRecordPlayer.resolve(
+                                image,
+                                node,
+                                text,
+                                localised.size,
+                                player.index,
+                            )
+                        val tick =
+                            ChatRecordTick.resolve(
+                                image,
+                                node,
+                                size,
+                                player.playerSize,
+                                text,
+                                localised.size,
+                                recordPlayer,
+                                player.index,
+                            )
+                        val raw = LocalisedRawCall.resolve(image, string, localised)
+                        val reader = image.pointers
+                        for (type in listOf("6Player", "8GameView")) {
+                            val identity = ItaniumType.resolve(image, type)
+                            scalars[identity.addressPoint - 16] = 0
+                            pointers[identity.addressPoint - 8] = identity.typeInfo
+                            pointers[identity.typeInfo + 8] =
+                                reader.words(identity.typeInfo + 8, 1).single().pointer()
+                        }
+                        ChatReadMetadata(
+                            world,
+                            player,
+                            console,
+                            size,
+                            lists,
+                            streams,
+                            node,
+                            NativeListLinks.resolve(image, node),
+                            text,
+                            playerName,
+                            localised,
+                            recordPlayer,
+                            tick,
+                            raw,
+                            string,
+                            ElfEvidence(emptyList(), emptyList(), emptyMap(), emptyMap()),
+                        )
                     }
-                    val destructor =
-                        ItaniumVtable.resolve(image, "_ZTV10LuaContext").method(image, "_ZN10LuaContextD0Ev")
-                    pointers[destructor.entryAddress] = destructor.function.address
-                    ChatReadMetadata(
-                        world,
-                        player,
-                        console,
-                        size,
-                        lists,
-                        streams,
-                        node,
-                        NativeListLinks.resolve(image, node),
-                        text,
-                        localised,
-                        recordPlayer,
-                        tick,
-                        raw,
-                        string,
-                        ElfEvidence(emptyList(), emptyList(), emptyMap(), emptyMap())
-                    )
                 }
-            }
-            return resolved.first.copy(evidence = ElfEvidence(resolved.second, readonly, pointers, scalars))
+            return resolved.first.copy(
+                evidence = ElfEvidence(resolved.second, readonly, pointers, scalars)
+            )
         }
     }
 }

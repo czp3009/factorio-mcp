@@ -19,7 +19,7 @@ __attribute__((noinline)) static void logic(Gui *gui) {
     asm volatile("" : : : "memory");
 }
 
-struct Device { void (*swap)(void *, void *); };
+struct Api { bool (*swap)(void *); };
 struct Window;
 struct Graphics { uintptr_t *table; Window *window; };
 struct Window { uintptr_t *table; Graphics *graphics; void *native; };
@@ -27,18 +27,23 @@ struct Global { Window *window; };
 static uintptr_t swapCaller;
 static unsigned swaps = 0, reads = 0;
 
-__attribute__((noinline)) static void originalSwap(void *, void *) {
+__attribute__((noinline)) static bool originalSwap(void *) {
     swapCaller = reinterpret_cast<uintptr_t>(__builtin_return_address(0));
     ++swaps;
+    return true;
 }
 
-__attribute__((noinline)) static void swap(Device *device, void *window) {
-    asm volatile("" : "+r"(device) : : "memory");
-    device->swap(device, window);
+__attribute__((noinline)) static void swap(Api *api, void *window) {
+    asm volatile("" : "+r"(api) : : "memory");
+    assert(api->swap(window));
     asm volatile("" : : : "memory");
 }
 
-static uint64_t dimensions(void *) { return uint64_t{2} << 32 | 2; }
+static bool dimensions(void *, int *width, int *height) {
+    *width = 2;
+    *height = 2;
+    return true;
+}
 static void getInteger(uint32_t field, int32_t *value) { *value = field == 0x0c02 ? 0x0405 : 0; }
 static void bind(uint32_t, uint32_t) {}
 static void pixelStore(uint32_t, int32_t) {}
@@ -76,15 +81,14 @@ int main() {
     graphics.window = &window;
     Global global{&window};
     Global *globalPointer = &global;
-    Device device{originalSwap};
-    Device *devicePointer = &device;
-    swap(&device, &native);
-    shared->frameContext = {reinterpret_cast<uintptr_t>(&globalPointer), reinterpret_cast<uintptr_t>(&devicePointer),
+    Api apiTable{originalSwap};
+    swap(&apiTable, &native);
+    shared->frameContext = {reinterpret_cast<uintptr_t>(&globalPointer),
         swapCaller, reinterpret_cast<uintptr_t>(&dimensions), reinterpret_cast<uintptr_t>(graphicsTable),
         reinterpret_cast<uintptr_t>(windowTable), sizeof(Global), offsetof(Global, window), sizeof(Graphics),
         offsetof(Graphics, window), sizeof(Window), offsetof(Window, graphics), offsetof(Window, native)};
-    shared->frameSite = {reinterpret_cast<uintptr_t>(&devicePointer), reinterpret_cast<uintptr_t>(&device),
-        reinterpret_cast<uintptr_t>(&originalSwap), sizeof(Device), offsetof(Device, swap), PROT_READ | PROT_WRITE};
+    shared->frameSite = {reinterpret_cast<uintptr_t>(&apiTable.swap),
+        reinterpret_cast<uintptr_t>(&originalSwap), PROT_READ | PROT_WRITE};
     uintptr_t api[]{reinterpret_cast<uintptr_t>(&getInteger), reinterpret_cast<uintptr_t>(&bind),
         reinterpret_cast<uintptr_t>(&bind), reinterpret_cast<uintptr_t>(&pixelStore),
         reinterpret_cast<uintptr_t>(&pixels), reinterpret_cast<uintptr_t>(&error)};
@@ -104,8 +108,8 @@ int main() {
     };
     for (unsigned capture = 1; capture <= 2; ++capture) {
         request(FM_LINUX_SCREENSHOT);
-        assert(shared->command == FM_LINUX_RUNNING && device.swap != originalSwap);
-        swap(&device, &native);
+        assert(shared->command == FM_LINUX_RUNNING && apiTable.swap != originalSwap);
+        swap(&apiTable, &native);
         consume(0);
         assert(reads == capture && swaps == capture + 1);
         assert(shared->frameSize.width == 2 && shared->frameSize.height == 2 && shared->frameBytes == 12);
@@ -117,17 +121,17 @@ int main() {
     logic(&gui); // No presentation is necessary to acknowledge cancellation.
     consume(ECANCELED);
     assert(shared->frameBytes == 0 && shared->frameSize.width == 0);
-    swap(&device, &native);
+    swap(&apiTable, &native);
     assert(reads == 2);
     request(FM_LINUX_SCREENSHOT);
     api[4] = 0; // An entry changes after admission, before rendering.
-    swap(&device, &native);
+    swap(&apiTable, &native);
     consume(ESTALE);
     assert(reads == 2 && shared->frameBytes == 0);
     api[4] = reinterpret_cast<uintptr_t>(&pixels);
     request(FM_LINUX_DETACH);
     consume(0);
-    assert(!shared->attached && device.swap == originalSwap && *table == *originalTable);
+    assert(!shared->attached && apiTable.swap == originalSwap && *table == *originalTable);
     std::memcpy(&gui, &originalTable, sizeof(originalTable));
     assert(munmap(page, pageSize) == 0);
     return 0;

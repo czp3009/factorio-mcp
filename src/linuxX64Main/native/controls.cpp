@@ -45,7 +45,8 @@ bool validControlsLayout(const FmLinuxControlsLayout& layout) {
         layout.prototypeSize < 8 || layout.prototypeSize > 4096 ||
         !fm::member(layout.begin, 8, layout.registrySize) || !fm::member(layout.end, 8, layout.registrySize) ||
         (layout.begin < layout.end + 8 && layout.end < layout.begin + 8) || !layout.guiMask || layout.guiMask > 255 ||
-        (layout.guiMask & (layout.guiMask - 1)) || layout.slots[0] == layout.slots[1]) return false;
+        (layout.guiMask != 255 && (layout.guiMask & (layout.guiMask - 1))) ||
+        layout.slots[0] == layout.slots[1]) return false;
     for (const auto offset : {layout.nameData, layout.nameLength, layout.linked, layout.custom})
         if (!fm::member(offset, 8, layout.size)) return false;
     if (!fm::member(layout.gui, 1, layout.size) || !fm::member(layout.usage, 4, layout.size)) return false;
@@ -102,6 +103,7 @@ int snapshotControls(const FmLinuxControlsLayout& layout, const uint32_t* cancel
             row = {};
             int error = identity(object, layout, row.id);
             if (error) return error;
+            if (layout.guiMask == 255 && object[layout.gui] > 1) return EINVAL;
             row.gui = (object[layout.gui] & layout.guiMask) != 0;
             row.usage = field<int32_t>(object, layout.usage);
             const auto custom = field<uintptr_t>(object, layout.custom);

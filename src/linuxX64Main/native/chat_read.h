@@ -11,7 +11,7 @@ typedef struct FmLinuxChatReadLayout {
     uint32_t consoleSize, consolePlayer;
     uint32_t sentinel[2], count[2];
     uint32_t nodeSize, next, previous, value;
-    uint32_t tick, playerIndex, indexWidth, text, textSize, cached;
+    uint32_t tick, playerIndex, indexWidth, text, textSize, cached, playerName;
     uint32_t stringSize, stringData, stringLength;
 } FmLinuxChatReadLayout;
 
@@ -25,8 +25,8 @@ typedef struct FmLinuxChatReadConfig {
 
 typedef struct FmLinuxChatRecord {
     uint64_t identity, tick;
-    uint32_t stream, playerIndex, truncated, textSize, rawSize;
-    char text[FM_LINUX_CHAT_RECORD_BYTES], raw[FM_LINUX_CHAT_RECORD_BYTES];
+    uint32_t stream, playerIndex, truncated, textSize, rawSize, playerNameSize;
+    char text[FM_LINUX_CHAT_RECORD_BYTES], raw[FM_LINUX_CHAT_RECORD_BYTES], playerName[FM_LINUX_CHAT_RECORD_BYTES];
 } FmLinuxChatRecord;
 
 typedef struct FmLinuxChatSnapshot {
@@ -45,12 +45,16 @@ struct ChatReadConfig {
 // One verified frontend callback. No console/node/text pointer is retained across callbacks.
 // Keep this command until finished(), including failure: an uncertain destructor must not be replayed.
 class ChatReadCommand {
-public:
-    int start(const ChatReadConfig &, uintptr_t console, uintptr_t player, const uint32_t *cancel, FmLinuxChatSnapshot &);
+  public:
+    int start(const ChatReadConfig &, uintptr_t console, uintptr_t player, const uint32_t *cancel,
+              FmLinuxChatSnapshot &);
     int finish();
-    bool finished() const { return finished_; }
 
-private:
+    bool finished() const {
+        return finished_;
+    }
+
+  private:
     alignas(16) unsigned char string_[256]{};
     void (*destroy_)(void *) = nullptr;
     bool started_ = false, busy_ = false, finished_ = false, owned_ = false, destroyEntered_ = false;

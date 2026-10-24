@@ -23,14 +23,13 @@ class GraphicsLoadedAcceptanceTest {
                 metadata.verifyLoaded(image, process, bias)
                 val api = FrameApiBinding.bind(metadata.apiSlots, bias, process.mappings(), process::readMemory)
                 val hook = FrameHookBinding.bind(
-                    metadata.swap, metadata.backends, bias, sysconf(_SC_PAGESIZE),
+                    metadata.swap, bias, sysconf(_SC_PAGESIZE),
                     process.mappings(), process::readMemory
                 )
                 println(
                     "Verified loaded graphics evidence for PID $pid: " +
                             "${metadata.evidence.functions.size} functions, ${metadata.evidence.pointers.size} pointer words, " +
-                            "${metadata.backends.size} backend allocations, ${api.size} executable GL entries, " +
-                            "current SDL swap device ${hook.device}"
+                            "${api.size} executable GL entries, SDL presentation slot ${hook.slot}"
                 )
             }
         }

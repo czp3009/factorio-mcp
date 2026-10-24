@@ -57,6 +57,7 @@ class InputAcceptanceTest {
         val client = McpHttpClient(url)
         val other = McpHttpClient(url)
         withTimeout(600_000) {
+            var fixtureVisibility: Boolean? = null
             try {
                 client.initialize()
                 other.initialize()
@@ -350,6 +351,8 @@ class InputAcceptanceTest {
                         delay(20)
                     }
                 }
+                fixtureVisibility = other.fixtureVisible()
+                other.setFixtureVisible(false)
                 val targetPosition =
                     other
                         .tool(
@@ -426,6 +429,7 @@ class InputAcceptanceTest {
             } finally {
                 withContext(NonCancellable) {
                     runCatching { other.tool("input", timeline(stop = true)) }
+                    fixtureVisibility?.let { other.setFixtureVisible(it) }
                     runCatching {
                         other
                             .tool(

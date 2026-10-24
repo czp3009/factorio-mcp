@@ -5,6 +5,10 @@ package com.hiczp.factorio.mcp
 import com.hiczp.factorio.mcp.nativebridge.FrontendInputLayout
 
 internal class FrontendInputLayouts(types: DebugTypes) {
+    private val modifiers = KeyboardModifierLayouts(types)
+    private val globalInputState = types.pointerPath(
+        "GlobalContext", "inputState", "value", target = "InputState", indirections = 1,
+    )
     private val eventSize = types.size("Event")
     private val optionalValue =
         types.namedMember("std::optional<Event>", "_Value", "Event", eventSize.toULong())
@@ -22,11 +26,15 @@ internal class FrontendInputLayouts(types: DebugTypes) {
     private val keys =
         types
             .enumValues("SDL_Scancode")
-            .filterKeys { it.startsWith("SDL_SCANCODE_") && it != "SDL_SCANCODE_UNKNOWN" }
+            .filterKeys {
+                it.startsWith("SDL_SCANCODE_") && it !in setOf(
+                    "SDL_SCANCODE_UNKNOWN", "SDL_SCANCODE_RESERVED", "SDL_SCANCODE_COUNT"
+                )
+            }
             .mapKeys { it.key.removePrefix("SDL_SCANCODE_") }
 
     init {
-        types.plainMembers("KeyboardEvent", setOf("scancode", "unichar", "repeat"))
+        types.plainMembers("KeyboardEvent", setOf("scancode", "mod", "unichar", "repeat"))
         types.scalarMember("KeyboardEvent", "unichar", 4uL, 6u)
         types.byteMember("KeyboardEvent", "repeat", true)
         check(optionalEngaged >= optionalValue + eventSize)
@@ -41,6 +49,8 @@ internal class FrontendInputLayouts(types: DebugTypes) {
         target.scancode = scancode
         target.keyDown = keyDown
         target.keyUp = keyUp
+        target.globalInputState = globalInputState
+        modifiers.write(target.modifiers)
     }
 
     fun keys(names: List<String>): List<UInt> =

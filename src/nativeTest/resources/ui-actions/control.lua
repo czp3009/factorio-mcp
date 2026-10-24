@@ -5,7 +5,8 @@ end
 local function build(player)
   if player.gui.screen.mcp_actions then player.gui.screen.mcp_actions.destroy() end
   local frame=player.gui.screen.add{type="frame",name="mcp_actions",caption="MCP action fixture",direction="vertical"}
-  frame.location={350,200}
+  frame.auto_center=true
+  frame.add{type="label",name="drag_handle",caption="MCP drag handle"}.drag_target=frame
   frame.add{type="button",name="normal",caption="MCP normal"}
   frame.add{type="button",name="disabled",caption="MCP disabled",enabled=false}
   frame.add{type="button",name="toggle",caption="MCP toggle",auto_toggle=true}
@@ -103,8 +104,8 @@ script.on_event(defines.events.on_player_created,function(event)
   end
   record("condition_filters",player,condition_filters)
   player.force.recipes["transport-belt"].enabled=false
-  player.set_quick_bar_slot(1,{name="iron-plate",quality="uncommon"})
-  player.set_quick_bar_slot(2,nil)
+  player.set_quick_bar_slot(1,1,{type="filter",filter={name="iron-plate",quality="uncommon"}})
+  player.set_quick_bar_slot(1,2,nil)
   player.set_active_quick_bar_page(1,3)
   player.get_inventory(defines.inventory.character_guns).insert{name="pistol",count=1}
   player.get_inventory(defines.inventory.character_ammo).insert{name="firearm-magazine",count=10}
@@ -141,6 +142,7 @@ script.on_event(defines.events.on_player_created,function(event)
   record("world_fixture",player,{contents=player.get_main_inventory().get_contents(),chest=storage.query_chest.unit_number,
     empty_chest=storage.empty_chest.unit_number,chest_contents=storage.query_chest.get_inventory(defines.inventory.chest).get_contents()})
   player.gui.top.add{type="button",name="mcp_top",caption="MCP top tool"}
+  player.gui.top.add{type="button",name="mcp_fixture_visibility",caption="MCP toggle fixture"}
   player.gui.top.add{type="button",name="mcp_train",caption="MCP train fixture"}
   player.gui.top.add{type="button",name="mcp_timeline",caption="MCP timeline fixture"}
   player.gui.top.add{type="button",name="mcp_timeline_restore",caption="MCP timeline restore"}
@@ -154,6 +156,7 @@ script.on_event(defines.events.on_gui_click,function(event)
   if name=="recreate" or name=="mcp_top" then build(player) end
   if name=="speed_one" then game.speed=1 end
   if name=="speed_four" then game.speed=4 end
+  if name=="mcp_fixture_visibility" then player.gui.screen.mcp_actions.visible=not player.gui.screen.mcp_actions.visible end
   if name=="reset_position" then assert(player.teleport({0,0},game.surfaces[1])) end
   if name=="mcp_timeline" then
     if not storage.timeline_surface then
@@ -259,7 +262,7 @@ script.on_nth_tick(300,function()
   end
   for _,player in pairs(game.connected_players) do
     local f=player.gui.screen.mcp_actions
-    if f then record("checkpoint",player,{checked=f.checked.state,selection=f.selection.selected_index,text=f.text_field.text,numeric=f.numeric_field.text,readonly=f.readonly.text,slider=f.slider.slider_value,element=f.choose.elem_value,toggle=f.toggle.toggled,location=f.location,research=player.force.current_research and player.force.current_research.name,quickbar=player.get_quick_bar_slot(1) and player.get_quick_bar_slot(1).name}) end
+    if f then record("checkpoint",player,{checked=f.checked.state,selection=f.selection.selected_index,text=f.text_field.text,numeric=f.numeric_field.text,readonly=f.readonly.text,slider=f.slider.slider_value,element=f.choose.elem_value,toggle=f.toggle.toggled,location=f.location,research=player.force.current_research and player.force.current_research.name,quickbar=player.get_quick_bar_slot(1,1)}) end
   end
   game.force_crc()
   log("UI_ACTION_FULL_CRC "..game.tick)

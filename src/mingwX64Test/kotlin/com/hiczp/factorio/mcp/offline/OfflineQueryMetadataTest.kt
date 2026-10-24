@@ -4,8 +4,14 @@ package com.hiczp.factorio.mcp.offline
 
 import com.hiczp.factorio.mcp.ChatLayouts
 import com.hiczp.factorio.mcp.DebugTypes
+import com.hiczp.factorio.mcp.EventLayouts
 import com.hiczp.factorio.mcp.RuntimeApi
 import com.hiczp.factorio.mcp.nativebridge.*
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
+import kotlin.test.assertTrue
 import kotlinx.cinterop.*
 import kotlinx.io.buffered
 import kotlinx.io.files.Path
@@ -17,12 +23,29 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import platform.posix.getenv
 import platform.windows.GetCurrentProcess
-import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertFalse
-import kotlin.test.assertTrue
 
 class OfflineQueryMetadataTest {
+    @Test
+    fun eventLayoutResolvesDistinctClickAndReleaseTypesFromPdb() = memScoped {
+        val path = checkNotNull(getenv("FACTORIO_MCP_TEST_PDB")).toKString()
+        val process = checkNotNull(GetCurrentProcess())
+        check(SymInitializeW(process, null, 0) != 0)
+        try {
+            val base =
+                SymLoadModuleExW(process, null, path.wcstr.ptr, null, 0x180000000uL, 0u, null, 0u)
+            check(base != 0uL)
+            val layout = alloc<EventLayout>()
+            EventLayouts(DebugTypes(process, base)).write(layout)
+            assertNotEquals(layout.up, layout.click)
+            assertNotEquals(layout.down, layout.click)
+            assertTrue(layout.eventType + 4u <= layout.mouseSize)
+            assertTrue(layout.mouseTime + 8u <= layout.mouseSize)
+            assertTrue(layout.keyTime + 8u <= layout.keySize)
+        } finally {
+            SymCleanup(process)
+        }
+    }
+
     @Test
     fun chatLayoutResolvesFromPdbWithoutOpeningAGameProcess() = memScoped {
         val path =
@@ -64,9 +87,9 @@ class OfflineQueryMetadataTest {
         assertFalse(
             api.catalog.values.any {
                 "can_insert" in
-                        it.jsonObject.getValue("methods").jsonArray.map { value ->
-                            value.jsonPrimitive.content
-                        }
+                    it.jsonObject.getValue("methods").jsonArray.map { value ->
+                        value.jsonPrimitive.content
+                    }
             }
         )
     }

@@ -13,6 +13,7 @@ struct Item {
     uint64_t tick;
     uint16_t player;
     std::string text;
+    std::string playerName;
 };
 
 struct Node {
@@ -32,16 +33,13 @@ struct Console {
 struct Player {
     uint16_t index;
     Console *console;
+    uint32_t *handler;
 };
 
 struct Action {
     uint64_t tick;
     uint16_t type, player;
     alignas(std::string) unsigned char buffer[sizeof(std::string)];
-};
-
-struct Context {
-    Player *player;
 };
 
 int sent{}, destroyed{};
@@ -80,8 +78,8 @@ bool dataType(uint16_t type, const void *info) {
     return type == 97 && info == reinterpret_cast<void *>(123);
 }
 
-void send(const void *context, void *value) {
-    const auto *player = static_cast<const Context *>(context)->player;
+void send(const void *receiver, void *value) {
+    const auto *player = static_cast<const Player *>(receiver);
     const auto &action = *static_cast<Action *>(value);
     assert(action.type == 97 && action.player == player->index && action.tick == 0);
     assert(*reinterpret_cast<const std::string *>(action.buffer) == "fixture");
@@ -106,7 +104,7 @@ Symbols symbols() {
     result.address[ActionNoData] = reinterpret_cast<uintptr_t>(noData);
     result.address[ActionDataType] = reinterpret_cast<uintptr_t>(dataType);
     result.address[StringTypeInfo] = 123;
-    result.address[GuiSend] = reinterpret_cast<uintptr_t>(send);
+    result.address[PlayerSend] = reinterpret_cast<uintptr_t>(send);
     result.address[ActionDestroy] = reinterpret_cast<uintptr_t>(destroyAction);
     result.world.supported = 1;
     result.world.playerIndex = offsetof(Player, index);
@@ -122,16 +120,17 @@ Symbols symbols() {
     layout.value = offsetof(Node, value);
     layout.tick = offsetof(Item, tick);
     layout.playerIndex = offsetof(Item, player);
+    layout.playerName = offsetof(Item, playerName);
     layout.text = offsetof(Item, text);
     layout.cached = 0;
     layout.stringSize = sizeof(std::string);
-    layout.contextSize = sizeof(Context);
-    layout.contextPlayer = offsetof(Context, player);
     layout.actionSize = sizeof(Action);
     layout.actionType = offsetof(Action, type);
     layout.actionPlayer = offsetof(Action, player);
     layout.actionBuffer = offsetof(Action, buffer);
     layout.writeToConsole = 97;
+    layout.gameHandler = offsetof(Player, handler);
+    layout.replayInput = 23;
     return result;
 }
 } // namespace
@@ -142,7 +141,8 @@ int main() {
     head.next = head.previous = &head;
     other.next = other.previous = &other;
     Console console{{{&head, 0}, {&other, 0}}};
-    Player player{42, &console};
+    uint32_t handler = 17;
+    Player player{42, &console, &handler};
     auto result = std::make_unique<FmChatSnapshot>();
     readChat(adapter, &player, *result);
     assert(result->count == 0);
@@ -164,11 +164,28 @@ int main() {
     entries.back()->value.text = std::string(5000, 'a');
     readChat(adapter, &player, *result);
     assert(result->records[0].truncated == 3 && strlen(result->records[0].text) == 4095);
+    entries.back()->value.text = "[item=iron-plate] body";
+    entries.back()->value.playerName = "[color=red]sender[/color]";
+    readChat(adapter, &player, *result);
+    assert(result->records[0].truncated == 0);
+    assert(std::string(result->records[0].text) == "[item=iron-plate] body");
+    assert(std::string(result->records[0].playerName) == "[color=red]sender[/color]");
+    entries.back()->value.playerName = std::string(4094, 'a') + "\xe4\xb8\xad";
+    readChat(adapter, &player, *result);
+    assert(result->records[0].truncated == 4 && strlen(result->records[0].playerName) == 4094);
     FmChatRequest request{};
     strcpy_s(request.text, "fixture");
     request.size = 7;
     sendChat(adapter, &player, request);
     assert(sent == 1 && destroyed == 1);
+    handler = adapter.chat.replayInput;
+    try {
+        sendChat(adapter, &player, request);
+        assert(false);
+    } catch (const std::runtime_error &) {
+        assert(sent == 1 && destroyed == 1);
+    }
+    handler = 17;
     throwOnSend = true;
     try {
         sendChat(adapter, &player, request);

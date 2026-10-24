@@ -163,16 +163,29 @@ class MouseMotionAcceptanceTest {
                 )
 
                 val before = window()
+                val handle = nodes().single {
+                    it["text"]?.jsonPrimitive?.content == "MCP drag handle"
+                }.getValue("bounds").jsonObject
                 val title =
                     point(
-                        before.integer("x") + before.integer("width") - 40,
-                        before.integer("y") + 25,
+                        handle.integer("x") + handle.integer("width") / 2,
+                        handle.integer("y") + handle.integer("height") / 2,
                     )
-                val destination = point(title.integer("x") + 160, title.integer("y") + 60)
+                val viewport = other.tool("world_overview").toolValue().getValue("viewport").jsonObject
+                fun displacement(axis: String, dimension: String): Int {
+                    val negative = before.integer(axis)
+                    val positive = viewport.integer(dimension) - negative - before.integer(dimension)
+                    val available = maxOf(negative, positive)
+                    check(available > 1) { "No visible space to drag the fixture along $axis: $before in $viewport" }
+                    return (available / 2) * if (positive >= negative) 1 else -1
+                }
+                val dx = displacement("x", "width")
+                val dy = displacement("y", "height")
+                val destination = point(title.integer("x") + dx, title.integer("y") + dy)
                 client.tool("input", gesture(title, destination)).toolValue()
                 val after = window()
-                assertEquals(before.integer("x") + 160, after.integer("x"))
-                assertEquals(before.integer("y") + 60, after.integer("y"))
+                assertEquals(before.integer("x") + dx, after.integer("x"))
+                assertEquals(before.integer("y") + dy, after.integer("y"))
                 checkpoint {
                     it["location"]?.jsonObject?.get("x")?.jsonPrimitive?.int ==
                         after.integer("x") &&

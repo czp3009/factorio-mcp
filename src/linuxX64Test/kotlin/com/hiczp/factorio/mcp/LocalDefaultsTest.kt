@@ -8,17 +8,24 @@ import kotlin.test.assertFails
 class LocalDefaultsTest {
     private fun analyze(
         middle: String = "",
-        initialization: String = "c7 45 e0 11 00 00 00 48 c7 45 e8 00 00 00 00"
+        initialization: String = "c7 45 e0 11 00 00 00 48 c7 45 e8 00 00 00 00",
     ): Map<Long, Int> {
-        val code = listOf(
-            "55 48 89 e5 48 83 ec 20", initialization, middle,
-            "48 8d 75 e0 e8 00 01 00 00 48 83 c4 20 5d c3"
-        ).filter { it.isNotBlank() }.joinToString(" ")
+        val code =
+            listOf(
+                    "55 48 89 e5 48 83 ec 20",
+                    initialization,
+                    middle,
+                    "48 8d 75 e0 e8 00 01 00 00 48 83 c4 20 5d c3",
+                )
+                .filter { it.isNotBlank() }
+                .joinToString(" ")
         val flow = X64ControlFlow(X64Instructions(machineCode(code)).all())
         val call = flow.instructions.last { it.operation == Operation.CALL }
         return LocalDefaults.before(
-            flow, call.offset, 24,
-            listOf(InlineArgumentFields.Field(0, 4), InlineArgumentFields.Field(8, 8))
+            flow,
+            call.offset,
+            24,
+            listOf(NativeField(0, 4), NativeField(8, 8)),
         )
     }
 

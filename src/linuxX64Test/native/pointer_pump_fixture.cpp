@@ -1,4 +1,5 @@
 #include "pump_input.h"
+#include "keyboard_fixture.h"
 #include <cassert>
 #include <cerrno>
 #include <cstddef>
@@ -25,6 +26,7 @@ struct State {
     int32_t x = -31, y = 71;
     uint8_t inWindow = 0;
     KeyRecord *begin = nullptr, *end = nullptr;
+    uint16_t modifiers = 0;
 };
 
 struct Global {
@@ -36,6 +38,7 @@ struct Event {
     double time = 0;
     int32_t x = 0, y = 0, dx = 0, dy = 0, wheel = 0;
     uint32_t padding = 0;
+    uint16_t modifiers = 0;
 };
 
 struct Frame {
@@ -45,7 +48,7 @@ struct Frame {
 
 bool failClock = false;
 
-uint32_t ticks() {
+uint64_t ticks() {
     if (failClock)
         throw std::runtime_error("fixture clock");
     return 4512;
@@ -131,14 +134,13 @@ struct Fixture {
                          offsetof(State, end),
                          sizeof(KeyRecord),
                          offsetof(KeyRecord, code),
-                         offsetof(KeyRecord, value),
-                         sizeof(KeyValue),
-                         offsetof(KeyValue, held),
-                         offsetof(KeyValue, blocked)};
+                         offsetof(KeyRecord, value) + offsetof(KeyValue, held),
+                         fixtureModifiers(offsetof(State, modifiers), 42, 43, 44)};
         keyboard.event.extent = sizeof(Event);
         keyboard.event.type = offsetof(Event, type);
         keyboard.event.time = offsetof(Event, time);
         keyboard.event.code = offsetof(Event, code);
+        keyboard.event.modifiers = offsetof(Event, modifiers);
         keyboard.event.press = 61;
         keyboard.event.release = 62;
         keyboard.clock = pointer.clock;
@@ -177,6 +179,7 @@ struct Fixture {
         self.lastX = event.x;
         self.lastY = event.y;
         if (event.type == 61 || event.type == 62) {
+            self.state.modifiers = event.modifiers;
             assert(event.code == 42);
             if (event.type == 61) {
                 ++self.downs;

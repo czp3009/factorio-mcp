@@ -230,7 +230,7 @@ class RelatedWorldQueryAcceptanceTest {
                     )
                         .objects()
                         .single()
-                assertTrue(localized["read_status"]!!.jsonObject.isEmpty())
+                assertTrue(localized["read_status"]!!.jsonObject.isEmpty(), localized.toString())
                 assertEquals(
                     "LuaEntityPrototype",
                     localized

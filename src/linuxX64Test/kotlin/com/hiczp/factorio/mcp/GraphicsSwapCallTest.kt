@@ -1,40 +1,50 @@
 package com.hiczp.factorio.mcp
 
-import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertFails
+import com.hiczp.factorio.mcp.X64Instructions.*
+import kotlin.test.*
 
 class GraphicsSwapCallTest {
+    private fun code() =
+        listOf(
+            Instruction(0, 1, Operation.MOV, Register(7, 8), Memory(7, null, 1, 32, 8)),
+            Instruction(1, 1, Operation.MOV, Register(0, 8), Memory(7, null, 1, 0, 8)),
+            Instruction(2, 1, Operation.CALL, Memory(0, null, 1, 24, 8)),
+            Instruction(3, 1, Operation.MOV, Register(12, 8), Register(0, 8)),
+            Instruction(4, 1, Operation.NOP),
+            Instruction(5, 1, Operation.MOV, Register(7, 8), Register(12, 8)),
+            Instruction(6, 1, Operation.CALL, Immediate(0x1000)),
+            Instruction(7, 1, Operation.RET),
+        )
+
+    private fun inspect(body: List<Instruction>) =
+        GraphicsSwapCall.windowMember(X64ControlFlow(body), 6, 3, 64)
+
     @Test
-    fun derivesTheSelectedDeviceSlotAndExactReturnSite() {
-        val code = "48 8b 3d f9 0f 00 00 48 89 c6 ff 97 d8 00 00 00 c3"
-        fun inspect(bytes: String, device: Long = 0x2000) = GraphicsSwapCall.analyze(
-            X64Instructions(machineCode(bytes)).all(64), 0x1000, device
-        )
-        assertEquals(GraphicsSwapCall(0x2000, 216, 0x1010), inspect(code))
-        assertEquals(224, inspect(code.replace("d8 00", "e0 00")).member)
-        for (invalid in listOf(
-            code.replace("8b 3d", "8d 3d"),
-            code.replace("48 89 c6", "48 89 ce"),
-            code.replace("ff 97", "ff 96"),
-            code.replace("d8 00", "d9 00"),
-            code.replace("48 89 c6", "89 c6"),
-        )) assertFails { inspect(invalid) }
-        assertFails { inspect(code, 0x2008) }
-        val instructions = X64Instructions(machineCode(code)).all(64)
-        assertFails { GraphicsSwapCall.analyze(instructions + instructions, 0x1000, 0x2000) }
-        val before = X64Instructions(
-            machineCode("48 f7 e6 " + code.replace("f9 0f", "f6 0f")),
-            allowUnsignedWideMultiply = true
-        ).all(64)
-        assertEquals(
-            GraphicsSwapCall(0x2000, 216, 0x1013),
-            GraphicsSwapCall.analyze(before, 0x1000, 0x2000)
-        )
-        val interrupted = X64Instructions(
-            machineCode(code.replace("48 89 c6", "48 f7 e6 48 89 c6")),
-            allowUnsignedWideMultiply = true
-        ).all(64)
-        assertFails { GraphicsSwapCall.analyze(interrupted, 0x1000, 0x2000) }
+    fun connectsNativeWindowGetterAndTypedMemberAcrossCopies() {
+        assertEquals(32, inspect(code()))
+        assertFails {
+            inspect(
+                code().map {
+                    if (it.offset == 2L) it.copy(destination = Memory(0, null, 1, 32, 8)) else it
+                }
+            )
+        }
+        assertFails {
+            inspect(
+                code().map {
+                    if (it.offset == 1L) it.copy(source = Memory(6, null, 1, 0, 8)) else it
+                }
+            )
+        }
+        assertFails {
+            inspect(code().map { if (it.offset == 3L) it.copy(source = Register(2, 8)) else it })
+        }
+        assertFails {
+            inspect(
+                code().map {
+                    if (it.offset == 0L) it.copy(source = Memory(7, null, 1, 64, 8)) else it
+                }
+            )
+        }
     }
 }

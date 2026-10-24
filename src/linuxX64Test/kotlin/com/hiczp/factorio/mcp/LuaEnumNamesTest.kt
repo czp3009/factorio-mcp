@@ -6,6 +6,26 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFails
 
 class LuaEnumNamesTest {
+    @Test
+    fun readsSignedRelativeStringTablesAfterAVerifiedIdentityHelper() {
+        val body = instructions().toMutableList()
+        body[2] = body[2].copy(destination = Register(7, 8))
+        body[4] = body[4].copy(source = Memory(0, null, 1, 48, 1))
+        body[8] = Instruction(8, 1, Operation.MOVSX, Register(6, 8), Memory(0, 2, 4, 0, 4))
+        body[9] = Instruction(9, 1, Operation.ADD, Register(6, 8), Register(0, 8))
+        fun read(code: List<Instruction>, identity: Long? = 9000) =
+            LuaEnumNames.analyze(X64ControlFlow(code), 4096, 8000, 64, 128, identity)
+        assertEquals(LuaEnumNames.Table(24, 48, 8192, 3, true), read(body))
+        assertFails { read(body, null) }
+        assertFails { read(body, 9001) }
+        assertFails {
+            read(body.toMutableList().apply { this[8] = this[8].copy(operation = Operation.MOV) })
+        }
+        assertFails {
+            read(body.toMutableList().apply { this[9] = this[9].copy(source = Register(3, 8)) })
+        }
+    }
+
     private fun instructions(base: Int = 0, index: Int = 2, receiver: Int = 14): List<Instruction> =
         listOf(
             Instruction(0, 1, Operation.PUSH, Register(5, 8)),

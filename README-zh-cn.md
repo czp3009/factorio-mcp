@@ -13,7 +13,7 @@ factorio-mcp 是一个 MCP 服务, 让 AI agent 读取 Factorio 世界数据, �
 
 ![电脑自己在动](images/电脑自己在动.jpg)
 
-已在 Factorio 2.0.77 (包含官方 DLC) 中测试.
+Linux 和 Windows 均已在 Factorio 2.1.23 (包含官方 DLC) 中测试. 不支持旧版游戏.
 
 ## 安装
 
@@ -36,7 +36,7 @@ factorio-mcp 是一个 MCP 服务, 让 AI agent 读取 Factorio 世界数据, �
 {
   "mcpServers": {
     "factorio-mcp": {
-      "command": "/absolute/path/to/factorio-mcp/factorio-mcp",
+      "command": "/absolute/path/to/factorio-mcp/factorio-mcp.kexe",
       "args": [
         "--no-http"
       ]
@@ -82,7 +82,7 @@ Windows 下, 如果 MCP 客户端需要通过命令行解释器运行 npx, 请�
 运行以下命令, 将示例路径改为解压后可执行文件的完整绝对路径:
 
 ```bash
-"/absolute/path/to/factorio-mcp/factorio-mcp" --no-stdio --http-port 3000
+"/absolute/path/to/factorio-mcp/factorio-mcp.kexe" --no-stdio --http-port 3000
 ```
 
 Windows 下使用 PowerShell 时, 请填写 `.exe` 文件的路径, 并在路径前加上 `&`:

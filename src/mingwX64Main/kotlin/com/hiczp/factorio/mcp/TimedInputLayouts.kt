@@ -6,6 +6,7 @@ import com.hiczp.factorio.mcp.nativebridge.TimedInputLayout
 
 /** Metadata for the normal event route and the current client's input evaluation clock. */
 internal class TimedInputLayouts(types: DebugTypes) {
+    private val modifiers = KeyboardModifierLayouts(types)
     private val eventSize = types.size("Event")
     private val keyboard =
         types.namedMember(
@@ -90,6 +91,7 @@ internal class TimedInputLayouts(types: DebugTypes) {
         target.events.stateMouseY = stateMouseY
         target.events.stateMouseInWindow = stateMouseInWindow
         target.events.mouseEnter = events.getValue("MOUSE_ENTER")
+        modifiers.write(target.events.modifiers)
         target.events.keyDown = events.getValue("KEY_DOWN")
         target.events.keyUp = events.getValue("KEY_UP")
         target.events.mouseMove = events.getValue("MOUSE_MOVE")

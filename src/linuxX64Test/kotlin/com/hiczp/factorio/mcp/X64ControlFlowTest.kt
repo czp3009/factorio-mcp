@@ -3,11 +3,19 @@ package com.hiczp.factorio.mcp
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFails
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
-import kotlin.test.assertFalse
 
 class X64ControlFlowTest {
+    @Test
+    fun anUndefinedInstructionEndsItsControlFlowPath() {
+        val flow = X64ControlFlow(X64Instructions(machineCode("85 ff 74 02 0f 0b c3")).all())
+        assertEquals(emptyList(), flow.successors.getValue(4))
+        assertEquals(setOf(2L), flow.predecessors[6])
+        assertEquals(X64Instructions.Operation.TRAP, flow.body.getValue(4).operation)
+    }
+
     @Test
     fun dominanceUsesEveryEntryPathIncludingLoopsAndBypasses() {
         val flow = X64ControlFlow(X64Instructions(machineCode("85 ff 74 03 90 eb f9 c3")).all())

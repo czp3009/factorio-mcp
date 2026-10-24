@@ -3,22 +3,23 @@
 package com.hiczp.factorio.mcp.offline
 
 import com.hiczp.factorio.mcp.*
-
 import com.hiczp.factorio.mcp.linuxbridge.FmLinuxInputContextConfig
-import kotlinx.cinterop.alloc
-import kotlinx.cinterop.memScoped
-import kotlinx.cinterop.toKString
-import platform.posix.getenv
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFails
 import kotlin.test.assertTrue
+import kotlinx.cinterop.alloc
+import kotlinx.cinterop.memScoped
+import kotlinx.cinterop.toKString
+import platform.posix.getenv
 
 /** Explicit installed-file analysis. Does not install a hook or send input. */
 class InputSourceMetadataAcceptanceTest {
     @Test
     fun resolvesCurrentPlayerInputOwnerAndEvaluationMethod() {
-        val path = checkNotNull(getenv("FACTORIO_MCP_TEST_ELF")) { "Select an installed executable" }.toKString()
+        val path =
+            checkNotNull(getenv("FACTORIO_MCP_TEST_ELF")) { "Select an installed executable" }
+                .toKString()
         MappedBinary(path).use { file ->
             val image = ElfImage(file.view)
             val metadata = InputContextMetadata.resolve(image)
@@ -29,7 +30,7 @@ class InputSourceMetadataAcceptanceTest {
             println("Verified Map stop byte: ${metadata.stop}")
             println("Tick candidate requiring live Map equality: ${metadata.tick}")
             println("Pause candidate requiring live Map/source equality: ${metadata.pause}")
-            println("Typed handler candidates: ${metadata.handlers}")
+            println("Typed evaluation owner: Game, Map member ${metadata.pause.gameMap}")
             var reads = 0
             metadata.verify(image, 0) { address, size ->
                 ++reads
@@ -47,7 +48,7 @@ class InputSourceMetadataAcceptanceTest {
             memScoped {
                 val config = alloc<FmLinuxInputContextConfig>()
                 metadata.writeTo(config, 0)
-                assertEquals(metadata.handlers.size.toUInt(), config.input.handlerCount)
+                assertEquals(metadata.pause.gameMap.toUInt(), config.input.gameMap)
                 assertEquals(metadata.source.gameSize.toUInt(), config.world.gameSize)
                 assertEquals(metadata.gameSource.toUInt(), config.input.gameSource)
                 assertEquals(metadata.tick.mapTick.toUInt(), config.input.mapTick)

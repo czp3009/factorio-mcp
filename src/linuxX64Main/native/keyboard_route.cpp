@@ -71,8 +71,12 @@ int KeyboardRouteKey::dispatch(bool down, EventRouteProgress &progress) {
         return error;
     if (const int error = current(value))
         return error;
+    uint16_t modifiers;
+    if (const int error =
+            readKeyboardModifiers(config_.owner, config_.keys.modifiers, global_, state_, code_, down, modifiers))
+        return error;
     KeyboardEventStorage event;
-    if (const int error = event.prepare(config_.event, code_, down, timestamp))
+    if (const int error = event.prepare(config_.event, code_, down, timestamp, modifiers))
         return error;
     EventRoute route(static_cast<pid_t>(syscall(SYS_gettid)), functions_,
                      down ? config_.pressOrder : config_.releaseOrder, resolve, this);

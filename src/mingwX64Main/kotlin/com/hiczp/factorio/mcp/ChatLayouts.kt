@@ -31,10 +31,12 @@ internal class ChatLayouts(types: DebugTypes) {
     private val tick =
         types.scalarPath("OutputConsole::Item", "updateTick", "value", target = 7u, bytes = 8u)
     private val playerIndex = types.scalarMember("OutputConsole::Item", "playerIndex", 2u, 7u)
+    private val playerName =
+        types.namedMember("OutputConsole::Item", "playerName", string, stringSize.toULong())
     private val text =
         types.namedMember(
             "OutputConsole::Item",
-            "text",
+            "bodyText",
             "LocalisedString",
             types.aggregateSize("LocalisedString"),
         )
@@ -45,17 +47,19 @@ internal class ChatLayouts(types: DebugTypes) {
             "LocalisationResult",
             types.aggregateSize("LocalisationResult"),
         ) + types.namedMember("LocalisationResult", "result", string, stringSize.toULong())
-    private val contextSize = types.size("GuiContext")
-    private val contextPlayer = types.pointerMember("GuiContext", "player", "Player")
     private val actionSize = types.size("InputAction")
     private val actionType = types.namedMember("InputAction", "type", "InputActionType", 2u)
     private val actionPlayer = types.scalarMember("InputAction", "playerIndex", 2u, 7u)
     private val actionBuffer = types.byteArrayMember("InputAction", "buffer", stringSize)
     private val writeToConsole =
         types.enumValue("InputActionType", "WriteToConsole").also { check(it <= 65535u) }
+    private val gameHandler = types.pointerPath(
+        "Game", "inputActionHandler", "value", target = "InputActionHandler", indirections = 1,
+    )
+    private val handlerInputType = types.namedMember("InputActionHandler", "inputType", "InputType", 4u)
+    private val replayInput = types.enumValue("InputType", "Replay")
 
     init {
-        types.plainMembers("GuiContext", setOf("player"))
         types.plainMembers(
             "InputAction",
             setOf("updateTick", "type", "playerIndex", "align", "buffer"),
@@ -75,16 +79,18 @@ internal class ChatLayouts(types: DebugTypes) {
         target.value = value
         target.tick = tick
         target.playerIndex = playerIndex
+        target.playerName = playerName
         target.text = text
         target.cached = cached
         target.stringSize = stringSize
         target.sendSupported = 1u
-        target.contextSize = contextSize
-        target.contextPlayer = contextPlayer
         target.actionSize = actionSize
         target.actionType = actionType
         target.actionPlayer = actionPlayer
         target.actionBuffer = actionBuffer
         target.writeToConsole = writeToConsole
+        target.gameHandler = gameHandler
+        target.handlerInputType = handlerInputType
+        target.replayInput = replayInput
     }
 }

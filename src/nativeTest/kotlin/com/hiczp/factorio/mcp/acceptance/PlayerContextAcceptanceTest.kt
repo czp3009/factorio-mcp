@@ -147,18 +147,30 @@ class PlayerContextAcceptanceTest {
 
                 val quickbarSelection = buildJsonObject {
                     put("kind", "quickbar")
-                    putJsonArray("slots") { listOf(1, 2, 65536).forEach { add(it) } }
+                    putJsonArray("slots") {
+                        listOf(1 to 1, 1 to 2, 256 to 256).forEach { (page, slot) ->
+                            addJsonObject {
+                                put("page_index", page)
+                                put("slot_index", slot)
+                            }
+                        }
+                    }
                     putJsonArray("screen_pages") { add(1) }
                 }
                 val quickbar = query(quickbarSelection)
-                val filter = quickbar.objects()[0].attributes().getValue("filter").jsonObject
+                val slot = quickbar.objects()[0].attributes().getValue("value").jsonObject
+                assertEquals("filter", slot.getValue("type").jsonPrimitive.content)
+                val filter = slot.getValue("filter").jsonObject
+                assertTrue(quickbar.getValue("page_width").jsonPrimitive.int > 0)
+                assertEquals(1, quickbar.objects()[0].getValue("page_index").jsonPrimitive.int)
+                assertEquals(1, quickbar.objects()[0].getValue("slot_index").jsonPrimitive.int)
                 assertEquals("iron-plate", filter.getValue("name").jsonPrimitive.content)
                 assertEquals("uncommon", filter.getValue("quality").jsonPrimitive.content)
                 assertEquals(
                     "nil",
                     quickbar
                         .objects()[1]["read_status"]!!
-                        .jsonObject["filter"]!!
+                        .jsonObject["value"]!!
                         .jsonObject["status"]!!
                         .jsonPrimitive
                         .content,
@@ -167,7 +179,7 @@ class PlayerContextAcceptanceTest {
                     "error",
                     quickbar
                         .objects()[2]["read_status"]!!
-                        .jsonObject["filter"]!!
+                        .jsonObject["value"]!!
                         .jsonObject["status"]!!
                         .jsonPrimitive
                         .content,
@@ -267,7 +279,8 @@ class PlayerContextAcceptanceTest {
                 assertFalse(
                     entity["read_status"]!!.jsonObject.values.any {
                         it.jsonObject["status"]?.jsonPrimitive?.content == "error"
-                    }
+                    },
+                    entity.toString(),
                 )
                 val group =
                     entity.attributes()["group"]!!.jsonObject["name"]!!.jsonPrimitive.content

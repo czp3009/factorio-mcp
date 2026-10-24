@@ -8,6 +8,7 @@
 #include "ui_click.h"
 #include "ui_text.h"
 #include "ui_key.h"
+#include "keyboard_fixture.h"
 #include <cxxabi.h>
 #include <array>
 #include <cerrno>
@@ -598,6 +599,7 @@ struct ClickInputState {
     uintptr_t padding = 0;
     uint32_t held = 0;
     ClickKeyMap keys;
+    uint16_t modifiers = 0;
 };
 
 struct ClickGlobal {
@@ -609,6 +611,7 @@ struct ClickInputEvent {
     uint32_t type;
     double time;
     uint32_t code;
+    uint16_t modifiers;
 };
 
 static ClickGlobal *clickGlobal = nullptr;
@@ -627,6 +630,7 @@ static void clickUpdate(void *receiver, const void *event) {
     auto &state = *static_cast<ClickInputState *>(receiver);
     require(activeGui->input && value.time == activeGui->input->time, "click did not use the verified native clock");
     if (value.type == 211 || value.type == 212) {
+        state.modifiers = value.modifiers;
         ClickKey *key = nullptr;
         for (auto *cursor = state.keys.begin; cursor != state.keys.end; ++cursor)
             if (cursor->code == int32_t(value.code))
@@ -749,8 +753,10 @@ static void checkClicks(const UiGestureContext &context, const FmLinuxModalLayou
     config.codes[1] = 93;
     config.codes[2] = 82;
     config.keyboard = {{offsetof(ClickInputState, keys), offsetof(ClickKeyMap, begin), offsetof(ClickKeyMap, end),
-                        sizeof(ClickKey), offsetof(ClickKey, code), offsetof(ClickKey, held), 2, 0, 1},
+                        sizeof(ClickKey), offsetof(ClickKey, code), offsetof(ClickKey, held),
+                        fixtureModifiers(offsetof(ClickInputState, modifiers), 17, 29, 43)},
                        offsetof(ClickInputEvent, code),
+                       offsetof(ClickInputEvent, modifiers),
                        211,
                        212,
                        {17, 29, 43}};
@@ -1108,11 +1114,12 @@ struct PollKeyEvent {
     uint32_t code = 0;
     uint32_t character = 99;
     uint8_t repeat = 99;
+    uint16_t modifiers = 0;
 };
 
 static bool keyClockFailure;
 
-static uint32_t keyTicks() {
+static uint64_t keyTicks() {
     if (keyClockFailure)
         throw 1;
     return 123456;
@@ -1131,6 +1138,11 @@ static void checkKeys(const UiGestureContext &context, const FmLinuxModalLayout 
     original.event.type = offsetof(PollKeyEvent, type);
     original.event.time = offsetof(PollKeyEvent, time);
     original.event.code = offsetof(PollKeyEvent, code);
+    original.event.modifiers = offsetof(PollKeyEvent, modifiers);
+    FixtureKeyboardService service;
+    original.owner = service.owner(sizeof(PollKeyEvent), offsetof(PollKeyEvent, type), offsetof(PollKeyEvent, time),
+                                   offsetof(PollKeyEvent, code));
+    original.modifiers = service.modifiers();
     original.event.emptyType = 77;
     original.event.press = 19;
     original.event.release = 39;

@@ -5,25 +5,46 @@
 
 namespace chat_fixture {
 struct Map;
+
 struct Player {
     virtual ~Player() = default;
     Map *map = nullptr;
     uint16_t index = 2;
     void *console = nullptr;
 };
+
 struct View {
     virtual ~View() = default;
     Player *player = nullptr;
 };
+
 struct Handler {
     virtual ~Handler() = default;
     uint32_t field = 0;
 };
-struct Context { virtual ~Context() = default; };
-struct Game { Player *player; View *view; Handler *handler; };
-struct Map { Game *game; };
-struct Scenario { Game *game; Context *context; };
-struct Global { Scenario *scenario; };
+
+struct Context {
+    uintptr_t value = 0;
+};
+
+struct Game {
+    Player *player;
+    View *view;
+    Handler *handler;
+};
+
+struct Map {
+    Game *game;
+};
+
+struct Scenario {
+    Game *game;
+    Context *context;
+};
+
+struct Global {
+    Scenario *scenario;
+};
 
 inline uint32_t offset(const void *object, const void *member) {
     return static_cast<const char *>(member) - static_cast<const char *>(object);
@@ -56,12 +77,9 @@ struct World {
         world.scenarioSize = sizeof(scenario);
         world.gameSize = sizeof(game);
         world.contextSize = sizeof(context);
-        world.contextVtable = pointer(&context);
-        world.contextTypeInfo = pointer(reinterpret_cast<void *>(world.contextVtable - 8));
         world.scenario = offsetof(Global, scenario);
         world.game = offsetof(Scenario, game);
-        world.contextCount = 1;
-        world.contexts[0] = offsetof(Scenario, context);
+        world.context = offsetof(Scenario, context);
         auto &local = config.player;
         local.playerVtable = pointer(&player);
         local.playerTypeInfo = pointer(reinterpret_cast<void *>(local.playerVtable - 8));
@@ -89,4 +107,4 @@ struct World {
     World(const World &) = delete;
     World &operator=(const World &) = delete;
 };
-}
+} // namespace chat_fixture

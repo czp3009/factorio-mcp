@@ -2,7 +2,10 @@ package com.hiczp.factorio.mcp
 
 import com.hiczp.factorio.mcp.X64Instructions.*
 
-/** Selected key-case argument and returned-state store evidence. Construction, lookup layout and cleanup are separate. */
+/**
+ * Key-case code provenance and stores to a typed record. Existing-key search is verified
+ * separately.
+ */
 internal data class InputStateKeyUpdate(
     val code: Long,
     val map: Long,
@@ -12,142 +15,147 @@ internal data class InputStateKeyUpdate(
     val release: Case,
 ) {
     data class Store(val site: Long, val offset: Long, val width: Int, val value: Long)
-    data class Case(val kind: Long, val lookup: Long, val code: Long, val map: Long, val stores: List<Store>)
+
+    data class Case(
+        val kind: Long,
+        val lookup: Long,
+        val code: Long,
+        val map: Long,
+        val stores: List<Store>,
+        val entry: Long,
+    )
 
     companion object {
-        const val LOOKUP = "_ZN7FlatMapI12SDL_ScancodeN10InputState8KeyStateESt4lessIvEE17private_subscriptERKS0_"
+        const val INSERT =
+            "_ZNSt6vectorI4PairI12SDL_ScancodeN10InputState8KeyStateEESaIS4_EE14_M_emplace_auxIJRKS1_S3_EEEN9__gnu_cxx17__normal_iteratorIPS4_S6_EENSB_IPKS4_S6_EEDpOT_"
 
         fun resolve(image: ElfImage, stateSize: Long, header: EventHeader): InputStateKeyUpdate {
             val function = image.symbol("_ZN10InputState6updateERK5Event")
-            val lookup = image.symbol(LOOKUP)
-            EhFrames(image).function(lookup)
+            val insertion = image.symbol(INSERT)
             val tables = X64JumpTables.resolve(image, function)
-            val flow = X64ControlFlow(X64Instructions(image.functionBytes(function, 32768)).all(8192), tables)
-            return analyze(flow, tables.single(), lookup.address - function.address, stateSize, header)
+            return analyze(
+                X64ControlFlow.resolve(image, function),
+                tables.single(),
+                insertion.address - function.address,
+                stateSize,
+                header,
+            )
         }
 
         fun analyze(
-            flow: X64ControlFlow, table: X64JumpTables.Table, lookup: Long, stateSize: Long,
-            header: EventHeader
+            flow: X64ControlFlow,
+            table: X64JumpTables.Table,
+            insertion: Long,
+            stateSize: Long,
+            header: EventHeader,
         ): InputStateKeyUpdate {
-            require(stateSize in 8..(16 * 1024 * 1024) && header.extent in 16..4096)
-            require(header.type in 0..header.extent - 4L && header.time in 0..header.extent - 8L)
-            val extents = mapOf(6 to header.extent.toLong())
-            val scalars = ScalarExpression(flow, extents)
+            require(stateSize in 8..16 * 1024 * 1024 && header.extent in 16..4096)
+            val scalars = ScalarExpression(flow, mapOf(6 to header.extent.toLong()))
             val arguments = SysVArgumentFlow(flow)
             val type = SysVArgumentFlow.Read(SysVArgumentFlow.Reference(6, header.type), 4)
-
-            // Invert only an exact 32-bit type-plus-constant index, including wrapping enum bases.
-            // No declaration-order assumption or remembered native event kind is used.
-            fun bias(value: ScalarExpression.Value): Long = when (value) {
-                is ScalarExpression.Input -> {
-                    require(value.width == 4 && value.field == type)
-                    0
+            fun bias(value: ScalarExpression.Value): Long =
+                when (value) {
+                    is ScalarExpression.Input -> {
+                        require(value.width == 4 && value.field == type)
+                        0
+                    }
+                    is ScalarExpression.Narrow -> {
+                        require(value.width == 4 && value.value.width == 4)
+                        bias(value.value)
+                    }
+                    is ScalarExpression.Binary -> {
+                        require(
+                            value.width == 4 &&
+                                value.right is ScalarExpression.Literal &&
+                                value.right.width == 4
+                        )
+                        when (value.operation) {
+                            Operation.ADD -> bias(value.left) + value.right.value
+                            Operation.SUB -> bias(value.left) - value.right.value
+                            else -> error("Keyboard switch does not preserve the native type index")
+                        } and 0xffffffffL
+                    }
+                    else -> error("Keyboard switch is not indexed by the original type")
                 }
-
-                is ScalarExpression.Narrow -> {
-                    require(value.width == 4 && value.value.width == 4)
-                    bias(value.value)
-                }
-
-                is ScalarExpression.Binary -> {
-                    require(value.width == 4 && value.right is ScalarExpression.Literal && value.right.width == 4)
-                    when (value.operation) {
-                        Operation.ADD -> bias(value.left) + value.right.value
-                        Operation.SUB -> bias(value.left) - value.right.value
-                        else -> error("Key switch has a non-affine type index")
-                    } and 0xffffffffL
-                }
-
-                else -> error("Key switch is not indexed by the original event type")
-            }
-            require(table.index.width in listOf(4, 8)) { "Keyboard switch cannot use a byte-only discriminator" }
-            val index = scalars.before(table.guard, Register(table.index.number, 4))
+            require(table.index.width in setOf(4, 8))
+            val index = scalars.before(table.guard, table.index.copy(width = 4))
             val base = bias(index)
-            val admission = ScalarBranchPath(flow, extents)
-            val candidates = table.targets.mapIndexedNotNull { slot, target ->
-                val kind = (slot.toLong() - base) and 0xffffffffL
-                try {
-                    admission.to(table.guard) {
+            val calls =
+                flow.instructions.filter {
+                    it.offset in flow.reachable &&
+                        it.operation == Operation.CALL &&
+                        it.destination == Immediate(insertion)
+                }
+            val candidates =
+                calls.map { call ->
+                    val slot =
+                        table.targets.indices.single {
+                            flow.dominates(table.targets[it], call.offset)
+                        }
+                    val kind = (slot.toLong() - base) and 0xffffffffL
+                    require(ScalarExpression.evaluate(index) { kind } == slot.toLong())
+                    ScalarBranchPath(flow, mapOf(6 to header.extent.toLong())).to(table.guard) {
                         require(it.field == type)
                         kind
                     }
-                    require(ScalarExpression.evaluate(index) { kind } == slot.toLong())
-                    var site = target
-                    var call: Long? = null
-                    repeat(32) {
-                        if (call != null) return@repeat
-                        val instruction = flow.body.getValue(site)
-                        if (instruction.operation == Operation.CALL) {
-                            require(instruction.destination == Immediate(lookup))
-                            call = site
-                        } else {
-                            require(
-                                instruction.operation in listOf(
-                                    Operation.MOV, Operation.LEA, Operation.ADD,
-                                    Operation.SUB, Operation.NOP, Operation.ENDBR
-                                )
-                            )
-                            require(
-                                instruction.destination is Register || instruction.operation in listOf(
-                                    Operation.NOP,
-                                    Operation.ENDBR
-                                )
-                            )
-                            if (instruction.source is Memory && instruction.operation != Operation.LEA) {
-                                val read = checkNotNull(arguments.source(site))
-                                require(
-                                    read.reference.argument == 6 && read.width == 4 &&
-                                            read.reference.offset in 0..header.extent - 4L
-                                )
-                            }
-                            require(flow.successors.getValue(site) == listOf(site + instruction.size))
-                            site += instruction.size
-                        }
+                    val owner = checkNotNull(arguments.register(call.offset, 7))
+                    require(owner.argument == 7 && owner.offset in 0..stateSize - 8)
+                    var code = scalars.before(call.offset, Register(2, 4))
+                    while (code is ScalarExpression.Narrow) {
+                        require(code.width == 4 && code.value.width == 4)
+                        code = code.value
                     }
-                    val at = checkNotNull(call) { "Key case has no bounded lookup prefix" }
-                    val receiver = checkNotNull(arguments.register(at, 7))
-                    require(receiver.argument == 7 && receiver.offset in 0..stateSize - 8)
-                    val key = scalars.before(at, Register(6, 4))
-                    fun input(value: ScalarExpression.Value): ScalarExpression.Input = when (value) {
-                        is ScalarExpression.Input -> value.also { require(it.width == 4 && it.field.width == 4) }
-                        is ScalarExpression.Narrow -> {
-                            require(value.width == 4 && value.value.width == 4)
-                            input(value.value)
-                        }
-
-                        else -> error("Key lookup argument is not the original 32-bit event field")
-                    }
-
-                    val code = input(key).field.reference
-                    require(code.argument == 6 && code.offset in 0..header.extent - 4L)
-                    val fields = listOf(header.type to 4, header.time to 8, code.offset to 4)
-                    require(fields.indices.all { a ->
-                        fields.indices.all { b ->
-                            a == b ||
+                    val input =
+                        code as? ScalarExpression.Input
+                            ?: error("Key insertion loses its original scalar code")
+                    require(
+                        input.width == 4 &&
+                            input.field.width == 4 &&
+                            input.field.reference.argument == 6
+                    )
+                    val offset = input.field.reference.offset
+                    val fields = listOf(header.type to 4, header.time to 8, offset to 4)
+                    require(fields.all { (at, width) -> at >= 0 && at <= header.extent - width })
+                    require(
+                        fields.indices.all { a ->
+                            fields.indices.all { b ->
+                                a == b ||
                                     fields[a].first + fields[a].second <= fields[b].first ||
                                     fields[b].first + fields[b].second <= fields[a].first
+                            }
                         }
-                    })
-                    val stores = stores(flow, at + flow.body.getValue(at).size)
-                    Case(kind, at, code.offset, receiver.offset, stores)
-                } catch (_: IllegalArgumentException) {
-                    null
-                } catch (_: IllegalStateException) {
-                    null
+                    )
+                    Case(
+                        kind,
+                        call.offset,
+                        offset,
+                        owner.offset,
+                        stores(flow, call.offset + call.size),
+                        table.targets[slot],
+                    )
                 }
-            }
-            val press = candidates.single {
-                it.stores.size == 1 && it.stores.single().width == 1 &&
-                        it.stores.single().value == 1L
-            }
+            val press =
+                candidates.single {
+                    it.stores.size == 1 &&
+                        it.stores.single().let { field -> field.width == 1 && field.value == 1L }
+                }
             val held = press.stores.single().offset
-            val release = candidates.single {
-                it.kind != press.kind && it.code == press.code && it.map == press.map &&
-                        it.stores.all { store -> store.value == 0L } && it.stores.any { store -> store.offset == held && store.width == 1 }
-            }
-            val size = (press.stores + release.stores).maxOf { it.offset + it.width }
-            return InputStateKeyUpdate(press.code, press.map, held, size, press, release)
+            val release =
+                candidates.single {
+                    it.kind != press.kind &&
+                        it.code == press.code &&
+                        it.map == press.map &&
+                        it.stores.all { field -> field.value == 0L } &&
+                        it.stores.any { field -> field.offset == held && field.width == 1 }
+                }
+            return InputStateKeyUpdate(
+                press.code,
+                press.map,
+                held,
+                (press.stores + release.stores).maxOf { it.offset + it.width },
+                press,
+                release,
+            )
         }
 
         private fun stores(flow: X64ControlFlow, start: Long): List<Store> {
@@ -156,47 +164,71 @@ internal data class InputStateKeyUpdate(
             var site = start
             repeat(32) {
                 val instruction = flow.body.getValue(site)
-                if (instruction.operation in listOf(Operation.JMP, Operation.RET, Operation.POP) ||
-                    instruction.operation == Operation.ADD && instruction.destination == Register(4, 8)
+                if (
+                    instruction.operation in setOf(Operation.JMP, Operation.RET, Operation.POP) ||
+                        instruction.operation == Operation.ADD &&
+                            instruction.destination == Register(4, 8)
                 ) {
                     require(result.isNotEmpty())
                     return result
                 }
-                when (instruction.operation) {
-                    Operation.MOV -> when (val destination = instruction.destination) {
-                        is Register -> {
-                            val source = instruction.source as? Register ?: error("Unknown returned-state copy")
-                            require(destination.width == 8 && source.width == 8)
-                            pointers[destination.number] = checkNotNull(pointers[source.number])
+                when (val destination = instruction.destination) {
+                    is Register -> {
+                        val source = instruction.source as? Register
+                        val copied =
+                            source
+                                ?.takeIf {
+                                    instruction.operation == Operation.MOV &&
+                                        source.width == 8 &&
+                                        destination.width == 8
+                                }
+                                ?.let { pointers[it.number] }
+                        if (destination.number in pointers && copied == null) {
+                            require(result.isNotEmpty())
+                            return result
                         }
-
-                        is Memory -> {
-                            val value = instruction.source as? Immediate ?: error("Nonconstant key-state store")
-                            val base = checkNotNull(pointers[destination.base])
-                            val offset = base + destination.displacement
-                            require(
-                                !destination.relative && destination.index == null && destination.width in listOf(
-                                    1,
-                                    2,
-                                    4,
-                                    8
-                                ) &&
-                                        offset >= 0 && offset <= 256 - destination.width && value.value in 0..1
-                            )
-                            require(result.none { it.offset < offset + destination.width && offset < it.offset + it.width })
-                            result += Store(site, offset, destination.width, value.value)
-                        }
-
-                        else -> error("Unsupported key-state store")
+                        pointers.remove(destination.number)
+                        if (copied != null) pointers[destination.number] = copied
+                        require(
+                            instruction.operation in
+                                setOf(
+                                    Operation.MOV,
+                                    Operation.MOVZX,
+                                    Operation.NOP,
+                                    Operation.ENDBR,
+                                )
+                        )
                     }
-
-                    Operation.NOP, Operation.ENDBR -> Unit
-                    else -> error("Key-state stores have an unsupported effect")
+                    is Memory -> {
+                        require(
+                            instruction.operation == Operation.MOV &&
+                                !destination.relative &&
+                                destination.index == null
+                        )
+                        val value =
+                            instruction.source as? Immediate
+                                ?: error("Nonconstant key record store")
+                        val offset =
+                            checkNotNull(pointers[destination.base]) + destination.displacement
+                        require(
+                            destination.width in setOf(1, 2, 4, 8) &&
+                                offset in 0..256 - destination.width &&
+                                value.value in 0..1
+                        )
+                        require(
+                            result.none {
+                                it.offset < offset + destination.width &&
+                                    offset < it.offset + it.width
+                            }
+                        )
+                        result += Store(site, offset, destination.width, value.value)
+                    }
+                    else -> require(instruction.operation in setOf(Operation.NOP, Operation.ENDBR))
                 }
                 require(flow.successors.getValue(site) == listOf(site + instruction.size))
                 site += instruction.size
             }
-            error("Key-state store prefix exceeds bound")
+            error("Key record store prefix exceeds bound")
         }
     }
 }

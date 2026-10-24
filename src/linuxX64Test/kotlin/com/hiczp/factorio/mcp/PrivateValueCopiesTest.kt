@@ -8,23 +8,68 @@ import kotlin.test.assertFails
 
 class PrivateValueCopiesTest {
     @Test
+    fun retainsOnlyUnchangedWholeBytesThroughPackedScalarShifts() {
+        fun field(shift: String, width: Int = 1): PrivateValueCopies.Read {
+            val flow =
+                X64ControlFlow(
+                    X64Instructions(machineCode("53 e8 00 01 00 00 89 c3 $shift 89 d8 5b c3")).all()
+                )
+            val producer = flow.instructions.single { it.operation == Operation.CALL }.offset
+            val use = flow.instructions.last { it.operation == Operation.POP }.offset
+            return PrivateValueCopies(
+                    flow,
+                    emptyMap(),
+                    callResults =
+                        mapOf(producer to PrivateValueCopies.Read(producer, NativeField(0, 4))),
+                )
+                .field(use, Register(0, width))
+        }
+        assertEquals(NativeField(2, 1), field("c1 eb 10").field)
+        assertEquals(NativeField(3, 1), field("c1 eb 18").field)
+        assertEquals(NativeField(0, 4), field("c1 eb 20", 4).field)
+        assertFails { field("c1 eb 11") }
+        assertFails { field("c1 eb 18", 2) }
+        assertFails { field("c1 e3 08") }
+        assertFails { field("d3 eb") }
+    }
+
+    @Test
     fun readsPackedCallResultOnlyBeforeItsFirstTerminalBorrow() {
-        fun analyze(middle: String, producerWidth: Int = 4, crop: Boolean = true): PrivateValueCopies.Read {
-            val full = X64ControlFlow(X64Instructions(machineCode(
-                "55 48 89 e5 53 48 83 ec 18 e8 00 01 00 00 89 45 f4 48 8d 5d f6 " +
-                        "$middle 48 89 df e8 00 02 00 00 48 83 c4 18 5b 5d c3"
-            )).all())
+        fun analyze(
+            middle: String,
+            producerWidth: Int = 4,
+            crop: Boolean = true,
+        ): PrivateValueCopies.Read {
+            val full =
+                X64ControlFlow(
+                    X64Instructions(
+                            machineCode(
+                                "55 48 89 e5 53 48 83 ec 18 e8 00 01 00 00 89 45 f4 48 8d 5d f6 " +
+                                    "$middle 48 89 df e8 00 02 00 00 48 83 c4 18 5b 5d c3"
+                            )
+                        )
+                        .all()
+                )
             val calls = full.instructions.filter { it.operation == Operation.CALL }
             val terminal = calls.last().offset
             val flow = if (crop) full.reaching(terminal) else full
-            return PrivateValueCopies(flow, emptyMap(),
-                callResults = mapOf(calls.first().offset to PrivateValueCopies.Read(
-                    calls.first().offset, InlineArgumentFields.Field(0, producerWidth))),
-                terminalConsumer = terminal
-            ).terminalField(7, 2, 0, 2)
+            return PrivateValueCopies(
+                    flow,
+                    emptyMap(),
+                    callResults =
+                        mapOf(
+                            calls.first().offset to
+                                PrivateValueCopies.Read(
+                                    calls.first().offset,
+                                    NativeField(0, producerWidth),
+                                )
+                        ),
+                    terminalConsumer = terminal,
+                )
+                .terminalField(7, 2, 0, 2)
         }
         val plain = analyze("90")
-        assertEquals(InlineArgumentFields.Field(2, 2), plain.field)
+        assertEquals(NativeField(2, 2), plain.field)
         assertEquals(plain, analyze("e8 00 03 00 00"))
         assertFails { analyze("c6 45 f7 00") }
         assertFails { analyze("48 89 df e8 00 03 00 00") }
@@ -36,14 +81,17 @@ class PrivateValueCopiesTest {
     @Test
     fun retainsCompleteScalarArgumentsOnlyInPrivateUnchangedStorage() {
         fun argument(middle: String, load: String = "8b 75 fc"): Int {
-            val flow = X64ControlFlow(
-                X64Instructions(
-                    machineCode(
-                        "55 48 89 e5 48 83 ec 10 89 55 fc $middle $load 48 83 c4 10 5d c3"
-                    )
-                ).all()
-            )
-            val copies = PrivateValueCopies(flow, emptyMap(), scalarArguments = mapOf(2 to 4, 1 to 4))
+            val flow =
+                X64ControlFlow(
+                    X64Instructions(
+                            machineCode(
+                                "55 48 89 e5 48 83 ec 10 89 55 fc $middle $load 48 83 c4 10 5d c3"
+                            )
+                        )
+                        .all()
+                )
+            val copies =
+                PrivateValueCopies(flow, emptyMap(), scalarArguments = mapOf(2 to 4, 1 to 4))
             val restore = flow.instructions.last { it.operation == Operation.ADD }
             return copies.argument(restore.offset, Register(6, 4))
         }
@@ -56,31 +104,37 @@ class PrivateValueCopiesTest {
         assertFails { argument("e8 00 01 00 00", "89 d6") }
     }
 
-    private fun analyze(middle: String, load: String = "8b 47 14"): InlineArgumentFields.Field {
-        val flow = X64ControlFlow(
-            X64Instructions(
-                machineCode(
-                    "55 48 89 e5 48 83 ec 10 $load 89 45 fc $middle 8b 45 fc 48 83 c4 10 5d c3"
-                )
-            ).all()
-        )
-        val source = flow.instructions.first {
-            it.operation in listOf(Operation.MOV, Operation.MOVZX) && it.source is X64Instructions.Memory
-        }
-        val result = PrivateValueCopies(
-            flow, mapOf(
-                source.offset to
-                        PrivateValueCopies.Read(source.offset, InlineArgumentFields.Field(20, 4))
+    private fun analyze(middle: String, load: String = "8b 47 14"): NativeField {
+        val flow =
+            X64ControlFlow(
+                X64Instructions(
+                        machineCode(
+                            "55 48 89 e5 48 83 ec 10 $load 89 45 fc $middle 8b 45 fc 48 83 c4 10 5d c3"
+                        )
+                    )
+                    .all()
             )
-        )
+        val source =
+            flow.instructions.first {
+                it.operation in listOf(Operation.MOV, Operation.MOVZX) &&
+                    it.source is X64Instructions.Memory
+            }
+        val result =
+            PrivateValueCopies(
+                flow,
+                mapOf(source.offset to PrivateValueCopies.Read(source.offset, NativeField(20, 4))),
+            )
         val restore = flow.instructions.last { it.operation == Operation.ADD }
-        return result.field(restore.offset, Register(0, 4)).also { assertEquals(source.offset, it.source) }.field
+        return result
+            .field(restore.offset, Register(0, 4))
+            .also { assertEquals(source.offset, it.source) }
+            .field
     }
 
     @Test
     fun keepsUnexposedScalarSpillsAcrossCallsAndRejectsChangedBytes() {
-        assertEquals(InlineArgumentFields.Field(20, 4), analyze("e8 00 01 00 00"))
-        assertEquals(InlineArgumentFields.Field(20, 4), analyze("90"))
+        assertEquals(NativeField(20, 4), analyze("e8 00 01 00 00"))
+        assertEquals(NativeField(20, 4), analyze("90"))
         assertFails { analyze("c6 45 fe 00") }
         assertFails { analyze("48 8d 7d fc e8 00 01 00 00") }
         assertFails { analyze("48 8d 45 fc 48 89 06") }
@@ -89,15 +143,21 @@ class PrivateValueCopiesTest {
 
     @Test
     fun doesNotMergeEqualOffsetsFromDifferentObjects() {
-        val flow = X64ControlFlow(X64Instructions(machineCode("8b 47 14 8b 4e 14 85 d2 0f 44 c1 c3")).all())
-        val reads = flow.instructions.filter { it.operation == Operation.MOV }
-        val field = InlineArgumentFields.Field(20, 4)
-        fun copies(secondSource: Long) = PrivateValueCopies(
-            flow, mapOf(
-                reads[0].offset to PrivateValueCopies.Read(1, field),
-                reads[1].offset to PrivateValueCopies.Read(secondSource, field),
+        val flow =
+            X64ControlFlow(
+                X64Instructions(machineCode("8b 47 14 8b 4e 14 85 d2 0f 44 c1 c3")).all()
             )
-        ).field(flow.instructions.last().offset, Register(0, 4))
+        val reads = flow.instructions.filter { it.operation == Operation.MOV }
+        val field = NativeField(20, 4)
+        fun copies(secondSource: Long) =
+            PrivateValueCopies(
+                    flow,
+                    mapOf(
+                        reads[0].offset to PrivateValueCopies.Read(1, field),
+                        reads[1].offset to PrivateValueCopies.Read(secondSource, field),
+                    ),
+                )
+                .field(flow.instructions.last().offset, Register(0, 4))
         assertEquals(PrivateValueCopies.Read(1, field), copies(1))
         assertFails { copies(2) }
     }

@@ -24,7 +24,11 @@ internal data class GameStateMetadata(
             return (value + bias).toULong()
         }
 
-        fun predicate(target: FmLinuxVirtualBoolean, table: ItaniumSubobjectVtable, method: ItaniumVtable.Method) {
+        fun predicate(
+            target: FmLinuxVirtualBoolean,
+            table: ItaniumSubobjectVtable,
+            method: ItaniumVtable.Method,
+        ) {
             target.table = address(table.addressPoint)
             target.typeInfo = address(table.pointers.getValue(table.addressPoint - 8))
             target.function = address(method.function.address)
@@ -49,7 +53,9 @@ internal data class GameStateMetadata(
         output.statesBegin = loading.begin.toUInt()
         output.statesEnd = loading.end.toUInt()
         output.stateCount = loading.states.size.toUInt()
-        loading.states.forEachIndexed { index, state -> predicate(output.states[index], state.table, state.method) }
+        loading.states.forEachIndexed { index, state ->
+            predicate(output.states[index], state.table, state.method)
+        }
         output.managerCount = loading.multiplayer.size.toUInt()
         loading.multiplayer.forEachIndexed { index, manager ->
             val target = output.managers[index]
@@ -62,24 +68,49 @@ internal data class GameStateMetadata(
 
     companion object {
         fun resolve(image: ElfImage): GameStateMetadata {
-            val (resolved, readonly) = image.withReadonlyEvidence {
-                image.withFunctionEvidence {
-                    val world = WorldReferences.resolve(image)
-                    val mapSize = SysVOwnedObjectSize.resolve(image,
-                        "_ZNSt10unique_ptrI3MapSt14default_deleteIS0_EED2Ev", "_ZN3MapD2Ev").size
-                    val map = SysVArgumentMember.resolve(image,
-                        "_ZN4GameC2ER3MapR8Scenario8LoadType9InputTypeP11InputSource", world.gameSize)
-                    val pause = InputPauseField.resolve(image, mapSize).mapPaused
-                    val stop = MapStopField.resolve(image, mapSize)
-                    val loading = LoadingPredicate.resolve(image, world.global, world.globalSize)
-                    val tables = loading.states.map { it.table } + loading.multiplayer.map { it.table }
-                    val pointers = tables.flatMap { it.pointers.entries }.associate { it.toPair() }
-                    val scalars = tables.flatMap { it.scalars.entries }.associate { it.toPair() }
-                    GameStateMetadata(world, mapSize, map, pause, stop, loading,
-                        ElfEvidence(emptyList(), emptyList(), pointers, scalars))
+            val (resolved, readonly) =
+                image.withReadonlyEvidence {
+                    image.withFunctionEvidence {
+                        val world = WorldReferences.resolve(image)
+                        val mapSize =
+                            SysVOwnedObjectSize.resolve(
+                                    image,
+                                    "_ZNSt10unique_ptrI3MapSt14default_deleteIS0_EED2Ev",
+                                    "_ZN3MapD2Ev",
+                                )
+                                .size
+                        val pause = InputPauseField.resolve(image, world.gameSize, mapSize)
+                        val map =
+                            SysVArgumentMember.resolve(
+                                image,
+                                "_ZN4GameC2ER3MapR8Scenario8LoadType9InputTypeP11InputSource",
+                                world.gameSize,
+                                member = pause.gameMap,
+                            )
+                        val stop = MapStopField.resolve(image, mapSize)
+                        val loading =
+                            LoadingPredicate.resolve(image, world.global, world.globalSize)
+                        val tables =
+                            loading.states.map { it.table } + loading.multiplayer.map { it.table }
+                        val pointers =
+                            tables.flatMap { it.pointers.entries }.associate { it.toPair() }
+                        val scalars =
+                            tables.flatMap { it.scalars.entries }.associate { it.toPair() }
+                        GameStateMetadata(
+                            world,
+                            mapSize,
+                            map,
+                            pause.mapPaused,
+                            stop,
+                            loading,
+                            ElfEvidence(emptyList(), emptyList(), pointers, scalars),
+                        )
+                    }
                 }
-            }
-            return resolved.first.copy(evidence = resolved.first.evidence.copy(functions = resolved.second, readonly = readonly))
+            return resolved.first.copy(
+                evidence =
+                    resolved.first.evidence.copy(functions = resolved.second, readonly = readonly)
+            )
         }
     }
 }

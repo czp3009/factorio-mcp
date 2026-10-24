@@ -14,7 +14,7 @@ Supports **Linux x64 and Windows x64**, with stdio and Streamable HTTP transport
 
 ![I'm not even touching it](images/im-not-even-touching-it.jpg)
 
-Tested with Factorio 2.0.77, including the official DLC.
+Linux and Windows tested with Factorio 2.1.23, including the official DLC. Older game versions are not supported.
 
 ## Installation
 
@@ -38,7 +38,7 @@ in that extracted directory, including its actual filename:
 {
   "mcpServers": {
     "factorio-mcp": {
-      "command": "/absolute/path/to/factorio-mcp/factorio-mcp",
+      "command": "/absolute/path/to/factorio-mcp/factorio-mcp.kexe",
       "args": [
         "--no-http"
       ]
@@ -85,7 +85,7 @@ directory of your choice. Keep the executable and its accompanying dynamic libra
 Replace the path with the absolute path to the extracted executable:
 
 ```bash
-"/absolute/path/to/factorio-mcp/factorio-mcp" --no-stdio --http-port 3000
+"/absolute/path/to/factorio-mcp/factorio-mcp.kexe" --no-stdio --http-port 3000
 ```
 
 On Windows (PowerShell), use the `.exe` path and prefix it with `&`:

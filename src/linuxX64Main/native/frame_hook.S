@@ -22,8 +22,7 @@ popq -16(%rbp)
 subq $65728, %rsp
 save_hook_state
 movq -48(%rbp), %rdi
-movq -56(%rbp), %rsi
-movq 8(%rbp),%rdx
+movq 8(%rbp), %rsi
 call fm_before_frame
 restore_hook_state
 leave

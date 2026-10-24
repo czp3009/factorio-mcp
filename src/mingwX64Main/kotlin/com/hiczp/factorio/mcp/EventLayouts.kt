@@ -33,6 +33,7 @@ internal class EventLayouts(types: DebugTypes) {
                 "unichar",
                 "timeStamp",
                 "keyCode",
+                "scanCode",
                 "extKey",
                 "key",
                 "isAlt",
@@ -43,6 +44,9 @@ internal class EventLayouts(types: DebugTypes) {
                 "source",
             ),
         )
+        types.namedMember(keyboard, "scanCode", "SDL_Scancode", 4u)
+        // Direct text events have no physical key; the zero-initialized event must represent that.
+        check(types.enumValue("SDL_Scancode", "SDL_SCANCODE_UNKNOWN") == 0u)
     }
 
     private val values = buildList {
@@ -60,7 +64,7 @@ internal class EventLayouts(types: DebugTypes) {
         add(types.size(keyboard))
         add(types.scalarMember(keyboard, "unichar", 4u, 7u))
         add(types.scalarMember(keyboard, "timeStamp", 8u, 8u))
-        add(types.scalarMember(keyboard, "keyCode", 4u, 6u))
+        add(types.scalarMember(keyboard, "keyCode", 4u, 7u))
         add(types.namedMember(keyboard, "extKey", "agui::ExtendedKeyEnum", 4u))
         add(types.namedMember(keyboard, "key", "agui::KeyEnum", 4u))
         listOf("isAlt", "isControl", "isShift", "isMeta", "handled").forEach {
@@ -68,7 +72,7 @@ internal class EventLayouts(types: DebugTypes) {
         }
         add(types.pointerMember(keyboard, "source", "agui::Widget"))
         listOf("LEFT", "RIGHT", "MIDDLE").forEach { add(types.enumValue("agui::MouseButton", it)) }
-        listOf("MOUSE_ENTER", "MOUSE_DOWN", "MOUSE_UP", "MOUSE_LEAVE").forEach {
+        listOf("MOUSE_ENTER", "MOUSE_DOWN", "MOUSE_CLICK", "MOUSE_UP", "MOUSE_LEAVE").forEach {
             add(types.enumValue("agui::MouseEvent::Type", it))
         }
         listOf("KEY_NONE", "KEY_A", "KEY_BACKSPACE").forEach {

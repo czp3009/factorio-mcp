@@ -56,10 +56,6 @@ __attribute__((noinline)) std::uint64_t fixture_read_stack(void *, InlinePacket 
     return packet.getButton() + packet.control() + stamp;
 }
 
-__attribute__((noinline)) std::uint64_t fixture_read_stack_folded(void *, InlinePacket packet) {
-    return packet.getButton() + packet.control() + packet.getStamp();
-}
-
 __attribute__((noinline)) std::uint64_t fixture_copy_frame(void *, const InlinePacket *packet) {
     auto local = dequeueMouseInput(packet);
     asm volatile("" : "+m"(local));
@@ -115,6 +111,5 @@ int main() {
     }
     return fixture_read_button(nullptr, &packet) == packet.button && fixture_read_control(nullptr, &packet) &&
            fixture_read_stack(nullptr, packet) == packet.button + packet.controlled + packet.stamp &&
-           fixture_copy_frame(nullptr, &packet) == fixture_read_stack(nullptr, packet) &&
-           fixture_read_stack_folded(nullptr, packet) == fixture_read_stack(nullptr, packet) ? 0 : 1;
+           fixture_copy_frame(nullptr, &packet) == fixture_read_stack(nullptr, packet) ? 0 : 1;
 }
