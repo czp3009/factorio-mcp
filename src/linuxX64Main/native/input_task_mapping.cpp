@@ -1,6 +1,5 @@
 #include "input_task_mapping.h"
 #include <cerrno>
-#include <cstdio>
 #include <fcntl.h>
 #include <initializer_list>
 #include <linux/memfd.h>
@@ -9,6 +8,7 @@
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <unistd.h>
+#include <utility>
 
 InputTaskMapping::~InputTaskMapping() {
     close();
@@ -28,23 +28,46 @@ int InputTaskMapping::ownerAlive(bool &alive) const {
     return 0;
 }
 
-int InputTaskMapping::open(pid_t owner, int descriptor) {
+int InputTaskMapping::bindOwner(pid_t owner) {
     if (owned())
         return EALREADY;
-    if (owner <= 0 || descriptor < 0)
+    if (owner <= 0)
         return EINVAL;
-    // Bind the process before opening its proc descriptor. If this PID is recycled during admission,
-    // the bound pidfd becomes readable and rejects the replacement process's mapping below.
+    // Pin liveness before admission so PID reuse cannot revive an abandoned task.
     owner_ = static_cast<int>(syscall(SYS_pidfd_open, owner, 0));
-    if (owner_ < 0)
+    ownerPid_ = owner;
+    return owner_ < 0 ? errno : 0;
+}
+
+int InputTaskMapping::create(pid_t owner) {
+    if (const int error = bindOwner(owner))
+        return error;
+    descriptor_ = static_cast<int>(syscall(SYS_memfd_create, "factorio-mcp-input", MFD_CLOEXEC | MFD_ALLOW_SEALING));
+    if (descriptor_ < 0 || ftruncate(descriptor_, sizeof(FmLinuxInputTask)) ||
+        fcntl(descriptor_, F_ADD_SEALS, F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_SEAL))
         return errno;
-    char path[96];
-    const int length = std::snprintf(path, sizeof(path), "/proc/%d/fd/%d", owner, descriptor);
-    if (length <= 0 || static_cast<size_t>(length) >= sizeof(path))
+    if (const int error = map())
+        return error;
+    task_->ownerPid = static_cast<uint32_t>(owner);
+    task_->targetPid = static_cast<uint32_t>(getpid());
+    return validateOwner();
+}
+
+int InputTaskMapping::take(InputTaskMapping &source) {
+    if (owned())
+        return EALREADY;
+    if (!source.task_ || source.descriptor_ < 0 || source.owner_ < 0)
         return EINVAL;
-    descriptor_ = ::open(path, O_RDWR | O_CLOEXEC | O_NONBLOCK);
-    if (descriptor_ < 0)
-        return errno;
+    if (const int error = source.validateOwner())
+        return error;
+    descriptor_ = std::exchange(source.descriptor_, -1);
+    owner_ = std::exchange(source.owner_, -1);
+    ownerPid_ = std::exchange(source.ownerPid_, 0);
+    task_ = std::exchange(source.task_, nullptr);
+    return 0;
+}
+
+int InputTaskMapping::map() {
     struct stat metadata{};
     if (fstat(descriptor_, &metadata))
         return errno;
@@ -60,12 +83,16 @@ int InputTaskMapping::open(pid_t owner, int descriptor) {
     if (view == MAP_FAILED)
         return errno;
     task_ = static_cast<FmLinuxInputTask *>(view);
+    return 0;
+}
+
+int InputTaskMapping::validateOwner() const {
     bool alive;
     if (const int error = ownerAlive(alive))
         return error;
     if (!alive)
         return ESRCH;
-    if (task_->ownerPid != static_cast<uint32_t>(owner) || task_->targetPid != static_cast<uint32_t>(getpid()))
+    if (task_->ownerPid != static_cast<uint32_t>(ownerPid_) || task_->targetPid != static_cast<uint32_t>(getpid()))
         return EINVAL;
     return 0;
 }
@@ -86,5 +113,6 @@ int InputTaskMapping::close() {
         if (::close(descriptor) && errno != EINTR && !failure)
             failure = errno;
     }
+    ownerPid_ = 0;
     return failure;
 }

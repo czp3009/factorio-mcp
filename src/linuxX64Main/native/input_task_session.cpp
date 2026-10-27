@@ -32,7 +32,7 @@ std::vector<InputEntry> entries(const FmLinuxInputTask &wire) {
 InputTaskSession::InputTaskSession(ViewLifetime &lifetime, InputTaskContext::Reader reader)
     : lifetime_(lifetime), reader_(reader) {}
 
-int InputTaskSession::start(const FmLinuxInputContextConfig &config, pid_t owner, int descriptor, pid_t thread,
+int InputTaskSession::start(const FmLinuxInputContextConfig &config, InputTaskMapping &prepared, pid_t thread,
                             uintptr_t caller, InputEmitter &emitter) {
     if (syscall(SYS_gettid) != getpid())
         return EPERM;
@@ -46,7 +46,7 @@ int InputTaskSession::start(const FmLinuxInputContextConfig &config, pid_t owner
     canceled_.store(false, std::memory_order_release);
     task_.emplace(lifetime_, reader_);
     owned_.store(true, std::memory_order_release);
-    int error = task_->mapping.open(owner, descriptor);
+    int error = task_->mapping.take(prepared);
     try {
         if (!error) {
             auto *wire = task_->mapping.task();

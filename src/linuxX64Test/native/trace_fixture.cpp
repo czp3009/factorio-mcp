@@ -1,6 +1,7 @@
 #include <cerrno>
 #include <csignal>
 #include <cstdint>
+#include <ctime>
 #include <dlfcn.h>
 #include <linux/memfd.h>
 #include <pthread.h>
@@ -11,6 +12,10 @@
 extern "C" __attribute__((noinline)) void fm_fixture_safe_point() {
     // Observable code prevents the compiler from eliminating the test call.
     asm volatile("" ::: "memory");
+}
+
+extern "C" {
+uintptr_t fm_fixture_clock_plt;
 }
 
 extern "C" __attribute__((noinline)) uint64_t fm_fixture_remote(
@@ -39,6 +44,7 @@ static void signalReceived(int signal) {
 }
 
 int main() {
+    asm("lea clock_gettime@plt(%%rip), %0" : "=r"(fm_fixture_clock_plt));
     if (pthread_self() == 0)
         return 10;
     (void)dlerror();
@@ -74,6 +80,12 @@ int main() {
             raise(SIGUSR1);
         } else if (command == 't') {
             raise(SIGTRAP);
+        } else if (command == 'v') {
+            timespec now{};
+            if (clock_gettime(CLOCK_MONOTONIC, &now) != 0)
+                return 11;
+            if (write(STDOUT_FILENO, "v", 1) != 1)
+                return 12;
         } else if (command == 'b') {
             asm volatile("pcmpeqb %%xmm0, %%xmm0\npcmpeqb %%xmm15, %%xmm15" ::: "xmm0", "xmm15");
             fm_fixture_safe_point();

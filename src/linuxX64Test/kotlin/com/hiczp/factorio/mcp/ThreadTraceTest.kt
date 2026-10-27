@@ -14,6 +14,82 @@ import platform.posix.*
 import kotlin.test.*
 
 class ThreadTraceTest {
+    @Test
+    fun unwindsAnActivePltClockFrame() = fixtureTest { fixture, trace ->
+        trace.seize()
+        trace.interrupt()
+        ProcessHandle(fixture.pid).use { process ->
+            val (storage, mainRange) = process.withExecutable { image ->
+                val bias = image.loadBias(process.executableMappings(), sysconf(_SC_PAGESIZE))
+                val main = image.symbol("main")
+                (bias + image.symbol("fm_fixture_clock_plt").address) to
+                        ((bias + main.address) until (bias + main.address + main.size))
+            }
+            val entry = BinaryView(process.readMemory(storage, 8)).unsigned(0, 8)
+            trace.breakAt(entry)
+            trace.resume()
+            fixture.command('v')
+            assertEquals(ThreadTrace.StopKind.BREAKPOINT, awaitStop(trace).kind)
+            assertEquals(entry, trace.registers().general.useContents { rip.toLong() })
+            trace.removeBreakpoint()
+            assertTrue(ProcessStack(process).contains(trace.registers().general, listOf(mainRange)))
+        }
+        trace.close()
+        assertEquals('v', fixture.receive())
+        fixture.finish()
+    }
+
+    @Test
+    fun unwindsAnActiveVdsoClockFrame() = fixtureTest { fixture, trace ->
+        trace.seize()
+        trace.interrupt()
+        ProcessHandle(fixture.pid).use { process ->
+            val mapping = process.mappings().single { it.path == "[vdso]" }
+            val image = ElfImage(BinaryView(process.readMemory(mapping.start, (mapping.end - mapping.start).toInt())))
+            val bias = image.loadBias(listOf(mapping), sysconf(_SC_PAGESIZE))
+            val entry = bias + image.symbol("__vdso_clock_gettime", dynamic = true).address
+            trace.breakAt(entry)
+            trace.resume()
+            fixture.command('v')
+            assertEquals(ThreadTrace.StopKind.BREAKPOINT, awaitStop(trace).kind)
+            assertEquals(entry, trace.registers().general.useContents { rip.toLong() })
+            trace.removeBreakpoint()
+            process.withExecutable { executable ->
+                val loaded = executable.loadBias(process.executableMappings(), sysconf(_SC_PAGESIZE))
+                val main = executable.symbol("main")
+                assertTrue(
+                    ProcessStack(process).contains(
+                        trace.registers().general,
+                        listOf((loaded + main.address) until (loaded + main.address + main.size)),
+                    )
+                )
+            }
+        }
+        trace.close()
+        assertEquals('v', fixture.receive())
+        fixture.finish()
+    }
+
+    @Test
+    fun unwindsActiveFramesAcrossLibcAndRejectsAnInactiveFunction() = fixtureTest { fixture, trace ->
+        trace.seize()
+        trace.interrupt()
+        ProcessHandle(fixture.pid).use { process ->
+            process.withExecutable { image ->
+                val bias = image.loadBias(process.executableMappings(), sysconf(_SC_PAGESIZE))
+                fun range(name: String): List<LongRange> = image.symbol(name).let {
+                    listOf((it.address + bias) until (it.address + bias + it.size))
+                }
+
+                val registers = trace.registers().general
+                assertTrue(ProcessStack(process).contains(registers, range("main")))
+                assertFalse(ProcessStack(process).contains(registers, range("fm_fixture_safe_point")))
+            }
+        }
+        trace.close()
+        fixture.finish()
+    }
+
     private fun fixtureTest(test: suspend (TraceFixture, ThreadTrace) -> Unit) = runBlocking {
         newSingleThreadContext("factorio-mcp-trace-test").use { dispatcher ->
             withContext(dispatcher) {

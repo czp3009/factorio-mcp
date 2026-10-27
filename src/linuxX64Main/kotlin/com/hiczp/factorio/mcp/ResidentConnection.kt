@@ -7,11 +7,7 @@ import kotlinx.cinterop.*
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
-import platform.posix.PROT_READ
-import platform.posix.PROT_WRITE
-import platform.posix._SC_PAGESIZE
-import platform.posix.getpid
-import platform.posix.sysconf
+import platform.posix.*
 
 /**
  * Thread-affine owner of the process, borrowed trace, bootstrap storage and leased resident IPC.
@@ -56,12 +52,13 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
         if (channel == null) channel = ResidentChannel(process, checkNotNull(mapping))
     }
 
-    private suspend fun borrow(site: FrontendSite): FrontendSite.Verified {
+    private suspend fun borrow(site: FrontendSite, readiness: FrontendReadiness? = null): FrontendSite.Verified {
         check(trace == null) { "Previous trace cleanup is incomplete; retry detach" }
         val owner = ThreadTrace(process.pid)
         trace = owner
         owner.seize()
         owner.interrupt()
+        readiness?.requireRunning(owner)
         return site.stopAfterLogic(owner).also { safeStop = true }
     }
 
@@ -118,7 +115,8 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
             process.withExecutable { image ->
                 GameStateMetadata.resolve(image).also { it.verifyLoaded(image, process, loadBias) }
             }
-        val verified = borrow(site)
+        val readiness = FrontendReadiness.resolve(process, loadBias)
+        val verified = borrow(site, readiness)
         if (mapping == null) {
             val bootstrap = LibraryLoader(checkNotNull(trace), process)
             loader = bootstrap
@@ -479,16 +477,29 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
             }
         }
 
-        // Complete conversion and retain its mapping before anything can cancel the previous task.
-        val pending =
-            NativeInputTask(
-                process.pid,
-                request,
-                { names -> names.map { SdlScancodes.chord(listOf(it)).single() } },
-                ::alive,
-            )
-        val task = inputTasks.retain(pending)
+        var task: GameInputTask? = null
         try {
+            // The resident creates storage so a sandboxed client never needs to read MCP's /proc/fd.
+            // Complete conversion and retain the independent mapping before canceling an earlier task.
+            var descriptor = -1
+            val pending = connection.execute(
+                FM_LINUX_INPUT_PREPARE,
+                { it.inputOwner = getpid().toUInt() },
+                { shared, result ->
+                    check(result.code == 0) { "Native input storage preparation failed: ${result.code}" }
+                    descriptor = shared.inputDescriptor
+                    val mapping = SharedMapping.open(process.fileDescriptorPath(descriptor), sizeOf<FmLinuxInputTask>())
+                    NativeInputTask(
+                        process.pid,
+                        request,
+                        { names -> names.map { SdlScancodes.chord(listOf(it)).single() } },
+                        ::alive,
+                        mapping,
+                    )
+                },
+            )
+            val retained = inputTasks.retain(pending)
+            task = retained
             val context = inputContext()
             val retired = retirement(context)
             val key = uiKey()
@@ -553,17 +564,25 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
                     shared.inputEvaluation.protection = binding.protection.toUInt()
                     shared.inputEvaluation.thread = thread.toUInt()
                     shared.inputOwner = getpid().toUInt()
-                    shared.inputDescriptor = pending.descriptorNumber
+                    shared.inputDescriptor = descriptor
                 },
                 { _, result ->
                     check(result.code == 0) { "Native input admission failed: ${result.code}" }
                 },
             )
-            return task
+            return retained
         } catch (failure: Throwable) {
             withContext(NonCancellable) {
                 try {
-                    task.close()
+                    task?.close()
+                } catch (cleanup: Throwable) {
+                    failure.addSuppressed(cleanup)
+                }
+                try {
+                    if (process.alive()) {
+                        val result = connection.execute(FM_LINUX_INPUT_DISCARD)
+                        check(result.code == 0) { "Native input storage cleanup failed: ${result.code}; retry detach" }
+                    }
                 } catch (cleanup: Throwable) {
                     failure.addSuppressed(cleanup)
                 }

@@ -53,6 +53,7 @@ static std::optional<ChatSubmitCommand> chat;
 static std::optional<ChatReadCommand> chatRead;
 static EventPump eventPump;
 static InputTaskSession input(viewLifetime);
+static InputTaskMapping preparedInput;
 static FmLinuxInputDispatchConfig inputDispatch{};
 static std::optional<PumpInputEmitter> inputEmitter;
 static FmLinuxPlayerLayout inputProjectionPlayer{};
@@ -122,6 +123,9 @@ static int cleanupAction(FmLinuxShared *shared) {
     const int inputResult = serviceInput(shared, true);
     if (!result)
         result = inputResult;
+    const int preparedResult = preparedInput.close();
+    if (!result)
+        result = preparedResult;
     publishAction(shared);
     return result;
 }
@@ -155,7 +159,7 @@ static void publishOwnership(FmLinuxShared *shared) {
 }
 
 static int removeHooks() {
-    if (viewLifetime.owned() || input.owned())
+    if (viewLifetime.owned() || input.owned() || preparedInput.owned())
         return EBUSY;
     if (const int error = evaluationHook.remove())
         return error;
@@ -294,6 +298,9 @@ static int installEvaluation(FmLinuxShared *shared) {
 static int startInput(FmLinuxShared *shared) {
     if (input.owned())
         return EBUSY;
+    if (!preparedInput.task() || preparedInput.owner() != static_cast<pid_t>(shared->inputOwner) ||
+        preparedInput.descriptor() != shared->inputDescriptor)
+        return EINVAL;
     const auto &config = shared->inputDispatch;
     if (!validPollSite(config.site) || !validMouseStateLayout(config.owner) ||
         !validKeyStateLayout(config.owner, config.keys) || !validKeyboardEventLayout(config.keyboard) ||
@@ -317,7 +324,7 @@ static int startInput(FmLinuxShared *shared) {
     inputEmitter.emplace(eventPump, keyboard, pointer, inputPump, nullptr, inputGuard, nullptr,
                          static_cast<pid_t>(shared->inputEvaluation.thread), inputProjectWorld);
     result =
-        input.start(shared->inputContextConfig, static_cast<pid_t>(shared->inputOwner), shared->inputDescriptor,
+        input.start(shared->inputContextConfig, preparedInput,
                     static_cast<pid_t>(shared->inputEvaluation.thread), shared->inputEvaluation.caller, *inputEmitter);
     fm_ipc_store(&shared->inputOwned, input.owned());
     if (!input.owned())
@@ -371,7 +378,7 @@ extern "C" __attribute__((visibility("default"))) int64_t fm_linux_attach() {
         return -EPERM;
     if (fm_ipc_load(&shared->command) != FM_LINUX_IDLE || hook.hasOwnership() || pollHook.hasOwnership() ||
         retirementHook.hasOwnership() || frameHook.hasOwnership() || workerHook.hasOwnership() ||
-        evaluationHook.hasOwnership() || input.owned() || click || text || key || chat || chatRead)
+        evaluationHook.hasOwnership() || input.owned() || preparedInput.owned() || click || text || key || chat || chatRead)
         return -EBUSY;
     const auto config = shared->config;
     if (!config.entry || !config.original || !config.guiInstance || !config.callerStart ||
@@ -400,7 +407,7 @@ extern "C" __attribute__((visibility("default"))) int64_t fm_linux_cleanup() {
     if (!shared || syscall(SYS_gettid) != getpid())
         return -EPERM;
     const auto command = fm_ipc_load(&shared->command);
-    if (command == FM_LINUX_PENDING || command == FM_LINUX_RUNNING || input.owned() || click || text || key || chat ||
+    if (command == FM_LINUX_PENDING || command == FM_LINUX_RUNNING || input.owned() || preparedInput.owned() || click || text || key || chat ||
         chatRead)
         return -EBUSY;
     const int result = removeHooks();
@@ -465,6 +472,8 @@ extern "C" void fm_after_gui_logic(void *receiver, uintptr_t caller) noexcept {
         result = serviceInput(shared, true);
         if (result == EBUSY && input.owned())
             return;
+    } else if (shared->operation == FM_LINUX_INPUT_DISCARD) {
+        result = preparedInput.close();
     } else if (click || text || key || chat || chatRead) {
         // Only explicit cleanup/detach can resume owned releases. Never overwrite or replay an uncertain action.
         result = EBUSY;
@@ -495,6 +504,11 @@ extern "C" void fm_after_gui_logic(void *receiver, uintptr_t caller) noexcept {
         result = installWorker(shared);
     } else if (shared->operation == FM_LINUX_INPUT) {
         result = startInput(shared);
+    } else if (shared->operation == FM_LINUX_INPUT_PREPARE) {
+        shared->inputDescriptor = -1;
+        result = preparedInput.create(static_cast<pid_t>(shared->inputOwner));
+        if (!result)
+            shared->inputDescriptor = preparedInput.descriptor();
     } else if (shared->operation == FM_LINUX_INPUT_CONTEXT) {
         shared->inputContextSnapshot = {};
         InputContext context;

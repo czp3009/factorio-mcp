@@ -232,6 +232,12 @@ resident libraries are not built on this host.
 Gradle builds their dependencies automatically. Optimized native fixtures keep assertions enabled.
 These checks do not require Factorio, an HTTP endpoint or scenario preparation.
 
+Linux input fixtures cover resident-created sealed storage, transfer of its original owner handle, rejected admission,
+owner exit and cleanup before admission. A separate-process fixture denies the resident access to the owner's proc
+descriptors while verifying that the owner can still exchange input state through resident-created storage.
+Linux stack fixtures check active-frame unwinding across libc, PLT entries and the kernel vDSO, CFA row changes,
+bounded arithmetic CFA expressions and rejected malformed rules.
+
 Installed-file checks live in `com.hiczp.factorio.mcp.offline`; real-game acceptance lives in
 `com.hiczp.factorio.mcp.acceptance`. Gradle excludes both packages from its ordinary test run.
 Run external checks explicitly from the built test executable with the exact class filter and required environment.
@@ -359,6 +365,10 @@ Neither a tool-count check nor these selected classes establishes coverage of ev
 Use initialized HTTP sessions for exploratory menus, pause, world replacement, game exit, MCP restart and mixed reads.
 Prefer structured queries and widget actions. Retain requests/replies and any required game screenshots under `temp/`.
 Do not force focus, simulate OS input or inspect the desktop without testing permission.
+
+For startup admission, issue attach during initial resource loading and verify rejection without a resident mapping.
+After initialization, verify ordinary attachment and repeated detach/reattach. Measure readiness metadata analysis
+separately from interrupted-thread inspection and the subsequent frontend safe-point wait.
 
 Check cancellation during long input, terminal aborts for queued observations and detach cleanup. On game exit,
 verify detached status and local resource release. Restarting an unchanged MCP must initially report detached;

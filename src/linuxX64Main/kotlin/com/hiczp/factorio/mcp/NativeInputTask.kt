@@ -12,10 +12,9 @@ internal class NativeInputTask(
     request: InputSequenceRequest,
     keys: (List<String>) -> List<UInt>,
     alive: () -> Boolean,
+    storage: SharedMapping,
 ) : GameInputTask {
-    private var mapping: SharedMapping? = null
-    val descriptorNumber: Int
-        get() = checkNotNull(mapping) { "Input task is closed" }.descriptorNumber
+    private var mapping: SharedMapping? = storage
 
     private fun task(): CPointer<FmLinuxInputTask> =
         checkNotNull(mapping) { "Input task is closed" }.memory.reinterpret()
@@ -44,14 +43,17 @@ internal class NativeInputTask(
         )
 
     init {
-        require(pid > 0)
-        val entries = resolveInputTaskEntries(request, keys)
-        require(entries.size <= MAX_INPUT_ENTRIES)
         try {
-            mapping = SharedMapping.create(sizeOf<FmLinuxInputTask>())
+            require(pid > 0 && storage.size == sizeOf<FmLinuxInputTask>())
+            val entries = resolveInputTaskEntries(request, keys)
+            require(entries.size <= MAX_INPUT_ENTRIES)
             val wire = task().pointed
-            wire.ownerPid = getpid().toUInt()
-            wire.targetPid = pid.toUInt()
+            require(wire.ownerPid == getpid().toUInt() && wire.targetPid == pid.toUInt()) {
+                "Prepared input storage belongs to another process"
+            }
+            require(fm_linux_input_state(wire.ptr) == 0u && wire.cancel == 0u && wire.count == 0u) {
+                "Prepared input storage is already used"
+            }
             wire.stopPrevious = if (request.stopPrevious) 1u else 0u
             wire.count = entries.size.toUInt()
             entries.forEachIndexed { index, entry ->

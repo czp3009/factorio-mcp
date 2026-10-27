@@ -43,7 +43,9 @@ enum FmLinuxOperation {
     FM_LINUX_SCREENSHOT = 13,
     FM_LINUX_WORKER = 14,
     FM_LINUX_INPUT = 15,
-    FM_LINUX_INPUT_CANCEL = 16
+    FM_LINUX_INPUT_CANCEL = 16,
+    FM_LINUX_INPUT_PREPARE = 17,
+    FM_LINUX_INPUT_DISCARD = 18
 };
 
 // Raw same-callback scalar observations only. Borrowed game pointers never cross the native wire.

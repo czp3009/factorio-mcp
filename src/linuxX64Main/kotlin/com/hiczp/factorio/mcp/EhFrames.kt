@@ -10,6 +10,7 @@ internal class EhFrames(private val image: ElfImage) {
         val pointerEncoding: Int,
         val augmented: Boolean,
         val instructions: BinaryView,
+        val signalFrame: Boolean = false,
     )
 
     data class Frame(
@@ -99,6 +100,7 @@ internal class EhFrames(private val image: ElfImage) {
             "Unsupported x64 unwind register or alignment"
         }
         var encoding = 0
+        var signalFrame = false
         if (augmentation.isNotEmpty()) {
             val length = record.uleb()
             val address = section.address + recordStart + record.position
@@ -116,7 +118,7 @@ internal class EhFrames(private val image: ElfImage) {
                         pointer(data, personalityEncoding and 0x7f, address)
                     }
                     'R' -> encoding = data.unsigned(1).toInt()
-                    'S' -> Unit
+                    'S' -> signalFrame = true
                     else -> error("Unsupported unwind augmentation: $flag")
                 }
             }
@@ -130,6 +132,7 @@ internal class EhFrames(private val image: ElfImage) {
             encoding,
             augmentation.isNotEmpty(),
             record.block(record.remaining),
+            signalFrame,
         )
     }
 

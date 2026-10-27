@@ -9,7 +9,7 @@
 class InputTaskSession {
   public:
     explicit InputTaskSession(ViewLifetime &lifetime, InputTaskContext::Reader reader = readInputContext);
-    int start(const FmLinuxInputContextConfig &config, pid_t owner, int descriptor, pid_t thread, uintptr_t caller,
+    int start(const FmLinuxInputContextConfig &config, InputTaskMapping &prepared, pid_t thread, uintptr_t caller,
               InputEmitter &emitter);
 
     bool owned() const {

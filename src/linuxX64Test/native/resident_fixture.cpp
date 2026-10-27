@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fcntl.h>
 #include <stdexcept>
 #include <string>
 #include <sys/mman.h>
@@ -209,6 +210,30 @@ int main(int argc, char **argv) {
     request(999, false);
     invoke(&gui);
     consume(-ENOTSUP);
+    shared->inputOwner = getpid();
+    request(FM_LINUX_INPUT_PREPARE, true);
+    invoke(&gui);
+    consume(-ECANCELED);
+    request(FM_LINUX_INPUT_PREPARE, false);
+    invoke(&gui);
+    consume(0);
+    const int preparedDescriptor = shared->inputDescriptor;
+    require(preparedDescriptor >= 0, "input storage was not prepared");
+    request(FM_LINUX_INPUT_PREPARE, false);
+    invoke(&gui);
+    consume(-EALREADY);
+    require(fcntl(preparedDescriptor, F_GETFD) >= 0, "duplicate preparation lost storage ownership");
+    shared->inputDescriptor = preparedDescriptor;
+    request(FM_LINUX_INPUT, false);
+    invoke(&gui);
+    consume(-EINVAL);
+    request(FM_LINUX_INPUT_DISCARD, true);
+    invoke(&gui);
+    consume(0);
+    require(fcntl(preparedDescriptor, F_GETFD) == -1 && errno == EBADF, "rejected input storage leaked");
+    request(FM_LINUX_INPUT_DISCARD, true);
+    invoke(&gui);
+    consume(0);
     request(FM_LINUX_INPUT_CONTEXT, false);
     invoke(&gui);
     consume(-EINVAL);
@@ -408,10 +433,17 @@ int main(int argc, char **argv) {
     require(mprotect(page, pageSize, PROT_READ | PROT_WRITE) == 0, "cannot restore owned retirement entry");
     table[8] = reinterpret_cast<uintptr_t>(delayedRetirement);
     require(mprotect(page, pageSize, PROT_READ) == 0, "cannot restore synthetic protection");
+    shared->inputOwner = getpid();
+    request(FM_LINUX_INPUT_PREPARE, false);
+    invoke(&gui);
+    consume(0);
+    const int detachedDescriptor = shared->inputDescriptor;
+    require(fm_linux_cleanup() == -EBUSY, "direct cleanup discarded prepared input storage");
     request(FM_LINUX_DETACH, true);
     invoke(&gui);
     consume(0);
     require(!shared->attached && !shared->pointerOwned && !shared->protectionOwned, "detach retained ownership");
+    require(fcntl(detachedDescriptor, F_GETFD) == -1 && errno == EBADF, "detach leaked prepared input storage");
     require(table[2] == originalTable[0], "detach did not restore original pointer");
     require(table[8] == reinterpret_cast<uintptr_t>(&retire), "detach did not restore retirement pointer");
     delayedRetirement(&retirements);

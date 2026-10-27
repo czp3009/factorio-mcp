@@ -33,17 +33,17 @@ int readContext(const FmLinuxInputContextConfig &, const uint32_t *cancel, Input
 }
 
 struct Wire {
+    InputTaskMapping prepared;
     int descriptor;
     FmLinuxInputTask *task;
 
-    Wire() {
-        descriptor = syscall(SYS_memfd_create, "factorio-mcp-input-session", MFD_CLOEXEC | MFD_ALLOW_SEALING);
-        assert(descriptor >= 0 && ftruncate(descriptor, sizeof(FmLinuxInputTask)) == 0);
-        assert(fcntl(descriptor, F_ADD_SEALS, F_SEAL_SHRINK | F_SEAL_GROW) == 0);
+    explicit Wire(pid_t owner = getpid()) {
+        assert(prepared.create(owner) == 0);
+        descriptor = fcntl(prepared.descriptor(), F_DUPFD_CLOEXEC, 0);
+        assert(descriptor >= 0);
         void *view = mmap(nullptr, sizeof(FmLinuxInputTask), PROT_READ | PROT_WRITE, MAP_SHARED, descriptor, 0);
         assert(view != MAP_FAILED);
         task = static_cast<FmLinuxInputTask *>(view);
-        task->ownerPid = task->targetPid = getpid();
         task->count = 1;
         task->entries[0].kind = 0;
         task->entries[0].code = 42;
@@ -92,7 +92,7 @@ struct Fixture {
     Wire wire;
 
     void start() {
-        assert(session.start({}, getpid(), wire.descriptor, getpid(), caller, emitter) == 0);
+        assert(session.start({}, wire.prepared, getpid(), caller, emitter) == 0);
         assert(session.owned() && lifetime.owned() && fm_linux_input_state(wire.task) == 1);
     }
 
@@ -114,7 +114,7 @@ int main() {
         Fixture f;
         f.start();
         Wire second;
-        assert(f.session.start({}, getpid(), second.descriptor, getpid(), caller, f.emitter) == EBUSY);
+        assert(f.session.start({}, second.prepared, getpid(), caller, f.emitter) == EBUSY);
         assert(fm_linux_input_state(second.task) == 0);
         assert(f.session.before(current.source, caller + 1) == 0);
         std::thread unrelated([&] { assert(f.session.before(current.source, caller) == 0); });
@@ -129,7 +129,7 @@ int main() {
         assert(fm_linux_input_state(f.wire.task) == 2 && fm_linux_input_ticks(f.wire.task) == 2);
         assert(fm_linux_input_completed(f.wire.task) == 1 && f.emitter.up == 1 && !f.emitter.held);
         assert(f.session.frontend() == 0 && !f.session.owned() && !f.lifetime.owned());
-        assert(f.session.start({}, getpid(), second.descriptor, getpid(), caller, f.emitter) == 0);
+        assert(f.session.start({}, second.prepared, getpid(), caller, f.emitter) == 0);
         f.session.cancel();
         assert(f.session.frontend() == 0 && fm_linux_input_state(second.task) == 3);
         assert(fm_linux_input_state(f.wire.task) == 2); // Replacement does not overwrite a previous result.
@@ -180,14 +180,14 @@ int main() {
             f.wire.task->entries[0].intervalCount = FM_INPUT_INTERVALS + 1;
         if (invalid == 4)
             f.wire.task->reserved = 1;
-        assert(f.session.start({}, getpid(), f.wire.descriptor, getpid(), caller, f.emitter) == EINVAL);
+        assert(f.session.start({}, f.wire.prepared, getpid(), caller, f.emitter) == EINVAL);
         assert(!f.session.owned() && !f.lifetime.owned() && fm_linux_input_state(f.wire.task) == 0);
         assert(!f.emitter.down && !f.emitter.up);
     }
     {
         Fixture f;
         fm_linux_input_cancel(f.wire.task);
-        assert(f.session.start({}, getpid(), f.wire.descriptor, getpid(), caller, f.emitter) == ECANCELED);
+        assert(f.session.start({}, f.wire.prepared, getpid(), caller, f.emitter) == ECANCELED);
         assert(!f.session.owned() && !f.lifetime.owned() && !f.emitter.down);
     }
     {
@@ -207,7 +207,7 @@ int main() {
     {
         Fixture f;
         f.wire.task->count = 0;
-        assert(f.session.start({}, getpid(), f.wire.descriptor, 0, 0, f.emitter) == 0);
+        assert(f.session.start({}, f.wire.prepared, 0, 0, f.emitter) == 0);
         assert(fm_linux_input_state(f.wire.task) == 2 && !f.session.owned() && !f.lifetime.owned());
         assert(!f.emitter.down && !f.emitter.up);
     }
@@ -220,7 +220,6 @@ int main() {
         if (!child) {
             close(ready[0]);
             close(finish[1]);
-            f.wire.task->ownerPid = getpid();
             const char signal = 1;
             assert(write(ready[1], &signal, 1) == 1);
             char received;
@@ -231,14 +230,15 @@ int main() {
         close(finish[0]);
         char signal;
         assert(read(ready[0], &signal, 1) == 1);
-        assert(f.session.start({}, child, f.wire.descriptor, getpid(), caller, f.emitter) == 0);
+        Wire ownedWire(child);
+        assert(f.session.start({}, ownedWire.prepared, getpid(), caller, f.emitter) == 0);
         f.tick();
         assert(f.emitter.held);
         assert(write(finish[1], &signal, 1) == 1);
         int status;
         assert(waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 0);
         assert(f.session.frontend() == 0 && !f.session.owned() && !f.lifetime.owned());
-        assert(fm_linux_input_state(f.wire.task) == 3 && f.emitter.up == 1 && !f.emitter.held);
+        assert(fm_linux_input_state(ownedWire.task) == 3 && f.emitter.up == 1 && !f.emitter.held);
         close(ready[0]);
         close(finish[1]);
     }

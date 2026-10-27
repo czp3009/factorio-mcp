@@ -2,19 +2,24 @@
 
 package com.hiczp.factorio.mcp
 
-import com.hiczp.factorio.mcp.linuxbridge.*
-import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
-import kotlin.test.assertFalse
-import kotlin.test.assertTrue
+import com.hiczp.factorio.mcp.linuxbridge.FmLinuxInputTask
+import com.hiczp.factorio.mcp.linuxbridge.fm_ipc_store
+import com.hiczp.factorio.mcp.linuxbridge.fm_linux_input_state
+import com.hiczp.factorio.mcp.linuxbridge.fm_linux_input_state_word
 import kotlinx.cinterop.*
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import platform.posix.getpid
+import kotlin.test.*
 
 class NativeInputTaskTest {
+    private fun storage() = SharedMapping.create(sizeOf<FmLinuxInputTask>()).also {
+        val wire = it.memory.reinterpret<FmLinuxInputTask>().pointed
+        wire.ownerPid = getpid().toUInt()
+        wire.targetPid = getpid().toUInt()
+    }
+
     @Test
     fun retainsIndependentMappedProgressAndPublishesCooperativeCancellation() = runBlocking {
         val request =
@@ -22,9 +27,11 @@ class NativeInputTaskTest {
                 listOf(InputEntry(InputControl.Keyboard("W"), listOf(InputInterval(0, 2)))),
                 true,
             )
-        val task = NativeInputTask(getpid(), request, { listOf(42u) }, { true })
+        val storage = storage()
+        val descriptor = storage.descriptorNumber
+        val task = NativeInputTask(getpid(), request, { listOf(42u) }, { true }, storage)
         SharedMapping.open(
-                "/proc/${getpid()}/fd/${task.descriptorNumber}",
+            "/proc/${getpid()}/fd/$descriptor",
                 sizeOf<FmLinuxInputTask>(),
             )
             .use { resident ->
@@ -44,7 +51,7 @@ class NativeInputTaskTest {
                 assertFalse(result.completed)
                 assertEquals(1, result.completedEntries)
                 assertEquals(3L, result.evaluatedTicks)
-                assertFailsWith<IllegalStateException> { task.descriptorNumber }
+                assertFailsWith<IllegalStateException> { storage.descriptorNumber }
                 // The resident owns an independent mapping even after Kotlin releases its local
                 // resources.
                 assertEquals(3u, fm_linux_input_state(wire.ptr))
@@ -54,15 +61,18 @@ class NativeInputTaskTest {
 
     @Test
     fun closesRejectedAdmissionWithoutCancelingAnUnownedTask() = runBlocking {
+        val storage = storage()
+        val descriptor = storage.descriptorNumber
         val task =
             NativeInputTask(
                 getpid(),
                 InputSequenceRequest(emptyList(), true),
                 { emptyList() },
                 { true },
+                storage,
             )
         SharedMapping.open(
-                "/proc/${getpid()}/fd/${task.descriptorNumber}",
+            "/proc/${getpid()}/fd/$descriptor",
                 sizeOf<FmLinuxInputTask>(),
             )
             .use { resident ->
@@ -73,5 +83,22 @@ class NativeInputTaskTest {
                 assertEquals(0u, wire.pointed.cancel)
                 assertTrue(resident.size > 0)
             }
+    }
+
+    @Test
+    fun rejectsForeignOrUsedPreparedStorageAndClosesItsLocalHandle() {
+        repeat(3) { invalid ->
+            val storage = storage()
+            val wire = storage.memory.reinterpret<FmLinuxInputTask>().pointed
+            when (invalid) {
+                0 -> wire.ownerPid += 1u
+                1 -> wire.targetPid += 1u
+                else -> wire.state = 1u
+            }
+            assertFailsWith<IllegalArgumentException> {
+                NativeInputTask(getpid(), InputSequenceRequest(emptyList(), false), { emptyList() }, { true }, storage)
+            }
+            assertFailsWith<IllegalStateException> { storage.descriptorNumber }
+        }
     }
 }
