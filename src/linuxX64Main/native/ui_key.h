@@ -39,7 +39,7 @@ class UiKeyCommand {
 
     int start(uintptr_t instance, void *gui, const FmLinuxUiLayout &ui, const FmLinuxUiKeyConfig &config,
               const FmLinuxUiSelector &selector, const FmLinuxUiKeyRequest &request, const uint32_t *cancel,
-              FmLinuxUiSnapshot &scratch);
+              UiSnapshot &scratch);
     int finish();
     // An error retains any owed releases. Only commit a gesture edge after the native event was written.
     int poll(void *event, bool canceled, bool &produced);

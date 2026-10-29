@@ -97,7 +97,7 @@ template<unsigned Padding> void run() {
     layout.enabled = offsetof(P, enabled);
     layout.spectating = offsetof(P, spectating);
     layout.cutscene = offsetof(P, cutscene);
-    auto result = std::make_unique<FmLinuxControlsSnapshot>();
+    auto result = std::make_unique<ControlsSnapshot>();
     auto observe = [&]() { return snapshotControls(layout, &cancel, *result); };
     assert(validControlsLayout(layout) && observe() == 0);
     assert(result->count == 3 && result->registryCount == 3 && !result->truncated);
@@ -174,7 +174,7 @@ template<unsigned Padding> void run() {
     layout.cutscene = layout.enabled;
     assert(observe() == EINVAL);
     layout = good;
-    std::vector<C> many(FM_LINUX_MAX_CONTROLS + 1);
+    std::vector<C> many(20000);
     std::vector<C*> pointers;
     for (auto& value : many) {
         value.name = "row";
@@ -182,8 +182,8 @@ template<unsigned Padding> void run() {
         pointers.push_back(&value);
     }
     registry = {reinterpret_cast<uintptr_t>(pointers.data()), reinterpret_cast<uintptr_t>(pointers.data() + pointers.size())};
-    assert(observe() == 0 && result->count == FM_LINUX_MAX_CONTROLS &&
-        result->registryCount == FM_LINUX_MAX_CONTROLS + 1 && result->truncated);
+    assert(observe() == 0 && result->count == many.size() &&
+        result->registryCount == many.size() && !result->truncated);
 }
 
 int main() {

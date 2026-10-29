@@ -19,5 +19,5 @@ int checkUiModal(uintptr_t guiInstance, const FmLinuxUiLayout &ui, const FmLinux
                  const UiTarget &target);
 int selectUiActionTarget(uintptr_t guiInstance, void *gui, const FmLinuxUiLayout &ui,
                          const FmLinuxModalLayout &modal, const FmLinuxUiSelector &selector,
-                         const uint32_t *cancel, FmLinuxUiSnapshot &snapshot, UiTarget &output);
+                         const uint32_t *cancel, UiSnapshot &snapshot, UiTarget &output);
 #endif

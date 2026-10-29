@@ -2,7 +2,9 @@
 #include <cassert>
 #include <cstring>
 #include <memory>
+#include <limits>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace {
@@ -130,21 +132,24 @@ int main() {
     bind(LuaPushString, string);
     bind(LuaProtectedCall, call);
     bind(LuaToString, text);
-    FmWorldQuery query{};
+    auto queryStorage = std::make_unique<FmWorldQuery>();
+    auto &query = *queryStorage;
+    ObservationStorage storage;
     strcpy_s(query.source, "return ...");
     query.sourceSize = 10;
     strcpy_s(query.arguments, "{}");
     query.argumentsSize = 2;
     auto result = std::make_unique<FmResult>();
-    queryWorld(symbols, &game, query, *result);
-    assert(state.top == 0 && result->worldSize == strlen(output) && std::string(result->worldJson) == output);
+    queryWorld(symbols, &game, query, *result, storage);
+    assert(state.top == 0 && result->worldSize == strlen(output) &&
+           std::string(storage.worldJson.begin(), storage.worldJson.end()) == output);
     query.includeViewport = 1;
-    queryWorld(symbols, &game, query, *result);
+    queryWorld(symbols, &game, query, *result, storage);
     assert(state.top == 0);
     query.includeViewport = 0;
     auto rejected = [&] {
         try {
-            queryWorld(symbols, &game, query, *result);
+            queryWorld(symbols, &game, query, *result, storage);
             return false;
         } catch (const std::runtime_error &) {
             return true;
@@ -156,7 +161,15 @@ int main() {
     callStatus = 1;
     assert(rejected() && state.top == 0);
     callStatus = 0;
-    outputSize = FM_MAX_WORLD_JSON;
+    std::string large(17 * 1024 * 1024 + 7, 'x');
+    output = large.data();
+    outputSize = large.size();
+    queryWorld(symbols, &game, query, *result, storage);
+    assert(state.top == 0 && storage.worldJson.size() == large.size());
+    assert(std::string(storage.worldJson.begin(), storage.worldJson.end()) == large);
+    large[0] = 'y';
+    assert(storage.worldJson.front() == 'x');
+    outputSize = size_t(std::numeric_limits<int>::max()) + 1;
     assert(rejected() && state.top == 0);
     outputSize = 0;
     state.top = 1;

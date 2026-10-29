@@ -2,18 +2,18 @@
 #include "../../nativeMain/native/widget_selection.h"
 
 namespace {
-std::vector<fm::ui::Node> selectionNodes(const FmResult &result) {
-    fm::ui::require(result.count >= 0 && result.count <= FM_MAX_NODES, "Invalid UI node count");
+std::vector<fm::ui::Node> selectionNodes(const FmResult &result, const ObservationStorage &storage) {
+    fm::ui::require(result.count >= 0 && size_t(result.count) == storage.nodes.size(), "Invalid UI node count");
     std::vector<fm::ui::Node> nodes(result.count);
     for (int index = 0; index < result.count; ++index) {
-        const auto &source = result.nodes[index];
+        const auto &source = storage.nodes[index];
         auto &node = nodes[index];
         node.depth = source.depth;
         node.enabled = source.enabled != 0;
         if (source.properties & 128)
             node.visible = source.visible != 0;
         node.type = {fm::ui::terminated(source.type), true, (source.truncated & 2) != 0};
-        node.text = {fm::ui::terminated(source.text), true, (source.truncated & 1) != 0};
+        node.text = {observationText(source.text), true, (source.truncated & 1) != 0};
         node.prototypeName = {fm::ui::terminated(source.prototypeName), (source.properties & 32) != 0,
                               (source.identityTruncated & 1) != 0};
         node.prototypeType = {fm::ui::terminated(source.prototypeType), (source.properties & 32) != 0,
@@ -44,30 +44,31 @@ fm::ui::Step selectionStep(const FmStep &source) {
 }
 } // namespace
 
-std::vector<int> observationWidgets(const FmResult &result, bool filtered) {
-    fm::ui::require(result.count >= 0 && result.count <= FM_MAX_NODES, "Invalid UI node count");
+std::vector<int> observationWidgets(const FmResult &result, const ObservationStorage &storage, bool filtered) {
+    fm::ui::require(result.count >= 0 && size_t(result.count) == storage.nodes.size(), "Invalid UI node count");
     std::vector<int> indices;
     for (int index = 0; index < result.count; ++index) {
-        if (!filtered || result.nodes[index].selected)
+        if (!filtered || storage.nodes[index].selected)
             indices.push_back(index);
     }
     if (!filtered)
         return indices;
-    const auto nodes = selectionNodes(result);
+    const auto nodes = selectionNodes(result, storage);
     return fm::ui::Tree(nodes, !result.truncated).observation(indices);
 }
 
-std::vector<int> selectWidgets(FmResult &result, const FmAction &action) {
+std::vector<int> selectWidgets(FmResult &result, ObservationStorage &storage, const FmAction &action,
+                               const volatile LONG *cancel) {
     fm::ui::require(action.count > 0 && action.count <= FM_MAX_PATH, "Invalid selector length");
-    const auto nodes = selectionNodes(result);
+    const auto nodes = selectionNodes(result, storage);
     const fm::ui::Tree tree(nodes, !result.truncated);
     std::vector<fm::ui::Step> path;
     for (int index = 0; index < action.count; ++index)
         path.push_back(selectionStep(action.path[index]));
     for (int index = 0; index < result.count; ++index)
-        result.nodes[index].selected = 0;
-    auto selected = tree.select(path, [] { return false; });
+        storage.nodes[index].selected = 0;
+    auto selected = tree.select(path, [cancel] { return cancel && *cancel; });
     for (int index : selected)
-        result.nodes[index].selected = 1;
+        storage.nodes[index].selected = 1;
     return selected;
 }

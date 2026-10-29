@@ -2,7 +2,7 @@
 #include <cerrno>
 
 int queryWorld(const FmLinuxWorldQueryConfig &config, const FmLinuxLuaQuery &query, const uint32_t *cancel,
-               FmLinuxLuaResult &result) {
+               LuaResult &result) {
     result.size = 0;
     result.errorSize = 0;
     if (config.world.gameSize != config.player.gameSize || config.world.contextSize != config.script.contextSize)

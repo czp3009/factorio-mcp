@@ -8,29 +8,27 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-#define FM_MAX_NODES 4096
-#define FM_MAX_OPTIONS 1024
-#define FM_MAX_ICON_REFERENCES 512
-#define FM_MAX_WIDGET_OPTIONS 64
+#define FM_OBSERVATION_TEXT_BYTES (16 * 1024 * 1024)
 #define FM_INPUT_NAME_SIZE 128
 #define FM_MAX_LUA_SOURCE 131072
-#define FM_MAX_QUERY_ARGUMENTS 262144
-#define FM_MAX_WORLD_JSON (1024 * 1024)
+#define FM_MAX_QUERY_ARGUMENTS (16 * 1024 * 1024)
 #define FM_MAX_PATH 16
-#define FM_MAX_CONTROLS 1024
 #define FM_MAX_IMAGE (16 * 1024 * 1024)
-#define FM_MAX_CHAT 256
+
+typedef struct FmObservationBuffer {
+    uint64_t address, size;
+} FmObservationBuffer;
 
 typedef struct FmChatRecord {
     uint64_t identity, tick;
     uint32_t stream, playerIndex, truncated;
-    char text[4096], raw[4096], playerName[4096];
+    FmObservationBuffer text, raw, playerName;
 } FmChatRecord;
 
 typedef struct FmChatSnapshot {
     uint64_t consoleIdentity, totals[2];
     uint32_t count;
-    FmChatRecord records[FM_MAX_CHAT];
+    FmObservationBuffer records;
 } FmChatSnapshot;
 
 typedef struct FmChatRequest {
@@ -58,7 +56,7 @@ typedef struct FmNode {
     int32_t x, y, width, height;
     int32_t truncated, selected;
     char type[160];
-    char text[1024];
+    FmObservationBuffer text;
     uint32_t properties;
     int32_t checkState, toggled, selectedIndex;
     double value, minimum, maximum, valueStep;
@@ -83,7 +81,7 @@ typedef struct FmNode {
 } FmNode;
 
 typedef struct FmOption {
-    char text[512];
+    FmObservationBuffer text;
     uint32_t truncated;
 } FmOption;
 
@@ -105,13 +103,12 @@ typedef struct FmResult {
     uint32_t imageSize, imageWidth, imageHeight;
     char message[512];
     uint32_t controlCount, registryCount;
-    FmControl controls[FM_MAX_CONTROLS];
-    FmNode nodes[FM_MAX_NODES];
+    FmObservationBuffer controls, nodes;
     uint32_t optionCount;
-    FmOption options[FM_MAX_OPTIONS];
+    FmObservationBuffer options;
     unsigned char image[FM_MAX_IMAGE];
     uint32_t worldSize;
-    char worldJson[FM_MAX_WORLD_JSON];
+    FmObservationBuffer worldJson;
     FmChatSnapshot chat;
 } FmResult;
 

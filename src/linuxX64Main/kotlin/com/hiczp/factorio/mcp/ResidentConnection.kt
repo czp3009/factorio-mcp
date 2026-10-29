@@ -6,6 +6,8 @@ import com.hiczp.factorio.mcp.linuxbridge.*
 import kotlinx.cinterop.*
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import platform.posix.*
 
@@ -41,6 +43,14 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
     private var ready = false
     private var closed = false
     private var safeStop = false
+
+    private suspend fun observationReader(): (Long, Int) -> ByteArray {
+        val context = currentCoroutineContext()
+        return { address, size ->
+            context.ensureActive()
+            process.readMemory(address, size)
+        }
+    }
 
     fun alive(): Boolean = !closed && process.alive()
 
@@ -185,8 +195,9 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
         require(operation in 1..3) { "This operation is not implemented by the Linux adapter yet" }
         val connection = checkNotNull(channel)
         return if (operation == 3) {
-            require(limit in 1..FM_LINUX_MAX_NODES)
+            require(limit > 0)
             val widgets = uiLayout()
+            val readObservation = observationReader()
             connection.execute(
                 FM_LINUX_UI,
                 {
@@ -201,6 +212,7 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
                         true,
                         result.frame.toLong(),
                         shared.snapshot.readWidgets(
+                            readObservation,
                             widgets.quality.fields.comparisons,
                             widgets.switchNames.names,
                             widgets.progressNames,
@@ -325,6 +337,7 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
     }
 
     private suspend fun inputBindings(): GameSnapshot {
+        val readObservation = observationReader()
         val metadata =
             controlLayouts
                 ?: process
@@ -341,7 +354,7 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
                 { shared, result ->
                     check(result.code == 0) { "Native input binding read failed: ${result.code}" }
                     metadata
-                        .read(shared.controlsSnapshot, result.frame.toLong())
+                        .read(shared.controlsSnapshot, result.frame.toLong(), readObservation)
                         .copy(state = result.state, paused = result.paused)
                 },
             )
@@ -697,6 +710,7 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
     }
 
     private suspend fun readChat(): GameSnapshot {
+        val readObservation = observationReader()
         val connection = checkNotNull(channel)
         check(!connection.actionOwned) { "Previous native cleanup is incomplete; retry detach" }
         val metadata =
@@ -721,32 +735,34 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
                 }
                 val output = shared.chatSnapshot
                 require(
-                    output.count <= FM_LINUX_CHAT_RECORDS.toUInt() && output.consoleIdentity != 0uL
+                    output.count <= Int.MAX_VALUE.toUInt() && output.consoleIdentity != 0uL
                 )
                 val totals =
-                    List(2) { output.totals[it].also { count -> require(count <= 65536uL) } }
+                    List(2) { output.totals[it].also { count -> require(count <= Int.MAX_VALUE.toULong()) } }
                 val records =
-                    List(output.count.toInt()) { index ->
-                        val row = output.records[index]
+                    output.records.readObservationRecords<FmLinuxChatRecord, ChatRecord>(output.count, readObservation) { row ->
                         require(
                             row.identity != 0uL &&
                                 row.stream <= 1u &&
                                 row.truncated <= 7u &&
                                 row.playerIndex < (1u shl (metadata.player.index.width * 8)) &&
-                                row.textSize < FM_LINUX_CHAT_RECORD_BYTES.toUInt() &&
-                                row.rawSize < FM_LINUX_CHAT_RECORD_BYTES.toUInt() &&
-                                row.playerNameSize < FM_LINUX_CHAT_RECORD_BYTES.toUInt()
+                                row.textSize <= FM_LINUX_CHAT_RECORD_BYTES.toUInt() &&
+                                row.rawSize <= FM_LINUX_CHAT_RECORD_BYTES.toUInt() &&
+                                row.playerNameSize <= FM_LINUX_CHAT_RECORD_BYTES.toUInt()
                         )
                         ChatRecord(
                             row.identity,
                             row.tick,
                             row.stream.toInt(),
                             row.playerIndex.toInt(),
-                            row.text.readBytes(row.textSize.toInt()).decodeToString(),
-                            row.raw.readBytes(row.rawSize.toInt()).decodeToString(),
+                            row.text.also { it.validateObservationBuffer(row.textSize.toLong()) }
+                                .readObservationBytes(readObservation).decodeToString(),
+                            row.raw.also { it.validateObservationBuffer(row.rawSize.toLong()) }
+                                .readObservationBytes(readObservation).decodeToString(),
                             row.truncated and 1u != 0u,
                             row.truncated and 2u != 0u,
-                            row.playerName.readBytes(row.playerNameSize.toInt()).decodeToString(),
+                            row.playerName.also { it.validateObservationBuffer(row.playerNameSize.toLong()) }
+                                .readObservationBytes(readObservation).decodeToString(),
                             row.truncated and 4u != 0u,
                         )
                     }
@@ -754,7 +770,7 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
                     records.map { it.identity }.distinct().size == records.size &&
                         (0..1).all { stream ->
                             records.count { it.stream == stream }.toULong() ==
-                                minOf(totals[stream], (FM_LINUX_CHAT_RECORDS / 2).toULong())
+                                totals[stream]
                         }
                 )
                 GameSnapshot(
@@ -809,6 +825,7 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
     }
 
     suspend fun query(query: WorldQuery): GameSnapshot {
+        val readObservation = observationReader()
         check(ready && process.alive()) { "Linux attachment is not ready" }
         val metadata =
             worldMetadata
@@ -849,7 +866,7 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
                 { shared, result ->
                     val output = shared.queryResult
                     require(
-                        output.size < FM_LINUX_QUERY_RESULT.toUInt() &&
+                        output.size <= Int.MAX_VALUE.toUInt() &&
                             output.errorSize < FM_LINUX_QUERY_ERROR.toUInt()
                     ) {
                         "Native world-query result exceeds bounds"
@@ -867,7 +884,8 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
                         true,
                         result.frame.toLong(),
                         paused = result.paused,
-                        worldJson = output.text.readBytes(output.size.toInt()).decodeToString(),
+                        worldJson = output.text.also { it.validateObservationBuffer(output.size.toLong()) }
+                            .readObservationBytes(readObservation).decodeToString(),
                     )
                 },
             )

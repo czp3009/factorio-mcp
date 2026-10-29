@@ -128,9 +128,9 @@ class ChatTest {
         for (args in listOf(
             "{\"offset\":-1}", "{\"offset\":\"0\"}", "{\"offset\":null}",
             "{\"offset\":{}}", "{\"offset\":{\"tick\":1,\"counts\":[1]}}",
-            "{\"offset\":{\"tick\":1,\"counts\":[-1,0]}}", "{\"offset\":{\"tick\":1,\"counts\":[65537,0]}}",
+            "{\"offset\":{\"tick\":1,\"counts\":[-1,0]}}",
             "{\"timeout\":-1}", "{\"timeout\":0.5}", "{\"timeout\":\"1\"}",
-            "{\"limit\":0}", "{\"limit\":129}", "{\"after\":\"abc:7\"}",
+            "{\"limit\":0}", "{\"after\":\"abc:7\"}",
         )) {
             assertFails { parseChatRead(Json.parseToJsonElement(args).jsonObject) }
         }

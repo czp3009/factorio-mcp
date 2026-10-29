@@ -2,17 +2,20 @@
 
 package com.hiczp.factorio.mcp
 
-import com.hiczp.factorio.mcp.linuxbridge.FmLinuxShared
+import com.hiczp.factorio.mcp.linuxbridge.*
+import platform.posix.memset
 import kotlin.test.*
 import kotlinx.cinterop.*
 
 class ResidentSnapshotTest {
     @Test
     fun copiesRawQualityConditionsAndKeepsMissingRegistryValuesDistinct() {
-        SharedMapping.create(sizeOf<FmLinuxShared>()).use { mapping ->
-            val snapshot = mapping.memory.reinterpret<FmLinuxShared>().pointed.snapshot
+        memScoped {
+            val snapshot = alloc<FmLinuxUiSnapshot>()
+            memset(snapshot.ptr, 0, sizeOf<FmLinuxUiSnapshot>().toULong())
             snapshot.count = 1u
-            val node = snapshot.nodes[0]
+            val nativeNodes = observationArray<FmLinuxUiNode>(snapshot.nodes, 1)
+            val node = nativeNodes[0]
             node.parent = -1
             val condition = node.quality
             condition.available = 1u
@@ -23,7 +26,7 @@ class ResidentSnapshotTest {
             "raw".encodeToByteArray().forEachIndexed { index, byte -> condition.name[index] = byte }
             fun copied() =
                 assertNotNull(
-                    snapshot.readWidgets(listOf("=", "≥")).single().properties?.qualityCondition
+                    snapshot.readWidgets(::readFixtureObservation, listOf("=", "≥")).single().properties?.qualityCondition
                 )
             val value = copied()
             assertEquals(WidgetQualityCondition(0, 1, "≥", "raw", false, "present"), value)
@@ -47,14 +50,16 @@ class ResidentSnapshotTest {
 
     @Test
     fun copiesRawElementsAndPreservesAbsentMaterializedItems() {
-        SharedMapping.create(sizeOf<FmLinuxShared>()).use { mapping ->
-            val snapshot = mapping.memory.reinterpret<FmLinuxShared>().pointed.snapshot
+        memScoped {
+            val snapshot = alloc<FmLinuxUiSnapshot>()
+            memset(snapshot.ptr, 0, sizeOf<FmLinuxUiSnapshot>().toULong())
             snapshot.count = 1u
-            val node = snapshot.nodes[0]
+            val nativeNodes = observationArray<FmLinuxUiNode>(snapshot.nodes, 1)
+            val node = nativeNodes[0]
             node.parent = -1
             val element = node.element
             element.available = 1u
-            fun copied() = assertNotNull(snapshot.readWidgets().single().properties?.element)
+            fun copied() = assertNotNull(snapshot.readWidgets(::readFixtureObservation, ).single().properties?.element)
             assertEquals(WidgetElement(false, null, null), copied())
             element.flags = 3u
             element.count = UInt.MAX_VALUE
@@ -90,10 +95,12 @@ class ResidentSnapshotTest {
 
     @Test
     fun copiesPrototypeIdentityWithoutReplacingRawNamesOrMissingValues() {
-        SharedMapping.create(sizeOf<FmLinuxShared>()).use { mapping ->
-            val snapshot = mapping.memory.reinterpret<FmLinuxShared>().pointed.snapshot
+        memScoped {
+            val snapshot = alloc<FmLinuxUiSnapshot>()
+            memset(snapshot.ptr, 0, sizeOf<FmLinuxUiSnapshot>().toULong())
             snapshot.count = 1u
-            val node = snapshot.nodes[0]
+            val nativeNodes = observationArray<FmLinuxUiNode>(snapshot.nodes, 1)
+            val node = nativeNodes[0]
             node.parent = -1
             node.identity.available = 1u
             val prototype = node.identity.prototype
@@ -104,56 +111,60 @@ class ResidentSnapshotTest {
             prototype.name[2] = 'y'.code.toByte()
             prototype.typeSize = 1u
             prototype.type[0] = 'T'.code.toByte()
-            val properties = assertNotNull(snapshot.readWidgets().single().properties)
+            val properties = assertNotNull(snapshot.readWidgets(::readFixtureObservation, ).single().properties)
             assertEquals(WidgetPrototype("x\u0000y", "T", true, false), properties.prototype)
             assertEquals(WidgetPrototype(null, null), properties.quality)
             prototype.name[0] = 0
             assertEquals("x\u0000y", properties.prototype?.name)
             prototype.flags = 8u
-            assertFails { snapshot.readWidgets() }
+            assertFails { snapshot.readWidgets(::readFixtureObservation, ) }
             prototype.flags = 0u
-            assertFails { snapshot.readWidgets() }
+            assertFails { snapshot.readWidgets(::readFixtureObservation, ) }
             prototype.nameSize = 0u
             prototype.typeSize = 256u
-            assertFails { snapshot.readWidgets() }
+            assertFails { snapshot.readWidgets(::readFixtureObservation, ) }
         }
     }
 
     @Test
     fun copiesOpaqueIconReferencesWithoutImageData() {
-        SharedMapping.create(sizeOf<FmLinuxShared>()).use { mapping ->
-            val snapshot = mapping.memory.reinterpret<FmLinuxShared>().pointed.snapshot
+        memScoped {
+            val snapshot = alloc<FmLinuxUiSnapshot>()
+            memset(snapshot.ptr, 0, sizeOf<FmLinuxUiSnapshot>().toULong())
             snapshot.count = 1u
-            val node = snapshot.nodes[0]
+            val nativeNodes = observationArray<FmLinuxUiNode>(snapshot.nodes, 1)
+            val node = nativeNodes[0]
             node.parent = -1
             node.iconsAvailable = 1u
             node.iconNormal = 0
             node.iconHovered = -1
             node.iconDisabled = -2
-            val copied = snapshot.readWidgets().single().properties?.icons
+            val copied = snapshot.readWidgets(::readFixtureObservation, ).single().properties?.icons
             assertEquals(
                 WidgetIcons(WidgetIcon(0), null, WidgetIcon(null, truncated = true)),
                 copied,
             )
             node.iconNormal = 511
-            assertEquals(WidgetIcon(511), snapshot.readWidgets().single().properties?.icons?.normal)
+            assertEquals(WidgetIcon(511), snapshot.readWidgets(::readFixtureObservation, ).single().properties?.icons?.normal)
             assertEquals(WidgetIcon(0), copied?.normal)
             node.iconNormal = 512
-            assertFails { snapshot.readWidgets() }
+            assertEquals(WidgetIcon(512), snapshot.readWidgets(::readFixtureObservation, ).single().properties?.icons?.normal)
             node.iconNormal = -3
-            assertFails { snapshot.readWidgets() }
+            assertFails { snapshot.readWidgets(::readFixtureObservation, ) }
         }
     }
 
     @Test
     fun preservesSuppressedUnknownInfiniteAndNonfiniteNumbers() {
-        SharedMapping.create(sizeOf<FmLinuxShared>()).use { mapping ->
-            val snapshot = mapping.memory.reinterpret<FmLinuxShared>().pointed.snapshot
+        memScoped {
+            val snapshot = alloc<FmLinuxUiSnapshot>()
+            memset(snapshot.ptr, 0, sizeOf<FmLinuxUiSnapshot>().toULong())
             snapshot.count = 1u
-            val node = snapshot.nodes[0]
+            val nativeNodes = observationArray<FmLinuxUiNode>(snapshot.nodes, 1)
+            val node = nativeNodes[0]
             node.parent = -1
             node.numberAvailable = 1u
-            fun number() = assertNotNull(snapshot.readWidgets().single().properties?.number)
+            fun number() = assertNotNull(snapshot.readWidgets(::readFixtureObservation, ).single().properties?.number)
             assertEquals(WidgetNumber(false, null, null, null, null), number())
             node.numberFlags = 7u
             assertEquals(WidgetNumber(true, null, true, true, false), number())
@@ -173,10 +184,12 @@ class ResidentSnapshotTest {
 
     @Test
     fun copiesBoundedDropdownOptionsAndRejectsInvalidWireRanges() {
-        SharedMapping.create(sizeOf<FmLinuxShared>()).use { mapping ->
-            val snapshot = mapping.memory.reinterpret<FmLinuxShared>().pointed.snapshot
+        memScoped {
+            val snapshot = alloc<FmLinuxUiSnapshot>()
+            memset(snapshot.ptr, 0, sizeOf<FmLinuxUiSnapshot>().toULong())
             snapshot.count = 1u
-            val node = snapshot.nodes[0]
+            val nativeNodes = observationArray<FmLinuxUiNode>(snapshot.nodes, 1)
+            val node = nativeNodes[0]
             node.parent = -1
             node.dropdownAvailable = 1u
             node.selectedIndex = -1
@@ -184,43 +197,49 @@ class ResidentSnapshotTest {
             node.optionCount = 2u
             node.optionTotal = 5u
             snapshot.optionCount = 2u
-            snapshot.options[1].size = 3u
-            snapshot.options[1].text[0] = 'x'.code.toByte()
-            snapshot.options[1].text[1] = 0
-            snapshot.options[1].text[2] = 'y'.code.toByte()
-            snapshot.options[1].truncated = 1u
-            val properties = assertNotNull(snapshot.readWidgets().single().properties)
+            val nativeOptions = observationArray<FmLinuxUiOption>(snapshot.options, 2)
+            val optionText = observationArray<ByteVar>(nativeOptions[1].text, 3)
+            nativeOptions[1].size = 3u
+            optionText[0] = 'x'.code.toByte()
+            optionText[1] = 0
+            optionText[2] = 'y'.code.toByte()
+            nativeOptions[1].truncated = 1u
+            val properties = assertNotNull(snapshot.readWidgets(::readFixtureObservation, ).single().properties)
             assertEquals(-1, properties.selectedIndex)
             assertEquals(
                 WidgetOptions(listOf(WidgetOption(""), WidgetOption("x\u0000y", true)), 5),
                 properties.options,
             )
-            snapshot.options[1].text[0] = 0
+            optionText[0] = 0
             assertEquals("x\u0000y", properties.options?.values?.get(1)?.text)
             node.optionFirst = 1u
-            assertFails { snapshot.readWidgets() }
+            assertFails { snapshot.readWidgets(::readFixtureObservation, ) }
             node.optionFirst = 0u
-            snapshot.options[1].size = 512u
-            assertFails { snapshot.readWidgets() }
-            snapshot.options[1].size = 0u
+            nativeOptions[1].size = (FM_LINUX_OPTION_TEXT + 1).toUInt()
+            assertFails { snapshot.readWidgets(::readFixtureObservation, ) }
+            nativeOptions[1].size = 0u
+            nativeOptions[1].text.address = 0uL
+            nativeOptions[1].text.size = 0uL
             node.optionTotal = 1u
-            assertFails { snapshot.readWidgets() }
+            assertFails { snapshot.readWidgets(::readFixtureObservation, ) }
             node.optionsAvailable = 0u
-            assertNotNull(snapshot.readWidgets().single().properties?.optionsUnavailableReason)
+            assertNotNull(snapshot.readWidgets(::readFixtureObservation, ).single().properties?.optionsUnavailableReason)
             snapshot.optionCount = 1025u
-            assertFails { snapshot.readWidgets() }
+            assertFails { snapshot.readWidgets(::readFixtureObservation, ) }
         }
     }
 
     @Test
     fun copiesNativeTextFlagsAndCoordinatesIntoPortablePostorderNodes() {
-        SharedMapping.create(sizeOf<FmLinuxShared>()).use { mapping ->
-            val snapshot = mapping.memory.reinterpret<FmLinuxShared>().pointed.snapshot
+        memScoped {
+            val snapshot = alloc<FmLinuxUiSnapshot>()
+            memset(snapshot.ptr, 0, sizeOf<FmLinuxUiSnapshot>().toULong())
             snapshot.count = 2u
-            val root = snapshot.nodes[0]
+            val nativeNodes = observationArray<FmLinuxUiNode>(snapshot.nodes, 2)
+            val root = nativeNodes[0]
             root.parent = -1
             root.textAvailable = 1u
-            val child = snapshot.nodes[1]
+            val child = nativeNodes[1]
             child.parent = 0
             child.depth = 1u
             child.type[0] = 'T'.code.toByte()
@@ -237,11 +256,12 @@ class ResidentSnapshotTest {
             child.bounds.height = 19
             child.textAvailable = 1u
             child.textSize = 3u
+            val childText = observationArray<ByteVar>(child.text, 3)
             child.textTotal = 4u
             child.textTruncated = 1u
-            child.text[0] = 'x'.code.toByte()
-            child.text[1] = 0
-            child.text[2] = 'y'.code.toByte()
+            childText[0] = 'x'.code.toByte()
+            childText[1] = 0
+            childText[2] = 'y'.code.toByte()
             child.checkAvailable = 1u
             child.checkState = -7
             child.sliderAvailable = 1u
@@ -256,11 +276,11 @@ class ResidentSnapshotTest {
             child.switchAvailable = 1u
             child.switchState = 255u
             child.switchAllowNone = 1u
-            val nodes = snapshot.readWidgets()
+            val nodes = snapshot.readWidgets(::readFixtureObservation, )
             child.value = 123.5
             child.progressValue = 0.25
             child.bounds.x = 0
-            child.text[0] = 0
+            childText[0] = 0
             assertEquals(listOf(1, 0), nodes.map { it.depth })
             val copied = nodes[0]
             assertEquals("T", copied.type)
@@ -270,11 +290,11 @@ class ResidentSnapshotTest {
             child.switchAllowNone = 0u
             assertEquals(
                 WidgetSwitch(0, "unknown_0", false),
-                snapshot.readWidgets()[0].properties?.switch,
+                snapshot.readWidgets(::readFixtureObservation, )[0].properties?.switch,
             )
             assertEquals(
                 WidgetSwitch(0, "native_left", false),
-                snapshot.readWidgets(switchNames = listOf("native_left"))[0].properties?.switch,
+                snapshot.readWidgets(::readFixtureObservation, switchNames = listOf("native_left"))[0].properties?.switch,
             )
             assertEquals(WidgetSwitch(255, "unknown_255", true), copied.properties?.switch)
             val slider = assertNotNull(copied.properties?.slider)
@@ -285,21 +305,21 @@ class ResidentSnapshotTest {
             assertEquals(
                 "native_direction",
                 snapshot
-                    .readWidgets(progressNames = mapOf(255 to "native_direction"))[0]
+                    .readWidgets(::readFixtureObservation, progressNames = mapOf(255 to "native_direction"))[0]
                     .properties
                     ?.progress
                     ?.direction,
             )
             assertEquals("unknown_255", copied.properties?.progress?.direction)
-            assertEquals(0.25, snapshot.readWidgets()[0].properties?.progress?.value)
+            assertEquals(0.25, snapshot.readWidgets(::readFixtureObservation, )[0].properties?.progress?.value)
             assertTrue(slider.value.isNaN())
             assertEquals(Double.NEGATIVE_INFINITY, slider.minimum)
             assertEquals(Double.POSITIVE_INFINITY, slider.maximum)
             assertEquals((-0.0).toBits(), slider.step.toBits())
-            assertEquals(123.5, snapshot.readWidgets()[0].properties?.slider?.value)
+            assertEquals(123.5, snapshot.readWidgets(::readFixtureObservation, )[0].properties?.slider?.value)
             assertNull(nodes[1].properties)
             child.checkState = 2
-            assertEquals(2, snapshot.readWidgets()[0].properties?.checkState)
+            assertEquals(2, snapshot.readWidgets(::readFixtureObservation, )[0].properties?.checkState)
             assertEquals(-7, copied.properties?.checkState)
             assertEquals("x\u0000y", copied.text)
             assertEquals(
@@ -318,13 +338,13 @@ class ResidentSnapshotTest {
             assertTrue(copied.textTruncated)
             assertEquals("", nodes[1].text)
             child.textAvailable = 0u
-            assertNull(snapshot.readWidgets()[0].text)
+            assertNull(snapshot.readWidgets(::readFixtureObservation, )[0].text)
             child.parent = 1
-            assertFails { snapshot.readWidgets() }
+            assertFails { snapshot.readWidgets(::readFixtureObservation, ) }
             child.parent = 0
-            child.textSize = 1025u
-            child.textTotal = 1025u
-            assertFails { snapshot.readWidgets() }
+            child.textSize = (FM_LINUX_TEXT_SIZE + 1).toUInt()
+            child.textTotal = (FM_LINUX_TEXT_SIZE + 1).toULong()
+            assertFails { snapshot.readWidgets(::readFixtureObservation, ) }
         }
     }
 }

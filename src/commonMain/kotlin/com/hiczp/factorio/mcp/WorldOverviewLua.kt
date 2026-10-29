@@ -7,8 +7,7 @@ internal val worldOverviewLua =
     local left,top=area.left_top.x,area.left_top.y
     local right,bottom=area.right_bottom.x,area.right_bottom.y
     local width,height=right-left,bottom-top
-    assert(width>0 and height>0 and width<=4096 and height<=4096,
-      "Overview exceeds 4096 tiles per side; select an explicit bounded area")
+    assert(width>0 and height>0, "Overview requires positive area dimensions")
     if args.detail=="entities" then
       extra.area=area
       extra.viewport=viewport
@@ -22,7 +21,7 @@ internal val worldOverviewLua =
     else
     local cell=args.cell_size or math.max(32,math.ceil(width/16),math.ceil(height/16))
     local columns,rows=math.ceil(width/cell),math.ceil(height/cell)
-    assert(columns*rows<=256, "Overview exceeds 256 cells; increase cell_size or narrow the area")
+    assert(columns*rows<=2147483647, "Overview cell count exceeds integer representation")
     extra.area=area
     extra.cell_size=cell
     extra.columns=columns
@@ -32,7 +31,6 @@ internal val worldOverviewLua =
     extra.observation="live_world_aggregation"
     extra.entity_assignment="center_in_cell"
     extra.coverage_basis="intersecting_chunks"
-    local remaining_candidates=4096
     local group_fields=args.group_by
     local aggregate_fields=args.aggregates
     local requested,seen={},{}
@@ -82,15 +80,11 @@ internal val worldOverviewLua =
         if visibility(center).generated then
           record.tile_sample={position=center,name=surface.get_tile(center).name,availability="generated"}
         end
-        if remaining_candidates<=1 then
-          record.entity_scan="not_scanned"
-          record.truncated=true
-        else
-          local maximum=math.min(limit,remaining_candidates-1)
+        do
+          local maximum=limit
           local found=surface.find_entities_filtered{area=bounds,name=selection.name,type=selection.type,limit=maximum+1}
           record.candidates_observed=#found
           candidates=candidates+#found
-          remaining_candidates=math.max(0,remaining_candidates-#found)
           record.truncated=#found>maximum
           record.entity_scan=record.truncated and "partial" or "complete"
           local groups,keys={},{}
@@ -106,7 +100,6 @@ internal val worldOverviewLua =
                 elseif type(value)=="number" and not finite(value) then statuses[field]={status="non_finite"}
                 else values[field]=value end
               end
-              if remaining<0 then record.truncated=true; record.entity_scan="partial"; break end
               local attributes,read_status={},{}
               for _,field in ipairs(group_fields) do
                 attributes[field]=values[field]

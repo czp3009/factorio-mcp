@@ -18,7 +18,7 @@ void UiKeyCommand::cancel() {
 
 int UiKeyCommand::start(uintptr_t instance, void *gui, const FmLinuxUiLayout &ui, const FmLinuxUiKeyConfig &config,
                         const FmLinuxUiSelector &selector, const FmLinuxUiKeyRequest &request, const uint32_t *canceled,
-                        FmLinuxUiSnapshot &scratch) {
+                        UiSnapshot &scratch) {
     if (started_)
         return EALREADY;
     started_ = true;

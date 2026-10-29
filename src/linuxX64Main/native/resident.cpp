@@ -51,6 +51,26 @@ static std::optional<UiTextCommand> text;
 static std::optional<UiKeyCommand> key;
 static std::optional<ChatSubmitCommand> chat;
 static std::optional<ChatReadCommand> chatRead;
+static UiSnapshot uiObservation;
+static ControlsSnapshot controlsObservation;
+static ChatSnapshot chatObservation;
+static LuaResult queryObservation;
+
+// Kotlin holds command ownership while transferring these copies in chunks. They contain no borrowed game objects.
+static void releaseObservations(FmLinuxShared *shared) noexcept {
+    static_assert(noexcept(uiObservation = UiSnapshot{}));
+    static_assert(noexcept(controlsObservation = ControlsSnapshot{}));
+    static_assert(noexcept(chatObservation = ChatSnapshot{}));
+    static_assert(noexcept(queryObservation = LuaResult{}));
+    uiObservation = {};
+    controlsObservation = {};
+    chatObservation = {};
+    queryObservation = {};
+    shared->snapshot = {};
+    shared->controlsSnapshot = {};
+    shared->chatSnapshot = {};
+    shared->queryResult = {};
+}
 static EventPump eventPump;
 static InputTaskSession input(viewLifetime);
 static InputTaskMapping preparedInput;
@@ -411,6 +431,8 @@ extern "C" __attribute__((visibility("default"))) int64_t fm_linux_cleanup() {
         chatRead)
         return -EBUSY;
     const int result = removeHooks();
+    if (!result)
+        releaseObservations(shared);
     publishOwnership(shared);
     return -result;
 }
@@ -450,6 +472,7 @@ extern "C" void fm_after_gui_logic(void *receiver, uintptr_t caller) noexcept {
     if (shared->operation == FM_LINUX_CHAT)
         shared->chatProgress = {};
     if (!resumedCleanup) {
+        releaseObservations(shared);
         shared->gameState = {0, -1};
         shared->gameStateError = shared->gameStateConfig.global
                                      ? readGameState(shared->gameStateConfig, &shared->cancel, shared->gameState)
@@ -497,9 +520,11 @@ extern "C" void fm_after_gui_logic(void *receiver, uintptr_t caller) noexcept {
             return;
     } else if (shared->operation == FM_LINUX_UI) {
         result =
-            snapshotUi(receiver, shared->ui, shared->nodeLimit, &shared->cancel, shared->snapshot, &shared->selector);
+            snapshotUi(receiver, shared->ui, shared->nodeLimit, &shared->cancel, uiObservation, &shared->selector);
+        shared->snapshot = uiObservation.wire();
     } else if (shared->operation == FM_LINUX_CONTROLS) {
-        result = snapshotControls(shared->controlsLayout, &shared->cancel, shared->controlsSnapshot);
+        result = snapshotControls(shared->controlsLayout, &shared->cancel, controlsObservation);
+        shared->controlsSnapshot = controlsObservation.wire();
     } else if (shared->operation == FM_LINUX_WORKER) {
         result = installWorker(shared);
     } else if (shared->operation == FM_LINUX_INPUT) {
@@ -558,27 +583,29 @@ extern "C" void fm_after_gui_logic(void *receiver, uintptr_t caller) noexcept {
             ChatReadConfig config{wire.layout, reinterpret_cast<void (*)(void *, const void *)>(wire.raw),
                                   reinterpret_cast<void (*)(void *)>(wire.destroyString)};
             chatRead.emplace();
-            result = chatRead->start(config, console, player.player, &shared->cancel, shared->chatSnapshot);
+            result = chatRead->start(config, console, player.player, &shared->cancel, chatObservation);
+            shared->chatSnapshot = chatObservation.wire();
             publishAction(shared);
         }
     } else if (shared->operation == FM_LINUX_QUERY) {
-        result = queryWorld(shared->worldConfig, shared->query, &shared->cancel, shared->queryResult);
+        result = queryWorld(shared->worldConfig, shared->query, &shared->cancel, queryObservation);
+        shared->queryResult = queryObservation.wire();
     } else if (shared->operation == FM_LINUX_CLICK) {
         click.emplace();
         result = click->start(bound.guiInstance, receiver, shared->ui, shared->clickConfig, shared->selector,
-                              shared->clickRequest, &shared->cancel, shared->snapshot);
+                              shared->clickRequest, &shared->cancel, uiObservation);
         publishAction(shared);
     } else if (shared->operation == FM_LINUX_TEXT) {
         text.emplace();
         result = text->start(bound.guiInstance, receiver, shared->ui, shared->textConfig, shared->selector,
-                             shared->textRequest, &shared->cancel, shared->snapshot);
+                             shared->textRequest, &shared->cancel, uiObservation);
         publishAction(shared);
     } else if (shared->operation == FM_LINUX_KEY) {
         result = installPoll(shared, shared->pollConfig, shared->keyConfig.event.extent);
         if (!result) {
             key.emplace();
             result = key->start(bound.guiInstance, receiver, shared->ui, shared->keyConfig, shared->selector,
-                                shared->keyRequest, &shared->cancel, shared->snapshot);
+                                shared->keyRequest, &shared->cancel, uiObservation);
             publishAction(shared);
             if (!result && key && key->active())
                 return;

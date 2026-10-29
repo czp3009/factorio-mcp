@@ -42,13 +42,10 @@ internal val objectInspectionLua =
       end
       return object
     end
-    local budget=4096
-    local function preview(value,depth)
-      budget=budget-1
-      if budget<0 then return {observation="omitted",reason="value_budget"} end
+    local function preview(value,depth,previewing)
+      previewing=previewing or {}
       local kind=type(value)
       if kind=="string" then
-        if #value>4096 then return {observation="omitted",reason="string_bound",bytes=#value} end
         return value
       elseif kind=="nil" or kind=="boolean" then return value
       elseif kind=="number" then
@@ -61,19 +58,20 @@ internal val objectInspectionLua =
         for _,field in ipairs{"name","index","unit_number","valid"} do
           if metadata and admitted(metadata.attributes,field) then
             local ok,item=pcall(function() return value[field] end)
-            if ok and (type(item)=="string" or type(item)=="number" or type(item)=="boolean") then reference[field]=preview(item,depth+1) end
+            if ok and (type(item)=="string" or type(item)=="number" or type(item)=="boolean") then reference[field]=preview(item,depth+1,previewing) end
           end
         end
         return reference
       end
       if kind~="table" then return {observation="unsupported",value_type=kind} end
-      if depth>=3 then return {observation="reference",value_type="table",reason="depth_bound"} end
-      local result,count={},0
+      if depth>=args.inspection.depth then return {observation="reference",value_type="table",reason="depth_bound"} end
+      if previewing[value] then return {observation="reference",value_type="table",reason="cycle"} end
+      previewing[value]=true
+      local result={}
       for key,item in pairs(value) do
-        count=count+1
-        if count>64 or budget<=0 then return {observation="partial",value=result,reason="collection_bound"} end
-        if type(key)=="string" or type(key)=="number" then result[key]=preview(item,depth+1) end
+        if type(key)=="string" or type(key)=="number" then result[key]=preview(item,depth+1,previewing) end
       end
+      previewing[value]=nil
       return result
     end
     local function inspect_object(object)
@@ -107,11 +105,10 @@ internal val objectInspectionLua =
         local total
         if indexed then
           total=#object
-          assert(total>=0 and total<=65536,"Collection length exceeds inspection bound")
+          assert(total>=0 and total<=2147483647,"Collection length exceeds integer representation")
         else
           for key,_ in pairs(object) do
             assert(type(key)=="string" or type(key)=="number","Unsupported collection key")
-            assert(#keys<65536,"Collection scan exceeds inspection bound; select an index directly")
             keys[#keys+1]=key
           end
           table.sort(keys,function(a,b) if type(a)==type(b) then return a<b end return type(a)<type(b) end)
@@ -136,7 +133,6 @@ internal val objectInspectionLua =
       result.total=result.total or #keys
       result.truncated=args.offset+limit<result.total
       if result.truncated then result.next_offset=args.offset+limit end
-      result.preview_budget_exhausted=budget<=0
       return result
     end
     """
@@ -166,6 +162,6 @@ internal val objectInspectionBranchLua =
     for _,step in ipairs(args.inspection.path) do
       extra.path[#extra.path+1]={property=step.property,index=step.index,method=step.method,arguments=step.arguments,result=step.result}
     end
-    truncated=objects[1].truncated or objects[1].preview_budget_exhausted or false
+    truncated=objects[1].truncated or false
     """
         .trimIndent()

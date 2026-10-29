@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cerrno>
 #include <cxxabi.h>
+#include <stdexcept>
 
 bool validIconLayout(const FmLinuxIconLayout &layout) {
     if (!layout.type)
@@ -23,13 +24,13 @@ UiIcons::UiIcons(const FmLinuxIconLayout &layout) : layout(layout) {}
 int32_t UiIcons::observe(uintptr_t sprite) {
     if (!sprite)
         return -1;
-    for (uint32_t index = 0; index < count; ++index)
-        if (sources[index] == sprite)
-            return static_cast<int32_t>(index);
-    if (count == sources.size())
-        return -2;
-    sources[count] = sprite;
-    return static_cast<int32_t>(count++);
+    if (const auto found = sources.find(sprite); found != sources.end())
+        return found->second;
+    if (sources.size() >= INT32_MAX)
+        throw std::length_error("Icon references exceed integer representation");
+    const auto index = static_cast<int32_t>(sources.size());
+    sources.emplace(sprite, index);
+    return index;
 }
 
 int UiIcons::collect(uintptr_t widget, FmLinuxUiNode &node) {

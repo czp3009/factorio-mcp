@@ -146,9 +146,9 @@ internal fun parseRelatedWorldQuery(args: JsonObject): WorldQuery {
         else setOf("kind", "type", "names", "search", "product", "ingredient")
     require(selection.keys.all { it in allowedSelection }) { "Unknown $kind selection field" }
     val limit = args["limit"]?.intArgument() ?: 64
-    require(limit in 1..if (kind == "inventory") 512 else 128) { "Unsupported related query limit" }
+    require(limit > 0) { "limit must be positive" }
     val offset = args["offset"]?.intArgument() ?: 0
-    require(offset in 0..65536) { "offset must be in 0..65536" }
+    require(offset >= 0) { "offset must be nonnegative" }
     var defaults: List<String>
     val allowed: List<String>
     if (inventory) {
@@ -231,11 +231,11 @@ internal fun parseRelatedWorldQuery(args: JsonObject): WorldQuery {
         selection["names"]?.let {
             val names = it.jsonArray.map { name -> name.stringArgument() }
             require(
-                names.size in 1..64 &&
+                names.isNotEmpty() &&
                         names.distinct().size == names.size &&
                         names.all { name -> name.length in 1..256 && '\u0000' !in name }
             ) {
-                "names requires 1..64 distinct nonempty prototype names"
+                "names requires distinct nonempty prototype names"
             }
         }
         selection["search"]?.let {
@@ -265,7 +265,7 @@ internal fun parseRelatedWorldQuery(args: JsonObject): WorldQuery {
     val fields = args["fields"]?.jsonArray?.map { it.stringArgument() } ?: defaults
     if (kind != "inventories")
         require(
-            fields.size in 1..32 &&
+            fields.isNotEmpty() &&
                     fields.distinct().size == fields.size &&
                     fields.all { it in allowed }
         ) {
@@ -299,7 +299,6 @@ internal fun relatedSelectionProperties() = buildJsonObject {
     putJsonObject("names") {
         put("type", "array")
         put("minItems", 1)
-        put("maxItems", 64)
         put("uniqueItems", true)
         putJsonObject("items") { put("type", "string") }
         put(
@@ -319,7 +318,6 @@ internal fun relatedSelectionProperties() = buildJsonObject {
     putJsonObject("slots") {
         put("type", "array")
         put("minItems", 1)
-        put("maxItems", 128)
         put("uniqueItems", true)
         putJsonObject("items") {
             put("type", "object")
@@ -344,7 +342,6 @@ internal fun relatedSelectionProperties() = buildJsonObject {
     putJsonObject("screen_pages") {
         put("type", "array")
         put("minItems", 1)
-        put("maxItems", 16)
         put("uniqueItems", true)
         putJsonObject("items") {
             put("type", "integer")
@@ -379,7 +376,7 @@ internal fun relatedSelectionProperties() = buildJsonObject {
         }
         put(
             "description",
-            "Recipes or recipe prototypes only: match at least one raw $name entry by exact type/name. Combines with other filters. No assumption that recipe and product names match; no craftability inference. Relation scanning is bounded to 32768 entries; narrow with names/search if exceeded.",
+            "Recipes or recipe prototypes only: match at least one raw $name entry by exact type/name. Combines with other filters. No assumption that recipe and product names match; no craftability inference.",
         )
     }
 }
@@ -409,18 +406,18 @@ private fun parseQuickbarQuery(args: JsonObject, selection: JsonObject): WorldQu
             require(page in 1..256 && slot in 1..256) { "Quickbar page/slot indices must be in 1..256" }
             page to slot
         }
-        require(locations.size in 1..128 && locations.distinct().size == locations.size) {
-            "slots requires 1..128 distinct page/slot locations"
+        require(locations.isNotEmpty() && locations.distinct().size == locations.size) {
+            "slots requires distinct page/slot locations"
         }
     }
     selection["screen_pages"]?.let { value ->
         val indices = value.jsonArray.map { it.intArgument() }
         require(
-            indices.size in 1..16 &&
+            indices.isNotEmpty() &&
                     indices.distinct().size == indices.size &&
                     indices.all { it in 1..65536 }
         ) {
-            "screen_pages requires 1..16 distinct indices in 1..65536"
+            "screen_pages requires distinct indices in 1..65536"
         }
     }
     return WorldQuery(

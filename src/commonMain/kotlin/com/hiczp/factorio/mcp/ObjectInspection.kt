@@ -207,7 +207,7 @@ internal class RuntimeApi(document: JsonObject) {
 
 internal fun parseObjectInspection(args: JsonObject): WorldQuery {
     require(
-        args.keys.all { it in setOf("selection", "fields", "mode", "offset", "limit", "surface") }
+        args.keys.all { it in setOf("selection", "fields", "mode", "offset", "limit", "depth", "surface") }
     ) {
         "Unknown object inspection argument"
     }
@@ -292,7 +292,7 @@ internal fun parseObjectInspection(args: JsonObject): WorldQuery {
                 val index = step.getValue("index").jsonPrimitive
                 require(
                     if (index.isString) index.content.length in 1..256 && '\u0000' !in index.content
-                    else index.intOrNull?.let { it in 1..65536 } == true
+                    else index.intOrNull?.let { it > 0 } == true
                 )
             }
 
@@ -345,16 +345,18 @@ internal fun parseObjectInspection(args: JsonObject): WorldQuery {
     require(
         fields == null ||
                 mode == "values" &&
-                fields.size in 1..64 &&
+                fields.isNotEmpty() &&
                 fields.distinct().size == fields.size &&
                 fields.all { it.length <= 128 && it.matches(Regex("[A-Za-z_][A-Za-z0-9_]*")) }
     ) {
         "Invalid inspection fields"
     }
+    val depth = args["depth"]?.intArgument() ?: 3
+    require(depth >= 0) { "Inspection depth must be nonnegative" }
     val offset = args["offset"]?.intArgument() ?: 0
     val limit = args["limit"]?.intArgument() ?: 64
-    require(offset in 0..65536 && limit in 1..256) {
-        "Inspection offset must be 0..65536 and limit 1..256"
+    require(offset >= 0 && limit > 0) {
+        "Inspection offset must be nonnegative and limit positive"
     }
     return WorldQuery(
         buildJsonObject {
@@ -383,6 +385,7 @@ internal fun parseObjectInspection(args: JsonObject): WorldQuery {
                     ),
                 )
                 put("mode", mode)
+                put("depth", depth)
             }
         }
     )

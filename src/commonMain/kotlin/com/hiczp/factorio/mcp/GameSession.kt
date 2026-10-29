@@ -315,7 +315,7 @@ internal class GameSession(private val open: (Int) -> GameConnection = ::GamePro
     }
 
     suspend fun readChat(offset: ChatOffset?, limit: Int, timeout: Int = 0): JsonObject = observe(serialized = false) {
-        require(limit in 1..128) { "Chat limit must be 1..128" }
+        require(limit > 0) { "Chat limit must be positive" }
         require(timeout >= 0) { "Chat timeout must be nonnegative seconds" }
         val start = TimeSource.Monotonic.markNow()
         var selected: Attachment? = null

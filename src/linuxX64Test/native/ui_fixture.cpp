@@ -710,7 +710,7 @@ static void clickLeave(void *widget, const void *event) {
 }
 
 static void checkClicks(const UiGestureContext &context, const FmLinuxModalLayout &modal,
-                        const FmLinuxUiSelector &selector, FmLinuxUiSnapshot &scratch, Widget &root, Widget &child,
+                        const FmLinuxUiSelector &selector, UiSnapshot &scratch, Widget &root, Widget &child,
                         Widget &other) {
     ClickInputState state;
     ClickKey keys[3];
@@ -1001,7 +1001,7 @@ static bool textKeyDown(void *widget, const void *event) {
 }
 
 static void checkText(const UiGestureContext &context, const FmLinuxModalLayout &modal,
-                      const FmLinuxUiSelector &selector, FmLinuxUiSnapshot &scratch, Widget &root, Label &child) {
+                      const FmLinuxUiSelector &selector, UiSnapshot &scratch, Widget &root, Label &child) {
     FmLinuxUiTextConfig original{};
     original.clock = context.clock;
     original.capture = context.capture;
@@ -1132,7 +1132,7 @@ static void keyFocus(void *widget, bool tabbed) {
 }
 
 static void checkKeys(const UiGestureContext &context, const FmLinuxModalLayout &modal,
-                      const FmLinuxUiSelector &selector, FmLinuxUiSnapshot &scratch, Widget &root, Label &child) {
+                      const FmLinuxUiSelector &selector, UiSnapshot &scratch, Widget &root, Label &child) {
     FmLinuxUiKeyConfig original{};
     original.event.extent = sizeof(PollKeyEvent);
     original.event.type = offsetof(PollKeyEvent, type);
@@ -1297,7 +1297,7 @@ int main() {
     };
     layout.text.getters[0] = {getter(root), offset(&root, &root.text), sizeof(root)};
     layout.text.getters[1] = {getter(child), offset(&child, &child.label), sizeof(child)};
-    auto output = std::make_unique<FmLinuxUiSnapshot>();
+    auto output = std::make_unique<UiSnapshot>();
     uint32_t cancel = 0;
     require(snapshotUi(&gui, layout, 10, &cancel, *output) == 0, "snapshot failed");
     layout.toggle = {(*reinterpret_cast<uintptr_t **>(&root))[3], 3, offset(&root, &root.toggled), sizeof(Widget)};
@@ -1446,11 +1446,11 @@ int main() {
         root.selectedIndex = 80;
         require(snapshotUi(&gui, layout, 10, &cancel, *output) == 0 && output->nodes[0].dropdownAvailable &&
                     output->nodes[0].selectedIndex == 80 && output->nodes[0].optionsAvailable &&
-                    output->nodes[0].optionTotal == 65 && output->nodes[0].optionCount == 64 &&
-                    output->optionCount == 64 && output->options[0].size == 0 && !output->options[0].truncated &&
-                    output->options[1].size == 510 && output->options[1].truncated &&
+                    output->nodes[0].optionTotal == 65 && output->nodes[0].optionCount == 65 &&
+                    output->optionCount == 65 && output->options[0].size == 0 && !output->options[0].truncated &&
+                    output->options[1].size == caption.size() && !output->options[1].truncated &&
                     !output->nodes[1].dropdownAvailable,
-                "dropdown selection, empty labels, UTF-8 boundary or per-widget limit changed");
+                "dropdown selection, empty labels or complete UTF-8 text changed");
         Unknown unsupported;
         entries[1].button = &unsupported;
         require(snapshotUi(&gui, layout, 10, &cancel, *output) == 0 && output->nodes[0].dropdownAvailable &&
@@ -1460,7 +1460,7 @@ int main() {
         root.optionLast = reinterpret_cast<Option *>(reinterpret_cast<uintptr_t>(root.optionFirst) + 1);
         require(snapshotUi(&gui, layout, 10, &cancel, *output) == EPROTO, "misaligned option range accepted");
         root.optionLast =
-            reinterpret_cast<Option *>(reinterpret_cast<uintptr_t>(root.optionFirst) + sizeof(Option) * 65537);
+            reinterpret_cast<Option *>(reinterpret_cast<uintptr_t>(root.optionFirst) + sizeof(Option) * (uint64_t(INT32_MAX) + 1));
         require(snapshotUi(&gui, layout, 10, &cancel, *output) == EPROTO, "oversized option range accepted");
         root.optionLast = root.optionFirst;
         root.selectedIndex = -1;
@@ -1479,10 +1479,10 @@ int main() {
         many[0].last = children.data() + children.size();
         many.back().text = {0, "chosen", 6};
         gui.root = &many[0];
-        require(snapshotUi(&gui, layout, 32, &cancel, *output) == 0 && output->optionCount == 1024 &&
+        require(snapshotUi(&gui, layout, 32, &cancel, *output) == 0 && output->optionCount == 18 * 65 &&
                     output->nodes[16].optionsAvailable && output->nodes[16].optionTotal == 65 &&
-                    output->nodes[16].optionCount == 0,
-                "snapshot option budget was exceeded or total was lost");
+                    output->nodes[16].optionCount == 65,
+                "dropdown options were truncated by an unrelated budget");
         FmLinuxUiSelector chosen{};
         chosen.count = 1;
         chosen.path[0].enabled = -1;
@@ -1490,8 +1490,8 @@ int main() {
         std::memcpy(chosen.path[0].text, "chosen", 7);
         many[0].optionFirst = reinterpret_cast<Option *>(1);
         many[0].optionLast = reinterpret_cast<Option *>(1 + 65 * sizeof(Option));
-        require(snapshotUi(&gui, layout, 32, &cancel, *output, &chosen) == 0 && output->optionCount == 64 &&
-                    output->nodes[17].optionCount == 64 && !output->nodes[0].dropdownAvailable,
+        require(snapshotUi(&gui, layout, 32, &cancel, *output, &chosen) == 0 && output->optionCount == 65 &&
+                    output->nodes[17].optionCount == 65 && !output->nodes[0].dropdownAvailable,
                 "unrelated dropdowns consumed selected subtree budget or prevented its observation");
         gui.root = &root;
         root.optionFirst = root.optionLast = nullptr;
@@ -1526,10 +1526,33 @@ int main() {
         (*ancestors)[index - 1].parent = &(*ancestors)[index];
     root.parent = &(*ancestors)[0];
     rectangleCalls = 0;
-    require(snapshotUi(&gui, layout, 10, &cancel, *output) == E2BIG && !rectangleCalls,
-            "parent-chain work bound was ignored");
+    require(snapshotUi(&gui, layout, 10, &cancel, *output) == 0 && rectangleCalls,
+            "valid deep parent chain was rejected");
     root.parent = nullptr;
     require(snapshotUi(&gui, layout, 10, &cancel, *output) == 0, "cannot read after rejecting parent depth");
+    {
+        std::vector<Widget> many(6000);
+        std::vector<Widget *> children;
+        for (size_t index = 1; index < many.size(); ++index)
+            children.push_back(&many[index]);
+        many[0].first = children.data();
+        many[0].last = children.data() + children.size();
+        gui.root = &many[0];
+        require(snapshotUi(&gui, layout, 5000, &cancel, *output) == 0 && output->count == 5000 &&
+                    output->treeTruncated, "caller-selected UI limit was not enforced");
+        require(snapshotUi(&gui, layout, 10000, &cancel, *output) == 0 && output->count == 6000 &&
+                    !output->treeTruncated, "UI snapshot retained the old fixed node capacity");
+        FmLinuxUiSelector selected{};
+        selected.count = 1;
+        selected.path[0].enabled = -1;
+        selected.path[0].position = 5500;
+        require(snapshotUi(&gui, layout, 10000, &cancel, *output, &selected) == 0 &&
+                    output->nodes[5499].selected, "large complete selector traversal failed");
+        const auto wire = output->wire();
+        require(wire.nodes.size == output->nodes.size() * sizeof(FmLinuxUiNode), "dynamic node wire size is invalid");
+        gui.root = &root;
+        require(snapshotUi(&gui, layout, 10, &cancel, *output) == 0, "large snapshot cleanup failed");
+    }
     require(!output->nodes[0].enabled && output->nodes[1].enabled && output->nodes[2].destroying,
             "widget flags were inferred from their parent or dropped");
     child.flags |= 2 | 4;
@@ -1548,7 +1571,7 @@ int main() {
     root.flags &= ~16;
     require(std::strcmp(output->nodes[1].type, "Label") == 0, "dynamic type was lost");
     require(output->nodes[1].textAvailable && output->nodes[1].textSize == 5 &&
-                std::memcmp(output->nodes[1].text, "label", 5) == 0,
+                std::memcmp(reinterpret_cast<const void *>(output->nodes[1].text.address), "label", 5) == 0,
             "derived text getter was ignored");
     require(output->nodes[2].textAvailable && output->nodes[2].textTotal == 0, "empty string became unavailable");
     FmLinuxUiSelector selector{};
@@ -1766,7 +1789,7 @@ int main() {
     gui.modalEnd = reinterpret_cast<ModalEntry *>(reinterpret_cast<uintptr_t>(modals) + 1);
     require(checkUiModal(instance, layout, modalLayout, target) == EFAULT, "partial modal record was accepted");
     gui.modalEnd = reinterpret_cast<ModalEntry *>(reinterpret_cast<uintptr_t>(modals) +
-                                                  (FM_LINUX_MAX_NODES + 1ULL) * sizeof(ModalEntry));
+                                                  (uint64_t(INT32_MAX) + 1) * sizeof(ModalEntry));
     require(checkUiModal(instance, layout, modalLayout, target) == E2BIG, "modal record count exceeded its bound");
     gui.modalEnd = modals + 4;
     gui.modalBegin = nullptr;
@@ -2081,19 +2104,18 @@ int main() {
         owner->first = &descendants[index];
         owner->last = owner->first + 1;
     }
-    require(liveUiTarget(instance, layout, target) == E2BIG, "liveness ignored its traversal depth bound");
-    require(selectUiTarget(&gui, layout, selector, &cancel, *output, rejected) == EOVERFLOW && !rejected.widget,
-            "action accepted an incomplete traversal");
+    require(liveUiTarget(instance, layout, target) == 0, "liveness rejected a complete deep traversal");
+    require(selectUiTarget(&gui, layout, selector, &cancel, *output, rejected) == 0 && rejected.widget,
+            "action rejected a complete deep traversal");
     child.first = nullptr;
     child.last = nullptr;
     root.flags = 0;
     const char embedded[] = {'x', 0, 'y'};
     child.label = {0, embedded, sizeof(embedded)};
     require(snapshotUi(&gui, layout, 10, &cancel, *output) == 0 && output->nodes[1].textSize == sizeof(embedded) &&
-                std::memcmp(output->nodes[1].text, embedded, sizeof(embedded)) == 0,
+                std::memcmp(reinterpret_cast<const void *>(output->nodes[1].text.address), embedded, sizeof(embedded)) == 0,
             "embedded NUL truncated native text");
-    std::array<char, FM_LINUX_TEXT_SIZE + 1> longText;
-    longText.fill('a');
+    std::vector<char> longText(FM_LINUX_TEXT_SIZE + 1, 'a');
     child.label = {0, longText.data(), longText.size()};
     require(snapshotUi(&gui, layout, 10, &cancel, *output) == 0 && output->truncated &&
                 output->nodes[1].textTruncated && output->nodes[1].textTotal == longText.size(),

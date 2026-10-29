@@ -82,6 +82,7 @@ int main() {
     object.selected = 2;
     assert(collect().selectedIndex == 2);
     auto result = std::make_unique<FmResult>();
+    ObservationStorage storage;
     auto &layout = symbols.properties;
     layout.optionsSupported = 1;
     layout.optionFirst = offsetof(Fixture, first);
@@ -92,26 +93,35 @@ int main() {
     symbols.address[StringSize] = reinterpret_cast<uint64_t>(&stringSize);
     symbols.address[StringData] = reinterpret_cast<uint64_t>(&stringData);
     FmNode options{};
-    collectWidgetProperties(symbols, object.prefix, options, result.get());
+    collectWidgetProperties(symbols, object.prefix, options, result.get(), &storage);
     assert(options.properties == 20 && !options.optionTotal && !options.optionCount);
     OptionButton empty{}, unicode{0, std::string(510, 'x') + "\xe4\xb8\xad"};
-    std::vector<OptionEntry> entries(70, {0, &unicode});
+    std::vector<OptionEntry> entries(1200, {0, &unicode});
     entries[0].button = &empty;
     object.first = entries.data();
     object.last = entries.data() + entries.size();
-    collectWidgetProperties(symbols, object.prefix, options, result.get());
-    assert(options.optionTotal == 70 && options.optionCount == FM_MAX_WIDGET_OPTIONS && options.optionFirst == 0);
-    assert(!result->options[0].text[0] && !result->options[0].truncated);
-    assert(strlen(result->options[1].text) == 510 && result->options[1].truncated);
-    result->optionCount = FM_MAX_OPTIONS - 1;
-    collectWidgetProperties(symbols, object.prefix, options, result.get());
-    assert(options.optionFirst == FM_MAX_OPTIONS - 1 && options.optionCount == 1);
-    collectWidgetProperties(symbols, object.prefix, options, result.get());
-    assert(!options.optionCount && options.optionTotal == 70);
+    collectWidgetProperties(symbols, object.prefix, options, result.get(), &storage);
+    assert(options.optionTotal == 1200 && options.optionCount == 1200 && options.optionFirst == 0);
+    assert(observationText(storage.options[0].text).empty() && !storage.options[0].truncated);
+    assert(observationText(storage.options[1].text) == unicode.text && !storage.options[1].truncated);
+    collectWidgetProperties(symbols, object.prefix, options, result.get(), &storage);
+    assert(options.optionFirst == 1200 && options.optionCount == 1200 && storage.options.size() == 2400);
+    unicode.text = std::string(FM_OBSERVATION_TEXT_BYTES - 1, 'x') + "\xe4\xb8\xad";
+    object.first = entries.data() + 1;
+    object.last = object.first + 1;
+    collectWidgetProperties(symbols, object.prefix, options, result.get(), &storage);
+    assert(options.optionFirst == 2400 && options.optionCount == 1);
+    assert(storage.options.back().text.size == FM_OBSERVATION_TEXT_BYTES - 1 && storage.options.back().truncated);
+    volatile LONG cancel = 1;
+    try {
+        collectWidgetProperties(symbols, object.prefix, options, result.get(), &storage, &cancel);
+        assert(false);
+    } catch (const std::exception &) {
+    }
     object.last = reinterpret_cast<OptionEntry *>(reinterpret_cast<uintptr_t>(object.first) + 1);
     bool rejected = false;
     try {
-        collectWidgetProperties(symbols, object.prefix, options, result.get());
+        collectWidgetProperties(symbols, object.prefix, options, result.get(), &storage);
     } catch (const std::exception &) {
         rejected = true;
     }

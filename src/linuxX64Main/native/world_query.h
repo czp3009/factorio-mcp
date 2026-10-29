@@ -16,5 +16,5 @@ typedef struct FmLinuxWorldQueryConfig {
 #ifdef __cplusplus
 // Execute only in the verified frontend callback; all references are reacquired for this command.
 int queryWorld(const FmLinuxWorldQueryConfig &config, const FmLinuxLuaQuery &query, const uint32_t *cancel,
-               FmLinuxLuaResult &result);
+               LuaResult &result);
 #endif

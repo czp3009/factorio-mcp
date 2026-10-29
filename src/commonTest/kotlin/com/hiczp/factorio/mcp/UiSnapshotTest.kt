@@ -150,7 +150,7 @@ class UiSnapshotTest {
         assertEquals(WidgetIcon(null, truncated = true), widgetIconReference(-2))
         assertEquals(WidgetIcon(511), widgetIconReference(511))
         assertFails { widgetIconReference(-3) }
-        assertFails { widgetIconReference(512) }
+        assertEquals(WidgetIcon(512), widgetIconReference(512))
         val result =
             GameSnapshot(
                     "main_menu",

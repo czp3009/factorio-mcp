@@ -64,7 +64,7 @@ int UiClickCommand::releaseInput() {
 
 int UiClickCommand::start(uintptr_t guiInstance, void *gui, const FmLinuxUiLayout &ui,
                           const FmLinuxUiClickConfig &config, const FmLinuxUiSelector &selector,
-                          const FmLinuxUiClickRequest &request, const uint32_t *cancel, FmLinuxUiSnapshot &scratch) {
+                          const FmLinuxUiClickRequest &request, const uint32_t *cancel, UiSnapshot &scratch) {
     if (started_)
         return EALREADY;
     started_ = true;

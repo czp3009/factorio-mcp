@@ -416,6 +416,116 @@ class QueryLuaFixtureTest {
         )
     }
 
+    @Test
+    fun largeCatalogPagesAndRelatedValuesHaveNoHiddenScanOrProjectionBudget() {
+        run(
+            query("""{"selection":{"kind":"prototypes","type":"item"},"offset":66000,"limit":2000,"fields":["name"]}"""),
+            setup = """
+                prototypes={item={}}
+                for i=1,70000 do
+                  local name=string.format("item-%06d",i)
+                  prototypes.item[name]={object_name="LuaItemPrototype",name=name}
+                end
+            """,
+            assertions = """
+                assert(#captured.objects==2000 and captured.truncated and captured.next_offset==68000)
+                assert(captured.objects[1].attributes.name=="item-066001")
+                assert(captured.objects[2000].attributes.name=="item-068000")
+            """,
+        )
+        run(
+            query("""{"selection":{"kind":"player"},"fields":["crafting_queue"]}"""),
+            setup = """
+                me.crafting_queue={}
+                for i=1,40000 do me.crafting_queue[i]={index=i,count=1} end
+            """,
+            assertions = """
+                local queue=captured.objects[1].attributes.crafting_queue
+                assert(#queue==40000 and queue[40000].index==40000)
+            """,
+        )
+    }
+
+    @Test
+    fun inspectionPagesBeyondTheOldScanBoundAndExpandsRequestedDepth() {
+        val api = Json.parseToJsonElement("""{"LuaPlayer":{"attributes":["payload"],"methods":[]}}""")
+        val entries = query("""{"selection":{"kind":"inspect","target":{"kind":"player"},"path":[{"property":"payload"}]},"mode":"entries","offset":65536,"limit":10000}""")
+        run(
+            JsonObject(entries + ("api" to api)),
+            setup = """
+                me.payload={}
+                for i=1,70000 do me.payload[i]=i end
+            """,
+            assertions = """
+                local row=captured.objects[1]
+                assert(row.total==70000 and #row.entries==4464 and not row.truncated)
+                assert(row.entries[1].key==65537 and row.entries[4464].value==70000)
+            """,
+        )
+        val values = query("""{"selection":{"kind":"inspect","target":{"kind":"player"}},"fields":["payload"],"depth":8,"limit":10000}""")
+        run(
+            JsonObject(values + ("api" to api)),
+            setup = """
+                local values={}
+                for i=1,1000 do values[i]=string.rep("x",5000) end
+                me.payload={a={b={c={d=values}}}}
+                me.payload.cycle=me.payload
+            """,
+            assertions = """
+                local payload=captured.objects[1].attributes.payload
+                assert(#payload.a.b.c.d==1000 and #payload.a.b.c.d[1000]==5000)
+                assert(payload.cycle.reason=="cycle")
+            """,
+        )
+    }
+
+    @Test
+    fun failedPreviewDoesNotMarkAnotherAttributeAsCyclic() {
+        val api = Json.parseToJsonElement("""{"LuaPlayer":{"attributes":["payload","other"],"methods":[]}}""")
+        val values = query("""{"selection":{"kind":"inspect","target":{"kind":"player"}},"fields":["payload","other"]}""")
+        run(
+            JsonObject(values + ("api" to api)),
+            setup = """
+                local first=true
+                local shared=setmetatable({value="retained"},{__pairs=function(value)
+                  if first then first=false; error("fixture read failure") end
+                  return next,value,nil
+                end})
+                me.payload=shared
+                me.other=shared
+            """,
+            assertions = """
+                local row=captured.objects[1]
+                assert(row.read_status.payload.status=="error")
+                assert(row.attributes.other.value=="retained")
+            """,
+        )
+    }
+
+    @Test
+    fun overviewScansAllRequestedCellsWithoutASharedCandidateBudget() {
+        val request = parseWorldOverview(Json.parseToJsonElement("""{"area":{"left_top":{"x":0,"y":0},"right_bottom":{"x":19,"y":19}},"cell_size":1,"entity_limit":1000}""").jsonObject)
+        run(
+            request.arguments,
+            setup = """
+                surface.find_entities_filtered=function(filter)
+                  local entity={name="raw",type="fixture",position={x=filter.area.left_top.x+0.5,y=filter.area.left_top.y+0.5}}
+                  local found={}
+                  for i=1,20 do found[i]=entity end
+                  return found
+                end
+                surface.get_tile=function() return {name="fixture-tile"} end
+            """,
+            assertions = """
+                assert(#captured.objects==361 and not captured.truncated)
+                for _,cell in ipairs(captured.objects) do
+                  assert(cell.entity_scan=="complete" and cell.entities_observed==20)
+                  assert(cell.entity_groups[1].count==20)
+                end
+            """,
+        )
+    }
+
     private fun lua(value: JsonElement): String =
         when (value) {
             is JsonObject ->

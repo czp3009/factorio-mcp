@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 #include <memory>
 #include <unistd.h>
 extern "C" {
@@ -119,7 +120,7 @@ int main() {
                      address(lua_pushlstring), address(lua_pcallk), address(lua_tolstring),
                      address(fm_fixture_raw_protected), 6};
     auto query = std::make_unique<FmLinuxLuaQuery>();
-    auto result = std::make_unique<FmLinuxLuaResult>();
+    auto result = std::make_unique<LuaResult>();
     uint32_t cancel = 0;
     activeCancel = &cancel;
     auto source = [&](const char *value) {
@@ -136,7 +137,7 @@ int main() {
         return status;
     };
     source("local player, args = ...; assert(player == 7 and #args == 4 and args:byte(3) == 0); return '{\"ok\":true}'");
-    require(run() == 0 && std::strcmp(result->text, "{\"ok\":true}") == 0, "query arguments/result differ");
+    require(run() == 0 && std::string(result->text.data(), result->text.size()).compare( "{\"ok\":true}") == 0, "query arguments/result differ");
     api.protectedCall = address(optimizedCall);
     api.protectedCallArguments = 5;
     require(run() == 0, "optimized protected-call ABI failed");
@@ -155,8 +156,8 @@ int main() {
     require(run() == EPROTO && result->errorSize, "parse error was not reported");
     source("return nil");
     require(run() == EPROTO && !result->size && !result->errorSize, "non-text result was accepted or retained old output");
-    source("return string.rep('x', 1048576)");
-    require(run() == EOVERFLOW && !result->size, "oversized result was accepted");
+    source("return string.rep('x', 16777217)");
+    require(run() == 0 && result->size == 16777217 && result->text.front() == 'x' && result->text.back() == 'x', "large result was truncated");
     source("return '{}'");
     api.pushString = address(failPush);
     require(run() == EPROTO && !result->size, "unprotected argument failure escaped or retained a result");

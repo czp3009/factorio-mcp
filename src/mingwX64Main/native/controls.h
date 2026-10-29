@@ -1,4 +1,4 @@
 #pragma once
-#include "bridge.h"
+#include "observation_storage.h"
 
-void collectControls(const Symbols &symbols, Shared &shared);
+void collectControls(const Symbols &symbols, Shared &shared, ObservationStorage &storage);

@@ -451,11 +451,36 @@ internal class ResidentConnection(private val pid: UInt) {
             }
             val result = state.pointed.result
             check(result.error == 0) { result.message.toKString() }
-            check(result.count in 0..4096) { "Invalid resident node count" }
-            check(result.controlCount <= FM_MAX_CONTROLS.toUInt()) {
+            check(result.count >= 0) { "Invalid resident node count" }
+            check(result.controlCount <= result.registryCount && result.registryCount <= Int.MAX_VALUE.toUInt()) {
                 "Invalid resident control count"
             }
-            check(result.optionCount <= FM_MAX_OPTIONS.toUInt()) { "Invalid resident option count" }
+            val context = currentCoroutineContext()
+            val readObservation: (Long, Int) -> ByteArray = { address, size ->
+                context.ensureActive()
+                memScoped {
+                    val bytes = ByteArray(size)
+                    val transferred = alloc<ULongVar>()
+                    check(
+                        bytes.usePinned {
+                            ReadProcessMemory(
+                                process,
+                                address.toCPointer<ByteVar>(),
+                                it.addressOf(0),
+                                size.toULong(),
+                                transferred.ptr,
+                            )
+                        } != 0 && transferred.value == size.toULong()
+                    ) { "Cannot read resident observation" }
+                    bytes
+                }
+            }
+            // The IPC mutex protects these owned copies until every process-memory chunk has been read.
+            val options =
+                result.options.readObservationRecords<FmOption, WidgetOption>(result.optionCount, readObservation) {
+                    check(it.truncated <= 1u) { "Invalid option truncation flag" }
+                    WidgetOption(it.text.readObservationText(readObservation), it.truncated != 0u)
+                }
             return GameSnapshot(
                 when (result.state) {
                     1 -> "main_menu"
@@ -466,12 +491,11 @@ internal class ResidentConnection(private val pid: UInt) {
                 },
                 result.attached != 0,
                 result.frame.toLong(),
-                (0 until result.count).map { i ->
-                    val node = result.nodes[i]
+                result.nodes.readObservationRecords<FmNode, WidgetSnapshot>(result.count.toUInt(), readObservation) { node ->
                     WidgetSnapshot(
                         node.depth,
                         node.type.toKString(),
-                        node.text.toKString(),
+                        node.text.readObservationText(readObservation),
                         node.enabled != 0,
                         node.x,
                         node.y,
@@ -498,17 +522,13 @@ internal class ResidentConnection(private val pid: UInt) {
                                             node.optionCount <=
                                                 result.optionCount - node.optionFirst &&
                                             node.optionCount <= node.optionTotal &&
-                                            node.optionTotal <= 65536u
+                                            node.optionTotal <= Int.MAX_VALUE.toUInt()
                                     )
                                     WidgetOptions(
-                                        (0 until node.optionCount.toInt()).map { index ->
-                                            val option =
-                                                result.options[node.optionFirst.toInt() + index]
-                                            WidgetOption(
-                                                option.text.toKString(),
-                                                option.truncated != 0u,
-                                            )
-                                        },
+                                        options.subList(
+                                            node.optionFirst.toInt(),
+                                            (node.optionFirst + node.optionCount).toInt(),
+                                        ),
                                         node.optionTotal.toInt(),
                                     )
                                 } else null,
@@ -653,18 +673,19 @@ internal class ResidentConnection(private val pid: UInt) {
                 } else null,
                 result.imageWidth.toInt(),
                 result.imageHeight.toInt(),
-                (0 until result.controlCount.toInt()).map {
-                    symbols.controls.getOrThrow().read(result.controls[it])
+                result.controls.readObservationRecords<FmControl, ControlSnapshot>(result.controlCount, readObservation) {
+                    symbols.controls.getOrThrow().read(it)
                 },
                 result.registryCount.toInt(),
                 symbols.properties.exceptionOrNull()?.let {
                     it.message ?: "Widget property adapter is unavailable"
                 },
                 if (operation == 8) {
-                    check(result.worldSize in 1u until FM_MAX_WORLD_JSON.toUInt()) {
+                    check(result.worldSize in 1u..Int.MAX_VALUE.toUInt()) {
                         "Invalid world query result size"
                     }
-                    val text = result.worldJson.readBytes(result.worldSize.toInt()).decodeToString()
+                    val text = result.worldJson.also { it.validateObservationBuffer(result.worldSize.toLong()) }
+                        .readObservationBytes(readObservation).decodeToString()
                     if (query != null && "inspection" in query.arguments) {
                         checkNotNull(runtimeApi).annotate(decodeWorldQuery(text)).toString()
                     } else text
@@ -679,29 +700,7 @@ internal class ResidentConnection(private val pid: UInt) {
                 switchUnavailableReason = symbols.switches.exceptionOrNull()?.message,
                 chat =
                     if (operation == 10) {
-                        check(result.chat.count <= FM_MAX_CHAT.toUInt()) {
-                            "Invalid chat result count"
-                        }
-                        ChatSnapshot(
-                            result.chat.consoleIdentity,
-                            List(2) { result.chat.totals[it] },
-                            List(result.chat.count.toInt()) { index ->
-                                val record = result.chat.records[index]
-                                check(record.stream < 2u)
-                                ChatRecord(
-                                    record.identity,
-                                    record.tick,
-                                    record.stream.toInt(),
-                                    record.playerIndex.toInt(),
-                                    record.text.toKString(),
-                                    record.raw.toKString(),
-                                    record.truncated and 1u != 0u,
-                                    record.truncated and 2u != 0u,
-                                    record.playerName.toKString(),
-                                    record.truncated and 4u != 0u,
-                                )
-                            },
-                        )
+                        result.chat.readChatSnapshot(readObservation)
                     } else null,
             )
         } finally {

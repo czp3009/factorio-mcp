@@ -144,10 +144,11 @@ int main() {
     uint32_t handler = 17;
     Player player{42, &console, &handler};
     auto result = std::make_unique<FmChatSnapshot>();
-    readChat(adapter, &player, *result);
+    ObservationStorage storage;
+    readChat(adapter, &player, *result, storage);
     assert(result->count == 0);
     std::vector<std::unique_ptr<Node>> entries;
-    for (int i = 0; i < 130; ++i) {
+    for (int i = 0; i < 5000; ++i) {
         auto node = std::make_unique<Node>();
         node->next = head.next;
         node->previous = &head;
@@ -157,22 +158,37 @@ int main() {
         entries.push_back(std::move(node));
         ++console.lists[0].count;
     }
-    readChat(adapter, &player, *result);
-    assert(result->count == 128 && result->totals[0] == 130);
-    assert(result->records[0].tick == 129 && result->records[127].tick == 2);
-    assert(result->records[0].playerIndex == 42 && std::string(result->records[0].raw) == "message");
-    entries.back()->value.text = std::string(5000, 'a');
-    readChat(adapter, &player, *result);
-    assert(result->records[0].truncated == 3 && strlen(result->records[0].text) == 4095);
+    readChat(adapter, &player, *result, storage);
+    assert(result->count == 5000 && result->totals[0] == 5000);
+    assert(storage.chatRecords[0].tick == 4999 && storage.chatRecords[4999].tick == 0);
+    assert(storage.chatRecords[0].playerIndex == 42 && observationText(storage.chatRecords[0].raw) == "message");
+    entries.back()->value.text = std::string(FM_OBSERVATION_TEXT_BYTES + 7, 'a');
+    readChat(adapter, &player, *result, storage);
+    assert(storage.chatRecords[0].truncated == 3 && storage.chatRecords[0].text.size == FM_OBSERVATION_TEXT_BYTES);
     entries.back()->value.text = "[item=iron-plate] body";
     entries.back()->value.playerName = "[color=red]sender[/color]";
-    readChat(adapter, &player, *result);
-    assert(result->records[0].truncated == 0);
-    assert(std::string(result->records[0].text) == "[item=iron-plate] body");
-    assert(std::string(result->records[0].playerName) == "[color=red]sender[/color]");
-    entries.back()->value.playerName = std::string(4094, 'a') + "\xe4\xb8\xad";
-    readChat(adapter, &player, *result);
-    assert(result->records[0].truncated == 4 && strlen(result->records[0].playerName) == 4094);
+    readChat(adapter, &player, *result, storage);
+    assert(storage.chatRecords[0].truncated == 0);
+    assert(observationText(storage.chatRecords[0].text) == "[item=iron-plate] body");
+    assert(observationText(storage.chatRecords[0].playerName) == "[color=red]sender[/color]");
+    entries.back()->value.playerName = std::string(FM_OBSERVATION_TEXT_BYTES - 1, 'a') + "\xe4\xb8\xad";
+    readChat(adapter, &player, *result, storage);
+    assert(storage.chatRecords[0].truncated == 4 &&
+           storage.chatRecords[0].playerName.size == FM_OBSERVATION_TEXT_BYTES - 1);
+    volatile LONG cancel = 1;
+    try {
+        readChat(adapter, &player, *result, storage, &cancel);
+        assert(false);
+    } catch (const std::runtime_error &) {
+    }
+    head.next->previous = nullptr;
+    // The next backlink is checked before advancing through the complete list.
+    head.next->next->previous = nullptr;
+    try {
+        readChat(adapter, &player, *result, storage);
+        assert(false);
+    } catch (const std::runtime_error &) {
+    }
     FmChatRequest request{};
     strcpy_s(request.text, "fixture");
     request.size = 7;

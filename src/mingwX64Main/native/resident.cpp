@@ -15,6 +15,7 @@
 #include <functional>
 #include <intrin.h>
 #include <limits>
+#include <unordered_set>
 
 static Shared *shared{};
 static HANDLE mapping{};
@@ -27,6 +28,8 @@ static ResidentInput timedInput;
 static Detour inputTickHook, gameDestroyHook;
 static Detour presentHook, glHook;
 static std::vector<void *> widgets;
+static ObservationStorage observations;
+static_assert(noexcept(observations = ObservationStorage{}));
 static std::atomic<unsigned> callbacks{};
 static std::atomic<bool> enabled{};
 static SRWLOCK lifecycle = SRWLOCK_INIT;
@@ -65,13 +68,15 @@ static void collect(void *widget) {
     if (InterlockedCompareExchange(&shared->cancel, 0, 0))
         return;
     auto &result = shared->result;
-    if (result.count >= int(shared->limit)) {
+    const auto limit = shared->operation == 5 ? std::numeric_limits<int>::max() : shared->limit;
+    if (result.count >= limit) {
         result.truncated = 1;
         return;
     }
     if (fn<bool (*)(void *)>(Destroying)(widget))
         return;
-    auto &node = result.nodes[result.count++];
+    auto &node = observations.nodes.emplace_back();
+    ++result.count;
     widgets.push_back(widget);
     memset(&node, 0, sizeof(node));
     void *type = fn<void *(*)(void *)>(TypeId)(widget);
@@ -88,7 +93,10 @@ static void collect(void *widget) {
     void *text = fn<void *(*)(void *)>(getter)(textReceiver ? textReceiver : widget);
     auto data = fn<const char *(*)(void *)>(StringData);
     auto size = fn<size_t (*)(void *)>(StringSize);
-    copyText(node.text, sizeof(node.text), data(text), size(text), node, 1);
+    bool truncated = false;
+    node.text = observations.copyText(data(text), size(text), truncated);
+    if (truncated)
+        node.truncated |= 1;
 
     struct Rect {
         int x, y, width, height;
@@ -105,8 +113,10 @@ static void collect(void *widget) {
     auto parent = [](void *p) {
         return *reinterpret_cast<void **>(static_cast<unsigned char *>(p) + symbols.widgetParentOffset);
     };
+    std::unordered_set<void *> ancestors{widget};
     for (void *p = parent(widget); p; p = parent(p)) {
-        require(++node.depth <= FM_MAX_NODES, "UI ancestry exceeds supported bound");
+        require(ancestors.insert(p).second && node.depth < std::numeric_limits<int>::max(), "Invalid UI ancestry");
+        ++node.depth;
     }
 }
 
@@ -133,7 +143,7 @@ template <class T> static void field(unsigned char *storage, unsigned offset, T 
 }
 
 static void performAction(void *root, void *gui) {
-    const auto matches = selectWidgets(shared->result, shared->action);
+    const auto matches = selectWidgets(shared->result, observations, shared->action, &shared->cancel);
     require(matches.size() == 1, matches.empty() ? "UI selector matched no widget" : "UI selector is ambiguous");
     const int selected = matches.front();
     void *widget = widgets[selected];
@@ -141,19 +151,19 @@ static void performAction(void *root, void *gui) {
     const bool hasModal = std::any_of(widgets.begin(), widgets.end(), [&](void *p) { return modalChild(gui, p); });
     require(!hasModal || modalChild(gui, widget), "Widget is outside the active modal UI");
     // Postorder ancestors follow the target; verify all ancestors rather than only the widget itself.
-    int depth = shared->result.nodes[selected].depth;
+    int depth = observations.nodes[selected].depth;
     for (int i = selected; i < shared->result.count; ++i) {
-        if (i != selected && shared->result.nodes[i].depth >= depth)
+        if (i != selected && observations.nodes[i].depth >= depth)
             continue;
-        require(shared->result.nodes[i].enabled && !fn<bool (*)(void *)>(Destroying)(widgets[i]),
+        require(observations.nodes[i].enabled && !fn<bool (*)(void *)>(Destroying)(widgets[i]),
                 "Widget or ancestor is disabled or being destroyed");
-        depth = shared->result.nodes[i].depth;
+        depth = observations.nodes[i].depth;
     }
     const auto &action = shared->action;
     const auto &layout = symbols.events;
     alignas(16) unsigned char event[256]{};
     if (action.kind == 1) {
-        const auto &node = shared->result.nodes[selected];
+        const auto &node = observations.nodes[selected];
         require(node.width > 0 && node.height > 0, "Widget has no interaction area");
         field<int>(event, layout.mouseX, int((node.width - 1) * action.x));
         field<int>(event, layout.mouseY, int((node.height - 1) * action.y));
@@ -345,17 +355,19 @@ static void service(void *root, void *gui) {
     result.optionCount = 0;
     result.registryCount = 0;
     result.worldSize = 0;
-    result.chat.count = 0;
+    result.chat = {};
+    observations = ObservationStorage{};
+    observations.publish(result);
     try {
         if (shared->cancel)
             throw std::runtime_error("Tool was cancelled before UI traversal");
         if (shared->operation == 7) {
             require(!loading, "Control registry is unavailable during loading");
-            collectControls(symbols, *shared);
+            collectControls(symbols, *shared, observations);
         }
         if (shared->operation == 8) {
             require(!loading && game, "World query requires a loaded world; menus and loading are unavailable");
-            queryWorld(symbols, game, shared->worldQuery, result);
+            queryWorld(symbols, game, shared->worldQuery, result, observations);
         }
         if (shared->operation == 9) {
             require(symbols.timedInput.supported, "Timed input adapter is unavailable");
@@ -365,7 +377,7 @@ static void service(void *root, void *gui) {
         if (shared->operation == 10 || shared->operation == 11) {
             require(!loading && game, "Chat requires a loaded world");
             if (shared->operation == 10)
-                readChat(symbols, game, result.chat);
+                readChat(symbols, game, result.chat, observations, &shared->cancel);
             else
                 sendChat(symbols, game, shared->chat);
         }
@@ -376,6 +388,8 @@ static void service(void *root, void *gui) {
         if (keyAction && !shared->action.count) {
             keyGesture.begin(shared->action.keys, shared->action.keyCount);
         } else if (shared->operation == 3 || shared->operation == 5) {
+            require(shared->limit > 0 && shared->limit <= uint32_t(std::numeric_limits<int>::max()),
+                    "Invalid UI observation limit");
             widgets.clear();
             const std::function<void(void *)> visitor = collect;
             fn<void (*)(void *, const std::function<void(void *)> &)>(Walk)(root, visitor);
@@ -384,13 +398,13 @@ static void service(void *root, void *gui) {
                 performAction(root, gui);
             else {
                 if (shared->action.count)
-                    selectWidgets(result, shared->action);
+                    selectWidgets(result, observations, shared->action, &shared->cancel);
                 IconReferences icons(symbols);
-                for (int i : observationWidgets(result, shared->action.count != 0)) {
+                for (int i : observationWidgets(result, observations, shared->action.count != 0)) {
                     require(!shared->cancel, "Tool cancelled during UI property observation");
                     void *widget = widgets[i];
-                    auto &node = result.nodes[i];
-                    collectWidgetProperties(symbols, widget, node, &result);
+                    auto &node = observations.nodes[i];
+                    collectWidgetProperties(symbols, widget, node, &result, &observations, &shared->cancel);
                     collectNumber(symbols, widget, node);
                     collectProgress(symbols, widget, node);
                     collectSwitch(symbols, widget, node);
@@ -414,6 +428,7 @@ static void service(void *root, void *gui) {
         result.count = 0;
     }
     widgets.clear();
+    observations.publish(result);
     if (uiButtons.active())
         return;
     InterlockedExchange(&shared->command, 3);
@@ -595,6 +610,13 @@ extern "C" __declspec(dllexport) DWORD WINAPI fm_unhook(void *) {
                 strcpy_s(shared->result.message, "Tool aborted: detached");
                 InterlockedExchange(&shared->command, 3);
             }
+            observations = ObservationStorage{};
+            shared->result.count = 0;
+            shared->result.optionCount = 0;
+            shared->result.controlCount = 0;
+            shared->result.worldSize = 0;
+            shared->result.chat = {};
+            observations.publish(shared->result);
             InterlockedExchange(&shared->attached, 0);
         }
     } catch (const std::exception &e) {

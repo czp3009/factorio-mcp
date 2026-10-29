@@ -89,7 +89,7 @@ internal data class WidgetIcon(val reference: Int?, val truncated: Boolean = fal
 
 /** Native references never expose addresses; -1 is absent and -2 is a bounded omission. */
 internal fun widgetIconReference(value: Int): WidgetIcon? {
-    require(value in -2 until 512) { "Resident icon reference exceeds wire storage" }
+    require(value >= -2) { "Resident icon reference exceeds wire storage" }
     return if (value == -1) null else WidgetIcon(value.takeIf { it >= 0 }, truncated = value == -2)
 }
 

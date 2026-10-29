@@ -97,11 +97,11 @@ internal data class ControlLayouts(
         output.cutscene = prototype.cutscene.toUInt()
     }
 
-    fun read(source: FmLinuxControlsSnapshot, frame: Long): GameSnapshot {
+    fun read(source: FmLinuxControlsSnapshot, frame: Long, readMemory: (Long, Int) -> ByteArray): GameSnapshot {
         require(
-            source.count <= FM_LINUX_MAX_CONTROLS.toUInt() &&
+            source.count <= Int.MAX_VALUE.toUInt() &&
                 source.count <= source.registryCount &&
-                source.registryCount <= 16384u &&
+                source.registryCount <= Int.MAX_VALUE.toUInt() &&
                 source.truncated <= 1u &&
                 (source.count < source.registryCount) == (source.truncated != 0u)
         )
@@ -148,8 +148,7 @@ internal data class ControlLayouts(
             }
 
         val controls =
-            List(source.count.toInt()) { index ->
-                val row = source.controls[index]
+            source.controls.readObservationRecords<FmLinuxControl, ControlSnapshot>(source.count, readMemory) { row ->
                 require(
                     listOf(row.custom, row.enabled, row.spectating, row.cutscene, row.gui).all {
                         it <= 1u

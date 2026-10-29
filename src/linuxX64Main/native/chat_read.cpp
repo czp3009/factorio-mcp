@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cerrno>
 #include <cstring>
+#include <unordered_set>
 #include <sys/syscall.h>
 #include <unistd.h>
 
@@ -41,22 +42,24 @@ bool valid(const FmLinuxChatReadLayout &l) {
     return true;
 }
 
-int copyString(uintptr_t object, const FmLinuxChatReadLayout &l, char *output, uint32_t &written, bool &truncated) {
+int copyString(uintptr_t object, const FmLinuxChatReadLayout &l, FmLinuxObservationBuffer &output, uint32_t &written, bool &truncated, ChatSnapshot &snapshot) {
     uintptr_t data;
     uint64_t size;
     if (!fm::addressRange(object, l.stringSize) || !fm::read(object + l.stringData, data) ||
         !fm::read(object + l.stringLength, size) || !data)
         return EFAULT;
-    if (size > 1024 * 1024)
-        return EOVERFLOW;
-    auto count = static_cast<size_t>(std::min(size, uint64_t(FM_LINUX_CHAT_RECORD_BYTES - 1)));
+    if (size && !fm::addressRange(data, size))
+        return EFAULT;
+    auto count = static_cast<size_t>(std::min(size, uint64_t(FM_LINUX_CHAT_RECORD_BYTES)));
     truncated = count < size;
-    if ((count || truncated) && !fm::readBytes(data, output, count + (truncated ? 1 : 0)))
+    auto &copied = snapshot.strings.emplace_back(count + (truncated ? 1 : 0));
+    if (!copied.empty() && !fm::readBytes(data, copied.data(), copied.size()))
         return EFAULT;
     if (truncated)
-        while (count && (static_cast<unsigned char>(output[count]) & 0xc0) == 0x80)
+        while (count && (static_cast<unsigned char>(copied[count]) & 0xc0) == 0x80)
             --count;
-    output[count] = 0;
+    copied.resize(count);
+    output = observationBuffer(copied);
     written = static_cast<uint32_t>(count);
     return 0;
 }
@@ -83,7 +86,7 @@ int ChatReadCommand::cleanup() {
 }
 
 int ChatReadCommand::start(const ChatReadConfig &config, uintptr_t console, uintptr_t player, const uint32_t *cancel,
-                           FmLinuxChatSnapshot &output) {
+                           ChatSnapshot &output) {
     if (syscall(SYS_gettid) != getpid())
         return EPERM;
     if (started_)
@@ -109,30 +112,33 @@ int ChatReadCommand::start(const ChatReadConfig &config, uintptr_t console, uint
         if (owner != player)
             return ESTALE;
         output.consoleIdentity = console;
+        std::unordered_set<uintptr_t> visited;
+        output.records.clear();
+        output.strings.clear();
         for (unsigned stream = 0; stream < 2; ++stream) {
             const auto head = console + l.sentinel[stream];
             uintptr_t node, previous = head;
             uint64_t total;
             if (!fm::read(head + l.next, node) || !fm::read(console + l.count[stream], total))
                 return EFAULT;
-            if (total > 65536)
+            if (total > INT32_MAX - output.records.size())
                 return EOVERFLOW;
             output.totals[stream] = total;
-            for (uint64_t i = 0; i < std::min(total, uint64_t(FM_LINUX_CHAT_RECORDS / 2)); ++i) {
+            for (uint64_t i = 0; i < total; ++i) {
                 if (fm_ipc_load(cancel))
                     return ECANCELED;
                 if (!fm::addressRange(node, l.nodeSize) || node == head)
                     return ESTALE;
-                for (uint32_t j = 0; j < output.count; ++j)
-                    if (output.records[j].identity == node)
-                        return ESTALE;
+                if (!visited.insert(node).second)
+                    return ESTALE;
                 uintptr_t back, next, reciprocal;
                 if (!fm::read(node + l.previous, back) || !fm::read(node + l.next, next) ||
                     !fm::addressRange(next, l.value) || !fm::read(next + l.previous, reciprocal))
                     return EFAULT;
                 if (back != previous || reciprocal != node)
                     return ESTALE;
-                auto &row = output.records[output.count];
+                output.records.emplace_back();
+                auto &row = output.records.back();
                 row = {};
                 row.identity = node;
                 row.stream = stream;
@@ -151,11 +157,11 @@ int ChatReadCommand::start(const ChatReadConfig &config, uintptr_t console, uint
                     row.playerIndex = index;
                 }
                 bool truncated;
-                if (const auto error = copyString(item + l.text + l.cached, l, row.text, row.textSize, truncated))
+                if (const auto error = copyString(item + l.text + l.cached, l, row.text, row.textSize, truncated, output))
                     return error;
                 row.truncated = truncated ? 1 : 0;
                 if (const auto error =
-                        copyString(item + l.playerName, l, row.playerName, row.playerNameSize, truncated))
+                        copyString(item + l.playerName, l, row.playerName, row.playerNameSize, truncated, output))
                     return error;
                 if (truncated)
                     row.truncated |= 4;
@@ -163,7 +169,7 @@ int ChatReadCommand::start(const ChatReadConfig &config, uintptr_t console, uint
                 config.raw(string_, reinterpret_cast<const void *>(item + l.text));
                 owned_ = true;
                 destroyEntered_ = false;
-                const int copied = copyString(reinterpret_cast<uintptr_t>(string_), l, row.raw, row.rawSize, truncated);
+                const int copied = copyString(reinterpret_cast<uintptr_t>(string_), l, row.raw, row.rawSize, truncated, output);
                 if (truncated)
                     row.truncated |= 2;
                 record(copied);
@@ -176,7 +182,7 @@ int ChatReadCommand::start(const ChatReadConfig &config, uintptr_t console, uint
                 previous = node;
                 node = next;
             }
-            if (total <= FM_LINUX_CHAT_RECORDS / 2) {
+            {
                 uintptr_t tail;
                 if (!fm::read(head + l.previous, tail))
                     return EFAULT;
@@ -188,6 +194,8 @@ int ChatReadCommand::start(const ChatReadConfig &config, uintptr_t console, uint
     };
     try {
         record(observe());
+    } catch (const std::bad_alloc &) {
+        record(ENOMEM);
     } catch (...) {
         record(EFAULT);
     }

@@ -23,7 +23,7 @@ internal data class ChatSnapshot(
 
 internal data class ChatOffset(val tick: ULong, val counts: List<Int> = listOf(0, 0)) {
     init {
-        require(counts.size == 2 && counts.all { it in 0..65536 }) { "Invalid chat boundary counts" }
+        require(counts.size == 2 && counts.all { it >= 0 }) { "Invalid chat boundary counts" }
     }
 
     fun json() = buildJsonObject {
@@ -55,7 +55,7 @@ internal fun parseChatRead(args: JsonObject): ChatReadRequest {
     }
     val limit = args["limit"]?.intArgument() ?: 64
     val timeout = args["timeout"]?.intArgument() ?: 0
-    require(limit in 1..128) { "Chat limit must be 1..128" }
+    require(limit > 0) { "Chat limit must be positive" }
     require(timeout >= 0) { "Chat timeout must be nonnegative seconds" }
     return ChatReadRequest(offset, limit, timeout)
 }
@@ -86,8 +86,8 @@ internal class ChatHistory {
     private var console: ULong? = null
 
     fun read(snapshot: ChatSnapshot, offset: ChatOffset?, limit: Int): JsonObject {
-        require(limit in 1..128)
-        require(snapshot.totals.size == 2 && snapshot.records.size <= 256 &&
+        require(limit > 0)
+        require(snapshot.totals.size == 2 &&
                 snapshot.records.all { it.stream in 0..1 }) { "Invalid native chat snapshot" }
         val changed = console != null && console != snapshot.console
         console = snapshot.console
@@ -121,9 +121,8 @@ internal class ChatHistory {
             counts[stream] = maxOf(counts[stream], entry.position + 1)
             // A recent-history read intentionally skips earlier entries from both streams.
             if (offset == null) {
-                for (other in observed) {
-                    if (other.record.tick == tick && other.record.stream < stream)
-                        counts[other.record.stream] = maxOf(counts[other.record.stream], other.position + 1)
+                for (otherStream in 0 until stream) {
+                    counts[otherStream] = maxOf(counts[otherStream], positions[tick to otherStream] ?: 0)
                 }
             }
             ChatOffset(tick, counts.toList()).also { progress = it }
@@ -139,7 +138,7 @@ internal class ChatHistory {
             put("boundary_truncated", boundaryTruncated(progress.tick))
             put("has_more", candidates.size > page.size)
             put("history_lost", changed || lostBoundary)
-            put("snapshot_truncated", snapshot.totals.any { it > 128uL })
+            put("snapshot_truncated", (0..1).any { stream -> snapshot.totals[stream] > snapshot.records.count { it.stream == stream }.toULong() })
             put("missed_between_reads_possible", true)
             putJsonArray("retained_counts") { snapshot.totals.forEach { add(JsonPrimitive(it)) } }
             putJsonArray("messages") {
@@ -191,7 +190,6 @@ internal fun chatReadSchema() = buildJsonObject {
                         putJsonObject("items") {
                             put("type", "integer")
                             put("minimum", 0)
-                            put("maximum", 65536)
                         }
                         put("description", "Already-read records at this tick, in game_state and local storage respectively.")
                     }
@@ -214,7 +212,6 @@ internal fun chatReadSchema() = buildJsonObject {
     putJsonObject("limit") {
         put("type", "integer")
         put("minimum", 1)
-        put("maximum", 128)
         put("default", 64)
     }
 }

@@ -71,7 +71,7 @@ bool validControlsLayout(const FmLinuxControlsLayout& layout) {
     return true;
 }
 
-int snapshotControls(const FmLinuxControlsLayout& layout, const uint32_t* cancel, FmLinuxControlsSnapshot& output) {
+int snapshotControls(const FmLinuxControlsLayout& layout, const uint32_t* cancel, ControlsSnapshot& output) {
     output.count = output.registryCount = output.truncated = 0;
     if (!validControlsLayout(layout) || !cancel) return EINVAL;
     if (fm_ipc_load(cancel)) return ECANCELED;
@@ -82,7 +82,7 @@ int snapshotControls(const FmLinuxControlsLayout& layout, const uint32_t* cancel
     if (!fm::read(layout.registry + layout.begin, begin) || !fm::read(layout.registry + layout.end, end)) return EFAULT;
     if (!begin || end < begin || (end - begin) % sizeof(uintptr_t)) return EINVAL;
     const auto count = (end - begin) / sizeof(uintptr_t);
-    if (!count || count > 16384) return EOVERFLOW;
+    if (!count || count > INT32_MAX) return EOVERFLOW;
     try {
         std::vector<uintptr_t> entries(count);
         if (!fm::readBytes(begin, entries.data(), entries.size() * sizeof(uintptr_t))) return EFAULT;
@@ -94,8 +94,8 @@ int snapshotControls(const FmLinuxControlsLayout& layout, const uint32_t* cancel
         std::vector<uintptr_t> path;
         Object object, linked, prototype;
         output.registryCount = static_cast<uint32_t>(count);
-        output.truncated = count > FM_LINUX_MAX_CONTROLS;
-        for (size_t index = 0; index < std::min(count, size_t(FM_LINUX_MAX_CONTROLS)); ++index) {
+        output.controls.resize(count);
+        for (size_t index = 0; index < count; ++index) {
             if (fm_ipc_load(cancel)) return ECANCELED;
             const auto control = entries[index];
             if (!fm::readBytes(control, object.data(), layout.size)) return EFAULT;

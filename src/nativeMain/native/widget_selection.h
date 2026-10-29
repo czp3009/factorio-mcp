@@ -1,12 +1,13 @@
 #pragma once
 #include <algorithm>
+#include <climits>
 #include <optional>
 #include <stdexcept>
 #include <string_view>
 #include <vector>
 
 namespace fm::ui {
-enum class Failure { invalid, incomplete, workLimit, canceled };
+enum class Failure { invalid, incomplete, canceled };
 
 class Error : public std::runtime_error {
 public:
@@ -65,7 +66,7 @@ inline bool matches(const Node &node, const Step &step) {
 
 /** Only complete postorder forests can establish parents for selector resolution. */
 inline void postorderParents(std::vector<Node> &nodes) {
-    require(nodes.size() <= 4096, "UI node count exceeds selector bound");
+    require(nodes.size() <= INT_MAX, "UI node count exceeds integer representation");
     std::vector<int> pending;
     for (int index = 0; index < static_cast<int>(nodes.size()); ++index) {
         auto &node = nodes[index];
@@ -93,9 +94,9 @@ public:
     Tree(const std::vector<Node> &nodes, bool complete) : nodes(nodes) {
         if (!complete)
             throw Error(Failure::incomplete, "UI search is incomplete; cannot resolve selector safely");
-        require(nodes.size() <= 4096, "UI node count exceeds selector bound");
+        require(nodes.size() <= INT_MAX, "UI node count exceeds integer representation");
         const int count = static_cast<int>(nodes.size());
-        children.resize(count + 1);
+        children.resize(nodes.size() + 1);
         ranks.resize(count);
         ends.resize(count);
         for (int index = 0; index < count; ++index) {
@@ -130,7 +131,6 @@ public:
         require(!path.empty() && path.size() <= 16, "Invalid selector length");
         const int count = static_cast<int>(nodes.size());
         std::vector<int> current{count};
-        unsigned work = 0;
         for (const auto &step : path) {
             require(step.position >= 0, "Invalid selector position");
             if (canceled())
@@ -139,8 +139,6 @@ public:
             for (int context : current) {
                 int position = 0;
                 auto consider = [&](int index) {
-                    if (++work > 2000000)
-                        throw Error(Failure::workLimit, "Selector work exceeds bound; use a more specific path");
                     if (canceled())
                         throw Error(Failure::canceled, "UI selection canceled");
                     if (!matches(nodes[index], step))

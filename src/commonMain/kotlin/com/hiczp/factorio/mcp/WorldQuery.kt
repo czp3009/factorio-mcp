@@ -172,14 +172,14 @@ internal fun parseWorldQuery(args: JsonObject): WorldQuery {
         }
         val (left, top) = point(area.getValue("left_top"))
         val (right, bottom) = point(area.getValue("right_bottom"))
-        require(right > left && bottom > top && right - left <= 128 && bottom - top <= 128) {
-            "Area must have positive dimensions no larger than 128 tiles per side"
+        require(right > left && bottom > top) {
+            "Area must have positive dimensions"
         }
     }
     selection["radius"]?.let {
         val radius = it.doubleArgument()
-        require("position" in selection && radius.isFinite() && radius in 0.0..64.0) {
-            "radius requires position and must be in 0..64"
+        require("position" in selection && radius.isFinite() && radius >= 0.0) {
+            "radius requires position and must be finite and nonnegative"
         }
     }
     selection["unit_number"]?.let {
@@ -194,7 +194,7 @@ internal fun parseWorldQuery(args: JsonObject): WorldQuery {
     for (field in listOf("name", "type")) selection[field]?.let { validateEntityFilter(field, it) }
     args["surface"]?.let(::validateSurfaceSelector)
     val limit = args["limit"]?.intArgument() ?: 128
-    require(limit in 1..512) { "limit must be in 1..512" }
+    require(limit > 0) { "limit must be positive" }
     val allowed =
         when (kind) {
             "entities",
@@ -250,11 +250,11 @@ internal fun parseWorldQuery(args: JsonObject): WorldQuery {
         }
     val fields = args["fields"]?.jsonArray?.map { it.stringArgument() } ?: defaults
     require(
-        fields.size in 1..32 &&
+        fields.isNotEmpty() &&
                 fields.distinct().size == fields.size &&
                 fields.all { it in allowed }
     ) {
-        "fields must contain 1..32 distinct supported properties for $kind: ${allowed.joinToString()}"
+        "fields must contain distinct supported properties for $kind: ${allowed.joinToString()}"
     }
     return WorldQuery(
         buildJsonObject {
@@ -304,7 +304,6 @@ internal fun worldQuerySchema(): JsonObject = buildJsonObject {
             putJsonObject("indices") {
                 put("type", "array")
                 put("minItems", 1)
-                put("maxItems", 128)
                 put("uniqueItems", true)
                 putJsonObject("items") {
                     put("type", "integer")
@@ -330,7 +329,6 @@ internal fun worldQuerySchema(): JsonObject = buildJsonObject {
             putJsonObject("radius") {
                 put("type", "number")
                 put("minimum", 0)
-                put("maximum", 64)
             }
             putJsonObject("unit_number") {
                 put("type", "integer")
@@ -338,7 +336,7 @@ internal fun worldQuerySchema(): JsonObject = buildJsonObject {
                 put("maximum", 4294967295L)
                 put(
                     "description",
-                    "Direct lookup requires the prototype's get-by-unit-number flag. Otherwise combine with position/area to filter a bounded scan (at most 4096 candidates); unresolved direct lookup is an error, not proof the entity is absent.",
+                    "Direct lookup requires the prototype's get-by-unit-number flag. Otherwise combine with position/area to filter a complete spatial scan; unresolved direct lookup is an error, not proof the entity is absent.",
                 )
             }
             for (name in listOf("name", "type")) putJsonObject(name) {
@@ -355,19 +353,18 @@ internal fun worldQuerySchema(): JsonObject = buildJsonObject {
         }
         put(
             "description",
-            "entities: position/area uses collision geometry; position+radius uses centers; unit_number uses the world's index. tiles: one position or area. Coordinates are tiles, areas at most 128x128. player|character|vehicle|physical_vehicle|force accepts optional player; absent entity references return availability:nil. players enumerates/filter players. inspect requires target and optional path. inventories discovers inventory names; inventory reads slots. quickbar reads slots/screen_pages. prototypes requires type:item|recipe|entity|fluid|technology|quality|item_group|item_subgroup. recipes/technologies read local-force objects. Catalogs accept names/search and recipe relations.",
+            "entities: position/area uses collision geometry; position+radius uses centers; unit_number uses the world's index. tiles: one position or area. Coordinates are tiles, positive area dimensions. player|character|vehicle|physical_vehicle|force accepts optional player; absent entity references return availability:nil. players enumerates/filter players. inspect requires target and optional path. inventories discovers inventory names; inventory reads slots. quickbar reads slots/screen_pages. prototypes requires type:item|recipe|entity|fluid|technology|quality|item_group|item_subgroup. recipes/technologies read local-force objects. Catalogs accept names/search and recipe relations.",
         )
         putJsonArray("required") { add("kind") }
     }
     putJsonObject("fields") {
         put("type", "array")
         put("minItems", 1)
-        put("maxItems", 64)
         put("uniqueItems", true)
         putJsonObject("items") { put("type", "string") }
         put(
             "description",
-            "Omit for defaults; inspect values defaults to all readable attributes and accepts up to 64 names discovered with members; other kinds accept up to 32. quickbar/inventories reject fields. Entities/references: ${entityFields.joinToString()}. Tiles: ${tileFields.joinToString()}. Player/players: ${playerFields.joinToString()}. Force: ${forceFields.joinToString()}. ${relatedFieldsDescription()}",
+            "Omit for defaults; inspect values defaults to all readable attributes; use names discovered with members. quickbar/inventories reject fields. Entities/references: ${entityFields.joinToString()}. Tiles: ${tileFields.joinToString()}. Player/players: ${playerFields.joinToString()}. Force: ${forceFields.joinToString()}. ${relatedFieldsDescription()}",
         )
     }
     putJsonObject("mode") {
@@ -396,16 +393,20 @@ internal fun worldQuerySchema(): JsonObject = buildJsonObject {
     putJsonObject("limit") {
         put("type", "integer")
         put("minimum", 1)
-        put("maximum", 512)
         put(
             "description",
-            "Spatial/player default 128, max 512. Inventory/catalog/players/inspect default 64; inventory slots max 512, players/catalogs max 128, inspect max 256. quickbar rejects limit.",
+            "Spatial/player default 128. Inventory/catalog/players/inspect default 64. Increase for bulk reads; quickbar rejects limit.",
         )
+    }
+    putJsonObject("depth") {
+        put("type", "integer")
+        put("minimum", 0)
+        put("default", 3)
+        put("description", "inspect only. Plain-table preview depth; increase to expand nested values. Native objects remain references and cycles are reported.")
     }
     putJsonObject("offset") {
         put("type", "integer")
         put("minimum", 0)
-        put("maximum", 65536)
         put("default", 0)
         put(
             "description",

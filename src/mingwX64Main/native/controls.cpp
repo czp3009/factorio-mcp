@@ -2,6 +2,7 @@
 #include "protocol.h"
 #include <algorithm>
 #include <cstring>
+#include <limits>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -50,12 +51,13 @@ bool modifierExpression(const Symbols &symbols, void *value, char *output, size_
 }
 } // namespace
 
-void collectControls(const Symbols &symbols, Shared &shared) {
+void collectControls(const Symbols &symbols, Shared &shared, ObservationStorage &storage) {
     require(!*reinterpret_cast<const bool *>(symbols.address[ControlsLoading]), "Control registry is being rebuilt");
     const auto &layout = symbols.controls;
     void *list = function<void *(*)()>(symbols, ControlList)();
     const auto first = read<uintptr_t>(list, layout.first), last = read<uintptr_t>(list, layout.last);
-    require(last >= first && (last - first) % sizeof(void *) == 0 && (last - first) / sizeof(void *) <= 16384,
+    require(last >= first && (last - first) % sizeof(void *) == 0 &&
+                (last - first) / sizeof(void *) <= std::numeric_limits<int>::max(),
             "Control registry exceeds supported bound");
     const size_t count = (last - first) / sizeof(void *);
     require(count && first, "Control registry is not ready");
@@ -102,12 +104,13 @@ void collectControls(const Symbols &symbols, Shared &shared) {
     };
     auto &result = shared.result;
     result.registryCount = static_cast<uint32_t>(count);
-    result.controlCount = static_cast<uint32_t>(std::min(count, size_t(FM_MAX_CONTROLS)));
-    result.truncated = count > FM_MAX_CONTROLS;
+    result.controlCount = static_cast<uint32_t>(count);
+    result.truncated = 0;
+    storage.controls.resize(count);
     for (size_t i = 0; i < result.controlCount; ++i) {
         require(!shared.cancel, "Control query cancelled");
         void *control = entries[i];
-        auto &row = result.controls[i];
+        auto &row = storage.controls[i];
         memset(&row, 0, sizeof(row));
         key(control, row.id, sizeof(row.id));
         row.gui = read<bool>(control, layout.gui);

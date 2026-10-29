@@ -104,10 +104,11 @@ int main() {
     Control *entries[] = {&native, &mod};
     registry = {entries, entries + 2};
     auto shared = std::make_unique<Shared>();
-    collectControls(symbols, *shared);
+    ObservationStorage storage;
+    collectControls(symbols, *shared, storage);
     const auto &result = shared->result;
     assert(result.registryCount == 2 && result.controlCount == 2 && destroyed == 6);
-    const auto &row = result.controls[1];
+    const auto &row = storage.controls[1];
     assert(std::string(row.id) == "linked-mod" && std::string(row.bindingOwner) == "build");
     assert(row.custom && !row.enabled && row.spectating && !row.cutscene);
     assert(row.bindings[0].type == 0 && row.effective[0].code == 99 && row.effective[0].modifiers == 4);
@@ -115,7 +116,7 @@ int main() {
     assert(std::string(row.effective[0].modifierExpression) == "CONTROL + ");
     auto rejected = [&] {
         try {
-            collectControls(symbols, *shared);
+            collectControls(symbols, *shared, storage);
             return false;
         } catch (const std::runtime_error &) {
             return true;
@@ -133,7 +134,7 @@ int main() {
     shared->cancel = 1;
     assert(rejected());
     shared->cancel = 0;
-    std::vector<Control> chain(FM_MAX_CONTROLS + 1);
+    std::vector<Control> chain(20000);
     std::vector<Control *> linkedEntries;
     for (size_t i = 0; i < chain.size(); ++i) {
         chain[i].slots[0].key = "control-" + std::to_string(i);
@@ -142,11 +143,11 @@ int main() {
     }
     chain.back().slots[0].value = {1, 123, 0};
     registry = {linkedEntries.data(), linkedEntries.data() + linkedEntries.size()};
-    collectControls(symbols, *shared);
-    assert(result.truncated && result.controlCount == FM_MAX_CONTROLS && result.registryCount == chain.size());
+    collectControls(symbols, *shared, storage);
+    assert(!result.truncated && result.controlCount == chain.size() && result.registryCount == chain.size());
     for (unsigned i = 0; i < result.controlCount; ++i) {
-        assert(result.controls[i].effective[0].code == 123);
-        assert(std::string(result.controls[i].bindingOwner) == chain.back().slots[0].key);
+        assert(storage.controls[i].effective[0].code == 123);
+        assert(std::string(storage.controls[i].bindingOwner) == chain.back().slots[0].key);
     }
     chain.back().linked = &chain.front();
     assert(rejected());

@@ -1,7 +1,7 @@
 #pragma once
 #include <stdint.h>
+#include "observation_buffer.h"
 
-#define FM_LINUX_MAX_CONTROLS 1024
 #define FM_LINUX_CONTROL_ID_BYTES 256
 
 typedef struct FmLinuxControlsLayout {
@@ -54,11 +54,20 @@ typedef struct FmLinuxControlsSnapshot {
     uint32_t registryCount;
     uint32_t count;
     uint32_t truncated;
-    FmLinuxControl controls[FM_LINUX_MAX_CONTROLS];
+    FmLinuxObservationBuffer controls;
 } FmLinuxControlsSnapshot;
 
 #ifdef __cplusplus
+struct ControlsSnapshot {
+    uint32_t registryCount = 0, count = 0, truncated = 0;
+    std::vector<FmLinuxControl> controls;
+
+    FmLinuxControlsSnapshot wire() const {
+        return {registryCount, count, truncated, observationBuffer(controls)};
+    }
+};
+
 bool validControlsLayout(const FmLinuxControlsLayout& layout);
 // Called only inside the verified frontend safe point. No borrowed pointers survive the call.
-int snapshotControls(const FmLinuxControlsLayout& layout, const uint32_t* cancel, FmLinuxControlsSnapshot& output);
+int snapshotControls(const FmLinuxControlsLayout& layout, const uint32_t* cancel, ControlsSnapshot& output);
 #endif

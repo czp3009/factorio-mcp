@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 #include <memory>
 
 namespace {
@@ -117,7 +118,7 @@ void testWorldQuery(void *state, const FmLinuxLuaApi &api, const FmLinuxLuaState
     lua.loading = offset(&script, &script.loading);
     lua.enabled = offset(&script, &script.enabled);
     auto query = std::make_unique<FmLinuxLuaQuery>();
-    auto result = std::make_unique<FmLinuxLuaResult>();
+    auto result = std::make_unique<LuaResult>();
     const char source[] = "local p,a=...; assert(p==7 and a=='{}'); return '{\"player\":7}'";
     query->sourceSize = sizeof(source) - 1;
     std::memcpy(query->source, source, sizeof(source) - 1);
@@ -125,7 +126,7 @@ void testWorldQuery(void *state, const FmLinuxLuaApi &api, const FmLinuxLuaState
     std::memcpy(query->arguments, "{}", 2);
     uint32_t cancel = 0;
     auto run = [&] { return queryWorld(config, *query, &cancel, *result); };
-    require(run() == 0 && std::strcmp(result->text, "{\"player\":7}") == 0,
+    require(run() == 0 && std::string(result->text.data(), result->text.size()).compare( "{\"player\":7}") == 0,
             "composed world/player/script/Lua query failed");
     ++selection.gameSize;
     require(run() == EINVAL && !result->size, "inconsistent world/player bounds accepted");

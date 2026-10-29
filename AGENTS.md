@@ -55,7 +55,10 @@
   `development.md`. Keep research, experiments, comparisons and unverified plans only under ignored `temp/`; do not
   duplicate them in tracked documentation. Keep agent-facing `tools/list` descriptions aligned with the implemented
   contract as well. Preserve historical evidence with its original scope; use an explicit current index instead of
-  rewriting old results as if they came from the latest code.
+  rewriting old results as if they came from the latest code. Describe the final product contract in project
+  documentation; omit per-change implementation progress and platform verification status. Keep test-run outcomes
+  and verification gaps under ignored `temp/`, while retaining build/test procedures in `development.md` and practical
+  product limitations in user guides.
 - Keep README instructions focused on user actions and configuration. Omit automatic package/platform selection,
   client-managed MCP startup and other mechanisms that require no user action. Keep agent operating guidance in
   server instructions and tool documentation rather than repeating it in installation instructions.
@@ -129,7 +132,13 @@
   and release behavior is verified. Reacquire their current targets at each safe point and validate the current root
   and tree; an address reused by a new widget must not revive a destroyed target. Retain these records on cleanup
   failure and release them before successful detach.
-- Keep snapshots bounded and report truncation. IDs are snapshot-local. Preserve unknown types and unsupported
+- Let callers choose query result counts through positive `limit`/`max_nodes` values, with modest defaults and
+  recommendations rather than fixed business-level maxima. Do not retain hidden scan or projection budgets that
+  defeat a larger requested result. Preserve integer, memory, identity and lifetime validation. Prefer chunked
+  transfer of owned observation copies; where fixed storage remains necessary, use a practical larger capacity and
+  report exhaustion explicitly. Keep each observation in its existing safe point, without cross-tick collection.
+  Use pagination only where native indices, ordering or existing continuation positions support it.
+- Bound snapshots by the request and report truncation. IDs are snapshot-local. Preserve unknown types and unsupported
   properties instead of inventing semantic state, visibility or action capabilities.
 - Preserve human-readable game text in its original language and form. Do not translate, interpret or rewrite it
   for the agent; preserve opaque values when reading and passing them back. Format encoding, bounded reads and
@@ -193,7 +202,9 @@
   widget. Widget-level mouse-up alone does not prove GUI bookkeeping was cleared. Revalidate lifetimes after callbacks.
   For selected observations, resolve the selector before collecting bounded optional properties so unrelated widgets
   cannot consume the selected subtree's resource budget. Keep both phases within the same safe point.
-- Keep queues, lifecycle and cancellation policy in Kotlin. The resident stays small, fixed, bounded and nonblocking.
+- Keep queues, lifecycle and cancellation policy in Kotlin. The resident stays small and nonblocking, with fixed
+  command ownership and request-sized observation storage. Owned result copies may survive their safe point for
+  chunked transfer; borrowed game objects may not. Retire these copies before the next command or successful detach.
   Native wire notifications must never wait for MCP to consume a result.
 - All admitted work finishes or cleans up cooperatively. Detach aborts admitted and waiting observations, waits for
   their

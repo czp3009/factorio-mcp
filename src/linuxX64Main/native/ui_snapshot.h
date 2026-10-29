@@ -3,17 +3,14 @@
 #include "ui_identity.h"
 #include "ui_quality.h"
 #include <stdint.h>
+#include "observation_buffer.h"
 
-#define FM_LINUX_MAX_NODES 4096
 #define FM_LINUX_MAX_CHILD_RANGES 8
 #define FM_LINUX_TYPE_NAME 256
-#define FM_LINUX_TEXT_SIZE 1024
+#define FM_LINUX_TEXT_SIZE (16 * 1024 * 1024)
 #define FM_LINUX_TEXT_GETTERS 64
 #define FM_LINUX_UI_PATH 16
-#define FM_LINUX_MAX_OPTIONS 1024
-#define FM_LINUX_WIDGET_OPTIONS 64
-#define FM_LINUX_OPTION_TEXT 512
-#define FM_LINUX_MAX_ICON_REFERENCES 512
+#define FM_LINUX_OPTION_TEXT (16 * 1024 * 1024)
 
 typedef struct FmLinuxUiStep {
     int32_t child;
@@ -117,7 +114,7 @@ typedef struct FmLinuxDropdownLayout {
 typedef struct FmLinuxUiOption {
     uint32_t size;
     uint32_t truncated;
-    char text[FM_LINUX_OPTION_TEXT];
+    FmLinuxObservationBuffer text;
 } FmLinuxUiOption;
 
 typedef struct FmLinuxSwitchLayout {
@@ -191,7 +188,7 @@ typedef struct FmLinuxUiNode {
     uint32_t textTruncated;
     uint32_t textSize;
     uint64_t textTotal;
-    char text[FM_LINUX_TEXT_SIZE];
+    FmLinuxObservationBuffer text;
     FmLinuxRectangle bounds;
     uint32_t toggledAvailable;
     uint32_t toggled;
@@ -226,12 +223,24 @@ typedef struct FmLinuxUiSnapshot {
     uint32_t count;
     uint32_t truncated;
     uint32_t treeTruncated;
-    FmLinuxUiNode nodes[FM_LINUX_MAX_NODES];
+    FmLinuxObservationBuffer nodes;
     uint32_t optionCount;
-    FmLinuxUiOption options[FM_LINUX_MAX_OPTIONS];
+    FmLinuxObservationBuffer options;
 } FmLinuxUiSnapshot;
 
 #ifdef __cplusplus
+struct UiSnapshot {
+    uint32_t count = 0, truncated = 0, treeTruncated = 0, optionCount = 0;
+    std::vector<FmLinuxUiNode> nodes;
+    std::vector<FmLinuxUiOption> options;
+    // Moving an inner vector preserves its owned byte allocation and published address.
+    std::vector<std::vector<char>> strings;
+
+    FmLinuxUiSnapshot wire() const {
+        return {count, truncated, treeTruncated, observationBuffer(nodes), optionCount, observationBuffer(options)};
+    }
+};
+
 class UiTargetReference;
 
 // Borrowed only within one frontend callback. Never store these addresses in IPC or across frames.
@@ -245,10 +254,10 @@ struct UiTarget {
 
 bool validUiLayout(const FmLinuxUiLayout &layout);
 int snapshotUi(void *gui, const FmLinuxUiLayout &layout, uint32_t limit, const uint32_t *cancel,
-               FmLinuxUiSnapshot &output, const FmLinuxUiSelector *selector = nullptr);
+               UiSnapshot &output, const FmLinuxUiSelector *selector = nullptr);
 // Selects exactly one widget from a complete traversal and checks its ancestors before action admission.
 int selectUiTarget(void *gui, const FmLinuxUiLayout &layout, const FmLinuxUiSelector &selector, const uint32_t *cancel,
-                   FmLinuxUiSnapshot &snapshot, UiTarget &output);
+                   UiSnapshot &snapshot, UiTarget &output);
 // Reacquires the authoritative GUI/root and traverses fresh child ranges after a callback.
 // Returns ENOENT for a removed/destroying widget and ESTALE when its GUI/root was replaced.
 int liveUiTarget(uintptr_t guiInstance, const FmLinuxUiLayout &layout, const UiTarget &target);

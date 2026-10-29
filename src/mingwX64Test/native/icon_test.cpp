@@ -1,6 +1,7 @@
 #include "widget_properties.h"
 #include <cassert>
 #include <cstddef>
+#include <array>
 
 struct Icon {
     void *padding{};
@@ -32,16 +33,16 @@ int main() {
     FmNode unsupported{};
     references.collect(nullptr, unsupported);
     assert(unsupported.properties == 0);
-    std::array<int, FM_MAX_ICON_REFERENCES + 1> sources{};
+    std::array<int, 2000> sources{};
     icon.hovered = nullptr;
-    IconReferences bounded(symbols);
+    IconReferences snapshot(symbols);
     for (unsigned index = 0; index < sources.size(); ++index) {
         icon.normal = &sources[index];
-        bounded.collect(reinterpret_cast<void *>(1), node);
-        assert(node.iconNormal == (index < FM_MAX_ICON_REFERENCES ? static_cast<int>(index) : -2));
+        snapshot.collect(reinterpret_cast<void *>(1), node);
+        assert(node.iconNormal == static_cast<int>(index));
     }
     icon.normal = &sources[0];
-    bounded.collect(reinterpret_cast<void *>(1), node);
+    snapshot.collect(reinterpret_cast<void *>(1), node);
     assert(node.iconNormal == 0);
     IconReferences fresh(symbols);
     icon.normal = &sources.back();

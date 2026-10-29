@@ -4,7 +4,7 @@ import kotlinx.serialization.json.*
 
 internal fun validateEntityFilter(name: String, value: JsonElement) {
     val values = if (value is JsonArray) value else JsonArray(listOf(value))
-    require(values.size in 1..64) { "$name requires 1..64 names" }
+    require(values.isNotEmpty()) { "$name requires one or more names" }
     val names = values.map { it.stringArgument() }
     require(
         names.distinct().size == names.size &&
@@ -31,7 +31,6 @@ internal fun entityFilterSchema(name: String) = buildJsonObject {
         addJsonObject {
             put("type", "array")
             put("minItems", 1)
-            put("maxItems", 64)
             put("uniqueItems", true)
             putJsonObject("items") {
                 put("type", "string")

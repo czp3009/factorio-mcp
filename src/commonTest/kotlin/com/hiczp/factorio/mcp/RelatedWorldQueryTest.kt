@@ -30,7 +30,7 @@ class RelatedWorldQueryTest {
     }
 
     @Test
-    fun unboundedCatalogsRecursiveOwnersAndWrongFieldFamiliesAreRejected() {
+    fun recursiveOwnersAndWrongFieldFamiliesAreRejected() {
         for (text in
         listOf(
             """{"selection":{"kind":"prototypes","type":"unknown"}}""",
@@ -39,8 +39,6 @@ class RelatedWorldQueryTest {
             """{"selection":{"kind":"recipes","names":[]}}""",
             """{"selection":{"kind":"recipes","names":["a","a"]}}""",
             """{"selection":{"kind":"recipes","search":""}}""",
-            """{"selection":{"kind":"recipes"},"limit":129}""",
-            """{"selection":{"kind":"inventory"},"limit":513}""",
             """{"selection":{"kind":"inventory"},"offset":-1}""",
             """{"selection":{"kind":"inventory"},"surface":1}""",
             """{"selection":{"kind":"inventory","owner":{"kind":"inventory"}}}""",
@@ -133,7 +131,7 @@ class RelatedWorldQueryTest {
                 }
             }
         }
-        assertFailsWith<IllegalArgumentException> { parseWorldQuery(excessive) }
+        assertEquals(129, parseWorldQuery(excessive).arguments.getValue("limit").jsonPrimitive.int)
     }
 
     @Test

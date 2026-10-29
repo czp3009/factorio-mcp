@@ -24,7 +24,7 @@ internal fun createServer(game: GameSession): Server {
             instructions =
                 """
                 Attach to an existing, fully loaded Factorio client; this server never launches it.
-                Prefer structured reads: world_query for objects, properties and collections, world_overview for spatial observations, chat_read for retained messages, and ui_read for interface state. Discover inspect members and use bounded paths, filters, fields and pages. Use screenshot for missing visual information, verification or requested images.
+                Prefer structured reads: world_query for objects, properties and collections, world_overview for spatial observations, chat_read for retained messages, and ui_read for interface state. Discover inspect members and use paths, filters, fields and pages. Query limits are caller-selected positive 32-bit integers; start with the defaults and increase them for bulk reads. Each snapshot is collected at one safe point; pages are fresh observations. Use screenshot for missing visual information, verification or requested images.
                 Use ui_action with live selectors for widgets and input for concurrent keyboard/mouse timelines. Discover current bindings with input_bindings. Use set_text for editable text.
                 Interpret native values, text, repetitions and hierarchy yourself. Missing, null and unavailable are distinct, widget flags are local, and controller context can differ from the physical character. Check truncation before treating results as complete.
                 Every action, including chat, reports client dispatch/execution and cleanup. Completion does not confirm server acceptance, delivery or gameplay success. Network latency and prediction rollback can delay, change or undo effects; reads observe current state. Actions do not wait for a resulting state. Observe effects before dependent actions. Do not blindly repeat a mutation whose result was lost or uncertain.
@@ -126,7 +126,6 @@ internal fun createServer(game: GameSession): Server {
             putJsonObject("max_nodes") {
                 put("type", "integer")
                 put("minimum", 1)
-                put("maximum", 4096)
                 put("default", 4096)
                 put(
                     "description",
@@ -145,7 +144,7 @@ internal fun createServer(game: GameSession): Server {
         },
     ) { args ->
         val limit = args["max_nodes"]?.intArgument() ?: 4096
-        require(limit in 1..4096) { "max_nodes must be in 1..4096" }
+        require(limit > 0) { "max_nodes must be positive" }
         game.read(
             limit,
             args["bounds"]?.booleanArgument() ?: false,
@@ -166,7 +165,6 @@ internal fun createServer(game: GameSession): Server {
         buildJsonObject {
             putJsonObject("ids") {
                 put("type", "array")
-                put("maxItems", 1024)
                 putJsonObject("items") { put("type", "string") }
                 put(
                     "description",
@@ -180,7 +178,6 @@ internal fun createServer(game: GameSession): Server {
             putJsonObject("offset") {
                 put("type", "integer")
                 put("minimum", 0)
-                put("maximum", 1024)
                 put("default", 0)
                 put(
                     "description",
@@ -190,7 +187,6 @@ internal fun createServer(game: GameSession): Server {
             putJsonObject("limit") {
                 put("type", "integer")
                 put("minimum", 1)
-                put("maximum", 1024)
                 put("default", 64)
             }
         },
@@ -198,14 +194,13 @@ internal fun createServer(game: GameSession): Server {
         val ids =
             args["ids"]?.let { value ->
                 val array = value as? JsonArray ?: error("ids must be an array")
-                require(array.size <= 1024) { "ids exceeds bound" }
                 array.map { it.stringArgument() }.toSet()
             }
         val search = args["search"]?.stringArgument()
         val offset = args["offset"]?.intArgument() ?: 0
         val limit = args["limit"]?.intArgument() ?: 64
-        require(offset in 0..1024 && limit in 1..1024) {
-            "offset must be in 0..1024 and limit in 1..1024"
+        require(offset >= 0 && limit > 0) {
+            "offset must be nonnegative and limit positive"
         }
         game.bindings(ids, search, offset, limit)
     }

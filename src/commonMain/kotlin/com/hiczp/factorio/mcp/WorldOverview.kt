@@ -35,14 +35,14 @@ internal fun parseWorldOverview(args: JsonObject): WorldQuery {
     val groupBy = args["group_by"]?.let { value ->
         val array = requireNotNull(value as? JsonArray) { "group_by must be an array" }
         array.map { it.stringArgument() }.also { fields ->
-            require(fields.size <= 8 && fields.distinct().size == fields.size && fields.all { it in entityFields }) {
-                "group_by requires up to 8 distinct entity fields"
+            require(fields.distinct().size == fields.size && fields.all { it in entityFields }) {
+                "group_by requires distinct entity fields"
             }
         }
     } ?: listOf("name", "type", "quality")
     val aggregates = args["aggregates"]?.let { value ->
         val array = requireNotNull(value as? JsonArray) { "aggregates must be an array" }
-        require(array.size <= 8 && array.distinct().size == array.size) { "aggregates requires up to 8 distinct operations" }
+        require(array.distinct().size == array.size) { "aggregates requires distinct operations" }
         array.forEach { item ->
             val aggregate = requireNotNull(item as? JsonObject) { "An aggregate must be an object" }
             require(aggregate.keys == setOf("operation", "field")) { "An aggregate requires operation and field" }
@@ -60,7 +60,7 @@ internal fun parseWorldOverview(args: JsonObject): WorldQuery {
             else emptyList()
     require(
         detail != "entities" ||
-                fields.size in 1..32 &&
+                fields.isNotEmpty() &&
                 fields.distinct().size == fields.size &&
                 fields.all { it in entityFields }
     ) {
@@ -89,15 +89,15 @@ internal fun parseWorldOverview(args: JsonObject): WorldQuery {
         }
         val (left, top) = point(area.getValue("left_top"))
         val (right, bottom) = point(area.getValue("right_bottom"))
-        require(right > left && bottom > top && right - left <= 4096 && bottom - top <= 4096) {
-            "Overview area must have positive dimensions no larger than 4096 tiles per side"
+        require(right > left && bottom > top) {
+            "Overview area must have positive dimensions"
         }
     }
     args["surface"]?.let(::validateSurfaceSelector)
     val cell = args["cell_size"]?.intArgument()
-    require(cell == null || cell in 1..4096) { "cell_size must be in 1..4096 tiles" }
+    require(cell == null || cell > 0) { "cell_size must be positive" }
     val limit = args["entity_limit"]?.intArgument() ?: 64
-    require(limit in 1..512) { "entity_limit must be in 1..512" }
+    require(limit > 0) { "entity_limit must be positive" }
     return WorldQuery(
         buildJsonObject {
             putJsonObject("selection") {
@@ -137,7 +137,6 @@ internal fun worldOverviewSchema() = buildJsonObject {
     put("include", entityIncludesSchema())
     putJsonObject("group_by") {
         put("type", "array")
-        put("maxItems", 8)
         put("uniqueItems", true)
         putJsonArray("default") {
             add("name")
@@ -152,7 +151,6 @@ internal fun worldOverviewSchema() = buildJsonObject {
     }
     putJsonObject("aggregates") {
         put("type", "array")
-        put("maxItems", 8)
         put("uniqueItems", true)
         put("description", "Grid only. Numeric calculations requested explicitly; count is always included. Missing, failed, non-numeric and non-finite reads are excluded and counted.")
         putJsonObject("items") {
@@ -181,7 +179,6 @@ internal fun worldOverviewSchema() = buildJsonObject {
     putJsonObject("fields") {
         put("type", "array")
         put("minItems", 1)
-        put("maxItems", 32)
         put("uniqueItems", true)
         putJsonObject("items") {
             put("type", "string")
@@ -204,7 +201,7 @@ internal fun worldOverviewSchema() = buildJsonObject {
                 .jsonObject +
                     ("description" to
                             JsonPrimitive(
-                                "World tile coordinates with positive dimensions, at most 4096 tiles per side. Omit to survey the current viewport; supply an area if viewport metadata is unavailable or the viewport is too large."
+                                "World tile coordinates with positive dimensions. Omit to survey the current viewport; supply an area if viewport metadata is unavailable."
                             ))
         ),
     )
@@ -218,20 +215,18 @@ internal fun worldOverviewSchema() = buildJsonObject {
     putJsonObject("cell_size") {
         put("type", "integer")
         put("minimum", 1)
-        put("maximum", 4096)
         put(
             "description",
-            "Grid cell width/height in tiles. Defaults to at least 32, enlarged to keep at most 16 rows/columns. Explicit granularity must yield at most 256 cells.",
+            "Grid cell width/height in tiles. Defaults to at least 32, enlarged to keep at most 16 rows/columns. Smaller explicit cell_size values return more cells.",
         )
     }
     putJsonObject("entity_limit") {
         put("type", "integer")
         put("minimum", 1)
-        put("maximum", 512)
         put("default", 64)
         put(
             "description",
-            "Maximum entity candidates per grid cell (4096 total work bound), or per whole area with detail:entities. Lookahead detects truncation; incomplete reads are explicit.",
+            "Maximum entity candidates per grid cell, or per whole area with detail:entities. Lookahead detects truncation; incomplete reads are explicit.",
         )
     }
 }

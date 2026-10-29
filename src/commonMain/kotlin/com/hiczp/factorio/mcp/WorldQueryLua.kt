@@ -72,21 +72,20 @@ internal val worldQueryLua =
       end
       error("Unsupported related object: " .. tostring(class))
     end
-    local remaining = 32768
-    local function project(value, depth)
-      remaining = remaining - 1
-      assert(remaining >= 0 and depth <= 8, "Projection work exceeds bound")
+    local function project(value, depth, projecting)
       local kind = type(value)
       if kind == "nil" or kind == "boolean" or kind == "number" or kind == "string" then return value end
       if kind == "userdata" then return identity(value) end
       assert(kind == "table", "Unsupported value type: " .. kind)
-      local result, count = {}, 0
+      projecting = projecting or {}
+      assert(not projecting[value], "Cyclic related collection")
+      projecting[value] = true
+      local result = {}
       for key, item in pairs(value) do
-        count = count + 1
-        assert(count <= 512, "Related collection exceeds bound")
         assert(type(key) == "string" or type(key) == "number", "Unsupported table key")
-        result[key] = project(item, depth + 1)
+        result[key] = project(item, depth + 1, projecting)
       end
+      projecting[value] = nil
       return result
     end
     local visibility_cache = {}
@@ -137,9 +136,8 @@ internal val worldQueryLua =
         return entity and entity.surface == surface and {entity} or {}
       end
       local found=surface.find_entities_filtered{position=selected.position, area=selected.area,
-        radius=selected.radius, name=selected.name, type=selected.type, limit=selected.unit_number and 4097 or maximum}
+        radius=selected.radius, name=selected.name, type=selected.type, limit=not selected.unit_number and maximum or nil}
       if not selected.unit_number then return found end
-      assert(#found<=4096, "Unit-number spatial search exceeds 4096 candidates; narrow the area")
       for _,entity in ipairs(found) do
         if entity.unit_number==selected.unit_number then return {entity} end
       end
@@ -162,19 +160,15 @@ internal val worldQueryLua =
       else catalog=prototypes[selection.type] end
       assert(catalog, "Requested prototype catalog is unavailable")
       local names, missing, scanned = {}, {}, 0
-      local relations=0
       local function contains(entries, filter)
         if not filter then return true end
         for _,entry in ipairs(entries) do
-          relations=relations+1
-          assert(relations<=32768, "Recipe relation scan exceeds 32768 entries; narrow names or search")
           if entry.type==filter.type and entry.name==filter.name then return true end
         end
         return false
       end
       local function consider(name, value)
         scanned=scanned+1
-        assert(scanned<=65536, "Catalog discovery exceeds 65536 entries; select exact names")
         if not value then missing[#missing+1]=name
         elseif not selection.search or string.find(string.lower(name), string.lower(selection.search), 1, true) then
           if (not selection.product or contains(value.products, selection.product))
@@ -221,7 +215,6 @@ internal val worldQueryLua =
         local indices, seen={},{}
         for _, index in pairs(defines.inventory) do
           if not seen[index] then
-            assert(#indices<256, "Inventory discovery exceeds bound")
             indices[#indices+1]=index
             seen[index]=true
           end
@@ -297,7 +290,6 @@ internal val worldQueryLua =
       end
       for _,candidate in pairs(game.players) do
         scanned=scanned+1
-        assert(scanned<=65536, "Player discovery exceeds bound")
         if (selection.connected==nil or candidate.connected==selection.connected)
           and contains(selection.names,candidate.name) and contains(selection.indices,candidate.index) then
           found[#found+1]=candidate

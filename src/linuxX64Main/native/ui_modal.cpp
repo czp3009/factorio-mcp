@@ -25,7 +25,7 @@ int checkUiModal(uintptr_t guiInstance, const FmLinuxUiLayout &ui, const FmLinux
         begin > end || (end - begin) % modal.stride || (begin && begin % alignof(uintptr_t)) || (!begin && end))
         return EFAULT;
     const uintptr_t count = (end - begin) / modal.stride;
-    if (count > FM_LINUX_MAX_NODES)
+    if (count > INT32_MAX)
         return E2BIG;
     if (count && !fm::addressRange(begin, end - begin))
         return EFAULT;
@@ -66,7 +66,7 @@ int checkUiModal(uintptr_t guiInstance, const FmLinuxUiLayout &ui, const FmLinux
 
 int selectUiActionTarget(uintptr_t guiInstance, void *gui, const FmLinuxUiLayout &ui,
                          const FmLinuxModalLayout &modal, const FmLinuxUiSelector &selector,
-                         const uint32_t *cancel, FmLinuxUiSnapshot &snapshot, UiTarget &output) {
+                         const uint32_t *cancel, UiSnapshot &snapshot, UiTarget &output) {
     output = {};
     UiTarget selected;
     if (const int error = selectUiTarget(gui, ui, selector, cancel, snapshot, selected))

@@ -49,13 +49,13 @@ template <class T> static void check(const FmLinuxIconLayout &config) {
     UiIcons icons(config);
     assert(icons.collect(reinterpret_cast<uintptr_t>(widget), node) == 0);
     assert(node.iconsAvailable && node.iconNormal == 0 && node.iconHovered == 0 && node.iconDisabled == -1);
-    std::array<int, FM_LINUX_MAX_ICON_REFERENCES + 1> sources{};
+    std::array<int, 5000> sources{};
     button.hovered = nullptr;
     UiIcons bounded(config);
     for (unsigned index = 0; index < sources.size(); ++index) {
         button.normal = &sources[index];
         assert(bounded.collect(reinterpret_cast<uintptr_t>(widget), node) == 0);
-        assert(node.iconNormal == (index < FM_LINUX_MAX_ICON_REFERENCES ? static_cast<int>(index) : -2));
+        assert(node.iconNormal == static_cast<int>(index));
     }
     button.normal = &sources[0];
     assert(bounded.collect(reinterpret_cast<uintptr_t>(widget), node) == 0 && node.iconNormal == 0);

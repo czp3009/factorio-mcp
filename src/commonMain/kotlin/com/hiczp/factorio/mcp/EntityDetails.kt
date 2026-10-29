@@ -27,7 +27,7 @@ internal fun entityIncludesSchema() = buildJsonObject {
     }
     put(
         "description",
-        "Entity details: recipe returns the configured recipe and quality; fluids returns native fluid amounts; filters returns bounded indexed filters and native mode flags. Availability/errors are explicit. These are observations, not production or action eligibility.",
+        "Entity details: recipe returns the configured recipe and quality; fluids returns native fluid amounts; filters returns indexed filters and native mode flags. Availability/errors are explicit. These are observations, not production or action eligibility.",
     )
 }
 
@@ -50,15 +50,14 @@ internal val entityDetailsLua =
           elseif name=="filters" then
             local count=entity.filter_slot_count
             if count==nil then return nil end
-            local maximum=math.min(count,128)
-            local result={slots={},slot_count=count,truncated=count>maximum,attributes={},read_status={}}
+            local result={slots={},slot_count=count,truncated=false,attributes={},read_status={}}
             for _,field in ipairs{"use_filters","inserter_filter_mode","loader_filter_mode","mining_drill_filter_mode"} do
               local valid,mode=pcall(function() return entity[field] end)
               if not valid then result.read_status[field]={status="error",message=tostring(mode)}
               elseif mode==nil then result.read_status[field]={status="nil"}
               else result.attributes[field]=project(mode,0) end
             end
-            for index=1,maximum do
+            for index=1,count do
               local slot={index=index}
               local valid,filter=pcall(function() return entity.get_filter(index) end)
               if not valid then slot.read_status={status="error",message=tostring(filter)}

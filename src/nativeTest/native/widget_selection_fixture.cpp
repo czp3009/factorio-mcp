@@ -126,7 +126,7 @@ int main() {
         nodes.push_back(node(4095 - index, "Panel"));
     fm::ui::postorderParents(nodes);
     path[1] = step(false, "Absent");
-    rejects(Failure::workLimit, select);
+    require(select().empty(), "complete large descendant search was rejected");
     nodes.clear();
     require(select().empty(), "empty forest produces matches");
     const char invalid[] = {'n', 'o'};

@@ -46,7 +46,7 @@ struct Console {
     List lists[2];
 };
 
-static FmLinuxChatSnapshot result;
+static ChatSnapshot result;
 unsigned formatted, destroyed;
 bool failRaw, failDestroy;
 uint32_t *cancelDuringRaw;
@@ -141,20 +141,20 @@ int main() {
             const auto &row = result.records[i];
             assert(row.tick == 123 + i && row.stream == i && row.playerIndex == 500 + i && !row.truncated);
             assert(row.textSize == f.special.size() && row.rawSize == f.special.size());
-            assert(std::string(row.text, row.textSize) == f.special && std::string(row.raw, row.rawSize) == f.special);
-            assert(std::string(row.playerName, row.playerNameSize) == "[color=red]name[/color]");
+            assert(std::string(reinterpret_cast<const char *>(row.text.address), row.textSize) == f.special && std::string(reinterpret_cast<const char *>(row.raw.address), row.rawSize) == f.special);
+            assert(std::string(reinterpret_cast<const char *>(row.playerName.address), row.playerNameSize) == "[color=red]name[/color]");
         }
         assert(f.start(command) == EALREADY);
     }
     {
         Fixture f;
-        std::string value(4094, 'x');
+        std::string value(FM_LINUX_CHAT_RECORD_BYTES - 1, 'x');
         value += "Ω";
         f.nodes[0].item.text = {{value.data(), value.size(), {}}, "a\0b", 3};
         ChatReadCommand command;
         assert(f.start(command) == 0);
-        assert(result.records[0].textSize == 4094 && result.records[0].truncated == 1);
-        assert(result.records[0].rawSize == 3 && std::memcmp(result.records[0].raw, "a\0b", 3) == 0);
+        assert(result.records[0].textSize == FM_LINUX_CHAT_RECORD_BYTES - 1 && result.records[0].truncated == 1);
+        assert(result.records[0].rawSize == 3 && std::memcmp(reinterpret_cast<const void *>(result.records[0].raw.address), "a\0b", 3) == 0);
     }
     {
         Fixture f;
@@ -167,7 +167,7 @@ int main() {
     }
     {
         Fixture f;
-        std::vector<Node> nodes(FM_LINUX_CHAT_RECORDS / 2 + 1, f.nodes[0]);
+        std::vector<Node> nodes(5000, f.nodes[0]);
         auto &head = f.console.lists[0].head;
         head.next = reinterpret_cast<uintptr_t>(&nodes.front());
         head.previous = reinterpret_cast<uintptr_t>(&nodes.back());
@@ -179,7 +179,7 @@ int main() {
                 i + 1 < nodes.size() ? reinterpret_cast<uintptr_t>(&nodes[i + 1]) : reinterpret_cast<uintptr_t>(&head);
         }
         ChatReadCommand command;
-        assert(f.start(command) == 0 && result.count == FM_LINUX_CHAT_RECORDS / 2 + 1);
+        assert(f.start(command) == 0 && result.count == nodes.size() + 1);
         assert(result.totals[0] == nodes.size() && formatted == result.count && destroyed == result.count);
     }
     for (unsigned failure = 0; failure < 10; ++failure) {
@@ -191,19 +191,19 @@ int main() {
         if (failure == 2)
             f.nodes[0].links.next = 1;
         if (failure == 3)
-            f.console.lists[0].count = 65537;
+            f.console.lists[0].count = uint64_t(INT32_MAX) + 1;
         if (failure == 4)
             f.console.lists[0].count = 2;
         if (failure == 5)
             f.nodes[0].item.text.cached.data = reinterpret_cast<const char *>(1);
         if (failure == 6)
-            f.nodes[0].item.text.cached.size = 1024 * 1024 + 1;
+            f.nodes[0].item.text.cached.size = UINT64_MAX;
         if (failure == 7)
             f.cancel = 1;
         if (failure == 8)
             f.nodes[0].item.playerName.data = reinterpret_cast<const char *>(1);
         if (failure == 9)
-            f.nodes[0].item.playerName.size = 1024 * 1024 + 1;
+            f.nodes[0].item.playerName.size = UINT64_MAX;
         ChatReadCommand command;
         assert(f.start(command) != 0 && command.finished() && result.count == 0);
         assert(formatted == destroyed);
@@ -245,19 +245,19 @@ int main() {
     }
     {
         Fixture f;
-        std::string name(FM_LINUX_CHAT_RECORD_BYTES - 2, 'x');
+        std::string name(FM_LINUX_CHAT_RECORD_BYTES - 1, 'x');
         name += "\xce\xa9";
         f.nodes[0].item.playerName = {name.data(), name.size(), {}};
         ChatReadCommand command;
         assert(f.start(command) == 0 && result.records[0].truncated == 4);
-        assert(result.records[0].playerNameSize == FM_LINUX_CHAT_RECORD_BYTES - 2);
+        assert(result.records[0].playerNameSize == FM_LINUX_CHAT_RECORD_BYTES - 1);
     }
     {
         Fixture f;
         f.nodes[0].item.playerName = {"a\0b", 3, {}};
         ChatReadCommand command;
         assert(f.start(command) == 0 && result.records[0].playerNameSize == 3);
-        assert(std::memcmp(result.records[0].playerName, "a\0b", 3) == 0);
+        assert(std::memcmp(reinterpret_cast<const void *>(result.records[0].playerName.address), "a\0b", 3) == 0);
     }
     {
         Fixture f;

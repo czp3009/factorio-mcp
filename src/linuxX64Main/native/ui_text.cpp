@@ -67,7 +67,7 @@ int UiTextCommand::dispatch(uint32_t key, uint32_t character, bool control, cons
 
 int UiTextCommand::start(uintptr_t guiInstance, void *gui, const FmLinuxUiLayout &ui,
                          const FmLinuxUiTextConfig &config, const FmLinuxUiSelector &selector,
-                         const FmLinuxUiTextRequest &request, const uint32_t *cancel, FmLinuxUiSnapshot &scratch) {
+                         const FmLinuxUiTextRequest &request, const uint32_t *cancel, UiSnapshot &scratch) {
     if (started_)
         return EALREADY;
     started_ = true;

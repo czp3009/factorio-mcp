@@ -14,7 +14,7 @@ Supports **Linux x64 and Windows x64**, with stdio and Streamable HTTP transport
 
 ![I'm not even touching it](images/im-not-even-touching-it.jpg)
 
-Linux and Windows tested with Factorio 2.1.23, including the official DLC. Older game versions are not supported.
+Tested with Factorio 2.1.23, including the official DLC. Older game versions are not supported.
 
 ## Installation
 
@@ -163,20 +163,22 @@ See [tools.md](tools.md) for arguments, examples, output semantics and cancellat
 - Action completion reports client execution, including chat submission. It does not confirm server acceptance or
   gameplay success; network latency and prediction rollback can delay or undo effects. Observe the result before
   a dependent action.
-- UI and world reads are bounded and report incomplete data. UI properties are supported selectively; custom-painted
+- Query limits can be increased for bulk reads; defaults keep ordinary requests small. Incomplete data is reported;
+  see [tools.md](tools.md#query-sizes).
+- UI properties are supported selectively; custom-painted
   pixels are not reconstructed as structured controls. World reads can include hidden objects and do not reproduce
   remembered map contents. Visibility flags do not account for UI occlusion.
 - UI images are structured references, without image contents or render layers. Script GUI elements' original icon
   names can be read with `world_query` object inspection.
 - `input` requires a running world. Use `ui_action` for menus and paused UI. Direct widget dragging/scrolling and
   controller input are unsupported; offscreen options can be selected directly, and running-world mouse input provides
-  a dragging fallback. Wheel routing over UI is not reliable in all tested states.
+  a dragging fallback. Wheel input over UI can be unreliable.
 - Screenshots require DirectX on Windows or OpenGL on Linux and exclude desktop/Steam overlays. Minimized or suspended
   rendering can leave a screenshot pending and delay other tools. Only one capture runs at a time;
   use `screenshot` with `action:"cancel"` to stop it. Frequent capture can reduce game performance.
 - Tools have no execution deadline. Explicit MCP cancellation is supported; automatic cancellation on HTTP socket
   closure is not guaranteed.
-- Some states or properties may be unavailable. Game updates can require an MCP update; tested interfaces do not
-  establish coverage of every mod or custom renderer.
+- Some states or properties may be unavailable, including those from mods or custom renderers. Game updates can
+  require an MCP update.
 - Chat reads cover messages retained by the local client, not a complete server log. Object inspection exposes
   supported readable properties and passive methods; it does not expose arbitrary Lua or all mod-private state.

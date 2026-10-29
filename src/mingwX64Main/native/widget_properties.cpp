@@ -2,6 +2,7 @@
 #include "protocol.h"
 #include <algorithm>
 #include <cstring>
+#include <limits>
 
 namespace {
 template <class T> T read(const void *object, unsigned offset) {
@@ -16,13 +17,13 @@ IconReferences::IconReferences(const Symbols &symbols) : symbols(symbols) {}
 int IconReferences::observe(const void *sprite) {
     if (!sprite)
         return -1;
-    for (unsigned index = 0; index < count; ++index)
-        if (sources[index] == sprite)
-            return static_cast<int>(index);
-    if (count == sources.size())
-        return -2;
-    sources[count] = sprite;
-    return static_cast<int>(count++);
+    const auto found = sources.find(sprite);
+    if (found != sources.end())
+        return found->second;
+    require(sources.size() < std::numeric_limits<int>::max(), "Icon references exceed integer representation");
+    const int index = static_cast<int>(sources.size());
+    sources.emplace(sprite, index);
+    return index;
 }
 
 void IconReferences::collect(void *widget, FmNode &node) {
@@ -259,7 +260,8 @@ void collectSlotIdentity(const Symbols &symbols, void *widget, FmNode &node) {
             sizeof(node.qualityType), 4);
 }
 
-void collectWidgetProperties(const Symbols &symbols, void *widget, FmNode &node, FmResult *result) {
+void collectWidgetProperties(const Symbols &symbols, void *widget, FmNode &node, FmResult *result,
+                             ObservationStorage *storage, const volatile LONG *cancel) {
     const auto &layout = symbols.properties;
     if (!layout.supported)
         return;
@@ -280,32 +282,33 @@ void collectWidgetProperties(const Symbols &symbols, void *widget, FmNode &node,
         node.properties |= 4;
         node.selectedIndex = read<int32_t>(value, layout.selectedIndex);
         if (layout.optionsSupported && result) {
+            require(storage, "Option observation storage is absent");
             const auto first = read<uintptr_t>(value, layout.optionFirst);
             const auto last = read<uintptr_t>(value, layout.optionLast);
             require(layout.optionStride && last >= first && (last - first) % layout.optionStride == 0 &&
-                        (last - first) / layout.optionStride <= 65536 && (first || last == first),
+                        (last - first) / layout.optionStride <= std::numeric_limits<int>::max() &&
+                        (first || last == first),
                     "Invalid dropdown option storage");
-            require(result->optionCount <= FM_MAX_OPTIONS, "Invalid option snapshot capacity");
+            require(result->optionCount == storage->options.size(), "Invalid option snapshot count");
             node.properties |= 16;
             node.optionTotal = static_cast<uint32_t>((last - first) / layout.optionStride);
             node.optionFirst = result->optionCount;
-            node.optionCount = std::min(
-                {node.optionTotal, uint32_t(FM_MAX_WIDGET_OPTIONS), uint32_t(FM_MAX_OPTIONS) - result->optionCount});
+            require(node.optionTotal <= uint32_t(std::numeric_limits<int>::max()) - result->optionCount,
+                    "Option observations exceed integer representation");
+            node.optionCount = node.optionTotal;
             for (uint32_t i = 0; i < node.optionCount; ++i) {
+                require(!cancel || !*cancel, "UI option query cancelled");
                 const auto *entry = reinterpret_cast<const void *>(first + size_t(i) * layout.optionStride);
                 const auto *button = read<const unsigned char *>(entry, layout.optionButton);
                 require(button, "Dropdown option has no text button");
                 const void *text = button + layout.optionText;
                 const size_t length = reinterpret_cast<size_t (*)(const void *)>(symbols.address[StringSize])(text);
                 const char *data = reinterpret_cast<const char *(*)(const void *)>(symbols.address[StringData])(text);
-                auto &option = result->options[result->optionCount++];
-                size_t count = std::min(length, sizeof(option.text) - 1);
-                option.truncated = count != length;
-                if (option.truncated)
-                    while (count && (static_cast<unsigned char>(data[count]) & 0xc0) == 0x80)
-                        --count;
-                memcpy(option.text, data, count);
-                option.text[count] = 0;
+                auto &option = storage->options.emplace_back();
+                bool truncated = false;
+                option.text = storage->copyText(data, length, truncated);
+                option.truncated = truncated;
+                ++result->optionCount;
             }
         }
     }

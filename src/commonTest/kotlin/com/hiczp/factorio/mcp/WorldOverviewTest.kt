@@ -74,16 +74,13 @@ class WorldOverviewTest {
     }
 
     @Test
-    fun rejectsAmbiguousUnboundedAndMalformedRequests() {
+    fun rejectsAmbiguousAndMalformedRequests() {
         for (text in
         listOf(
             """{"surface":1}""",
             """{"cell_size":0}""",
-            """{"cell_size":4097}""",
-            """{"entity_limit":513}""",
             """{"cell_size":"32"}""",
             """{"unknown":true}""",
-            """{"area":{"left_top":{"x":0,"y":0},"right_bottom":{"x":4097,"y":1}}}""",
             """{"area":{"left_top":{"x":0,"y":0},"right_bottom":{"x":0,"y":1}}}""",
             """{"area":{"left_top":{"x":0,"y":0},"right_bottom":{"x":1,"y":1}},"surface":0}""",
         )) assertFailsWith<IllegalArgumentException>(text) { parse(text) }

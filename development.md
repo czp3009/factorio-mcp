@@ -352,6 +352,7 @@ submitted tool requests are never replayed. This test-only workaround does not e
 | `InputTimelineAcceptanceTest` | Overlapping and unordered intervals, held belt dragging with rotation, world tile-center paths, point dwell and failure cleanup. |
 | `ChatReadAcceptanceTest`, `ChatSendAcceptanceTest` | Original retained records, repeated content, native paging boundaries, waiting, cancellation and local submission. |
 | `HttpAcceptanceTest` | Shared HTTP sessions, every advertised tool, screenshots and repeated attach/detach. |
+| `QueryCapacityAcceptanceTest` | Large single-safe-point UI/world/chat reads, complete dropdowns and bindings, stable collection pages, a result larger than 16 MiB, and authoritative movement/release with later full CRC progress. Requires the separate `query-capacity` scenario and both peer log paths. |
 | `PlayerContextAcceptanceTest`, `BlueprintMotionAcceptanceTest`, `TrainUiAcceptanceTest` | Authoritative controller transitions, held mouse blueprint placement and nested native train UI interactions. |
 
 The scenario records authoritative events and forces full CRC every 300 ticks. Compare server and client events,
@@ -359,6 +360,26 @@ then await later full CRCs after writable paths and potentially stateful reads. 
 screenshot appearance and CRC agreement are separate assertions. While input is held, compare the confirmed common
 log prefix rather than waiting for a continuously growing server tail. Preserve failed runs before resetting a fixture.
 Neither a tool-count check nor these selected classes establishes coverage of every widget or mod property.
+
+For query-capacity acceptance, copy `src/nativeTest/resources/query-capacity` as the isolated server's scenario
+and use the same local-server setup above with `--start-server-load-scenario query-capacity`. It creates 1600 chests,
+a large player inventory, 5000 hidden GUI labels, 1200 dropdown options, retained chat messages and a GUI tag payload
+larger than 16 MiB. Join through the normal UI, then run:
+
+```sh
+export FACTORIO_MCP_ACCEPTANCE_URL=http://127.0.0.1:43871/mcp
+export FACTORIO_MCP_TEST_PID=12345
+export FACTORIO_MCP_UI_SERVER_LOG="$PWD/temp/query-capacity/factorio-current.log"
+export FACTORIO_MCP_UI_CLIENT_LOG="$HOME/.factorio/factorio-current.log"
+build/bin/linuxX64/debugTest/test.kexe \
+  --ktest_filter='com.hiczp.factorio.mcp.acceptance.QueryCapacityAcceptanceTest.*'
+```
+
+On Windows, set the same environment variables in PowerShell and run
+`build/bin/mingwX64/debugTest/test.exe` with the same test filter.
+
+Use the actual endpoint and PID. This scenario requests full CRC every 600 ticks. Preserve both peers' logs and
+verify later CRC progress without desynchronization after the queries. Ordinary Gradle tests never start this scenario.
 
 ### Manual lifecycle and mixed flows
 

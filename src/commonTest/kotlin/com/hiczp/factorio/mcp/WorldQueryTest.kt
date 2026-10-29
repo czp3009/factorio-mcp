@@ -121,11 +121,9 @@ class WorldQueryTest {
             """{"selection":{"kind":"entities","unit_number":1,"name":"iron-ore"}}""",
             """{"selection":{"kind":"entities","unit_number":4294967296}}""",
             """{"selection":{"kind":"tiles","position":{"x":0,"y":0},"unit_number":1}}""",
-            """{"selection":{"kind":"entities","area":{"left_top":{"x":0,"y":0},"right_bottom":{"x":129,"y":1}}}}""",
             """{"selection":{"kind":"entities","area":{"left_top":{"x":0,"y":0},"right_bottom":{"x":0,"y":1}}}}""",
             """{"selection":{"kind":"player"},"fields":["request_translation"]}""",
             """{"selection":{"kind":"player"},"limit":"2"}""",
-            """{"selection":{"kind":"player"},"limit":513}""",
             """{"selection":{"kind":"player"},"fields":["name","name"]}""",
             """{"selection":{"kind":"tiles","position":{"x":0,"y":0}},"surface":"bad\u0000name"}""",
         )) assertFailsWith<IllegalArgumentException>(request) { query(request) }

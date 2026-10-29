@@ -1,11 +1,10 @@
 #pragma once
-#include "bridge.h"
-#include <array>
+#include "observation_storage.h"
+#include <unordered_map>
 
 class IconReferences {
     const Symbols &symbols;
-    unsigned count = 0;
-    std::array<const void *, FM_MAX_ICON_REFERENCES> sources{};
+    std::unordered_map<const void *, int> sources;
     int observe(const void *sprite);
 
   public:
@@ -13,7 +12,8 @@ class IconReferences {
     void collect(void *widget, FmNode &node);
 };
 
-void collectWidgetProperties(const Symbols &symbols, void *widget, FmNode &node, FmResult *result = nullptr);
+void collectWidgetProperties(const Symbols &symbols, void *widget, FmNode &node, FmResult *result = nullptr,
+                             ObservationStorage *storage = nullptr, const volatile LONG *cancel = nullptr);
 void collectSlotIdentity(const Symbols &symbols, void *widget, FmNode &node);
 void collectQualityCondition(const Symbols &symbols, void *widget, FmNode &node);
 void collectNumber(const Symbols &symbols, void *widget, FmNode &node);

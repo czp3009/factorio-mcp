@@ -48,7 +48,7 @@ public:
     bool finished() const { return finished_; }
     int start(uintptr_t guiInstance, void *gui, const FmLinuxUiLayout &ui, const FmLinuxUiTextConfig &config,
               const FmLinuxUiSelector &selector, const FmLinuxUiTextRequest &request, const uint32_t *cancel,
-              FmLinuxUiSnapshot &scratch);
+              UiSnapshot &scratch);
     int finish();
 
 private:

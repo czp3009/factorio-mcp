@@ -19,7 +19,7 @@ struct Execution {
     const FmLinuxLuaQuery *query;
     const QueryViewport *viewport;
     const uint32_t *cancel;
-    FmLinuxLuaResult *result;
+    LuaResult *result;
     double playerIndex;
     bool read = false;
     int error = 0;
@@ -111,21 +111,24 @@ void execute(void *state, void *userdata) {
         }
         return;
     }
-    if (!text || !size || size >= sizeof(result.text)) {
+    if (!text || !size || size > INT32_MAX) {
         execution.error = text && size ? EOVERFLOW : EPROTO;
         return;
     }
-    std::memcpy(result.text, text, size);
-    result.text[size] = 0;
-    result.size = static_cast<uint32_t>(size);
+    try {
+        result.text.assign(text, text + size);
+        result.size = static_cast<uint32_t>(size);
+    } catch (const std::bad_alloc &) {
+        execution.error = ENOMEM;
+    }
 }
 } // namespace
 
 int queryLua(void *state, const FmLinuxLuaApi &api, const FmLinuxLuaStateLayout &layout, const FmLinuxLuaQuery &query, double playerIndex,
-             const QueryViewport &viewport, const uint32_t *cancel, FmLinuxLuaResult &result) {
+             const QueryViewport &viewport, const uint32_t *cancel, LuaResult &result) {
     result.size = 0;
     result.errorSize = 0;
-    result.text[0] = 0;
+    result.text.clear();
     result.error[0] = 0;
     if (!state || !cancel || !api.absIndex || !api.setTop || !api.load || !api.pushNumber || !api.pushString ||
         !api.protectedCall || !api.toString || !api.rawProtected ||
@@ -165,7 +168,7 @@ int queryLua(void *state, const FmLinuxLuaApi &api, const FmLinuxLuaStateLayout 
     }
     if (checked || status || execution.error || fm_ipc_load(cancel)) {
         result.size = 0;
-        result.text[0] = 0;
+        result.text.clear();
         if (checked)
             return checked;
         if (fm_ipc_load(cancel)) {

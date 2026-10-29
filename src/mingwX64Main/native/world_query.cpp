@@ -3,6 +3,7 @@
 #include "viewport.h"
 #include <algorithm>
 #include <cstring>
+#include <limits>
 
 namespace {
 template <class T> T function(const Symbols &symbols, FmSymbol id) {
@@ -16,7 +17,8 @@ template <class T> T read(void *object, unsigned offset) {
 }
 } // namespace
 
-void queryWorld(const Symbols &symbols, void *game, const FmWorldQuery &query, FmResult &result) {
+void queryWorld(const Symbols &symbols, void *game, const FmWorldQuery &query, FmResult &result,
+                ObservationStorage &storage) {
     const auto &layout = symbols.world;
     require(layout.supported && game, "World query requires an initialized world adapter");
     require(query.sourceSize && query.sourceSize < FM_MAX_LUA_SOURCE && query.argumentsSize &&
@@ -80,8 +82,8 @@ void queryWorld(const Symbols &symbols, void *game, const FmWorldQuery &query, F
     if (status) {
         throw std::runtime_error(text ? std::string(text, std::min(size, size_t(1024))) : "World Lua query failed");
     }
-    require(text && size && size < FM_MAX_WORLD_JSON, "World query output exceeds its bound or is not JSON text");
-    memcpy(result.worldJson, text, size);
-    result.worldJson[size] = 0;
+    require(text && size && size <= std::numeric_limits<int>::max(),
+            "World query output exceeds byte-array representation or is not JSON text");
+    storage.worldJson.assign(text, text + size);
     result.worldSize = static_cast<uint32_t>(size);
 }

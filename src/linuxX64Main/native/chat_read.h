@@ -3,9 +3,9 @@
 #include "player_objects.h"
 #include <stddef.h>
 #include <stdint.h>
+#include "observation_buffer.h"
 
-#define FM_LINUX_CHAT_RECORDS 256
-#define FM_LINUX_CHAT_RECORD_BYTES 4096
+#define FM_LINUX_CHAT_RECORD_BYTES (16 * 1024 * 1024)
 
 typedef struct FmLinuxChatReadLayout {
     uint32_t consoleSize, consolePlayer;
@@ -26,16 +26,27 @@ typedef struct FmLinuxChatReadConfig {
 typedef struct FmLinuxChatRecord {
     uint64_t identity, tick;
     uint32_t stream, playerIndex, truncated, textSize, rawSize, playerNameSize;
-    char text[FM_LINUX_CHAT_RECORD_BYTES], raw[FM_LINUX_CHAT_RECORD_BYTES], playerName[FM_LINUX_CHAT_RECORD_BYTES];
+    FmLinuxObservationBuffer text, raw, playerName;
 } FmLinuxChatRecord;
 
 typedef struct FmLinuxChatSnapshot {
     uint64_t consoleIdentity, totals[2];
     uint32_t count;
-    FmLinuxChatRecord records[FM_LINUX_CHAT_RECORDS];
+    FmLinuxObservationBuffer records;
 } FmLinuxChatSnapshot;
 
 #ifdef __cplusplus
+struct ChatSnapshot {
+    uint64_t consoleIdentity = 0, totals[2]{};
+    uint32_t count = 0;
+    std::vector<FmLinuxChatRecord> records;
+    std::vector<std::vector<char>> strings;
+
+    FmLinuxChatSnapshot wire() const {
+        return {consoleIdentity, {totals[0], totals[1]}, count, observationBuffer(records)};
+    }
+};
+
 struct ChatReadConfig {
     FmLinuxChatReadLayout layout;
     void (*raw)(void *, const void *);
@@ -47,7 +58,7 @@ struct ChatReadConfig {
 class ChatReadCommand {
   public:
     int start(const ChatReadConfig &, uintptr_t console, uintptr_t player, const uint32_t *cancel,
-              FmLinuxChatSnapshot &);
+              ChatSnapshot &);
     int finish();
 
     bool finished() const {

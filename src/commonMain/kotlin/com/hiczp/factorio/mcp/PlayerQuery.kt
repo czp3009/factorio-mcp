@@ -37,9 +37,8 @@ internal fun parsePlayersQuery(args: JsonObject): WorldQuery {
     selection["connected"]?.booleanArgument()
     for (key in listOf("names", "indices")) selection[key]?.let { value ->
         val values = value.jsonArray
-        val maximum = if (key == "names") 64 else 128
-        require(values.size in 1..maximum && values.distinct().size == values.size) {
-            "$key requires 1..$maximum distinct entries"
+        require(values.isNotEmpty() && values.distinct().size == values.size) {
+            "$key requires distinct nonempty entries"
         }
         values.forEach {
             validatePlayerSelector(it)
@@ -61,7 +60,7 @@ internal fun parsePlayersQuery(args: JsonObject): WorldQuery {
                 "character",
             )
     require(
-        fields.size in 1..32 &&
+        fields.isNotEmpty() &&
                 fields.distinct().size == fields.size &&
                 fields.all { it in playerFields }
     ) {
@@ -69,8 +68,8 @@ internal fun parsePlayersQuery(args: JsonObject): WorldQuery {
     }
     val limit = args["limit"]?.intArgument() ?: 64
     val offset = args["offset"]?.intArgument() ?: 0
-    require(limit in 1..128 && offset in 0..65536) {
-        "Players limit must be 1..128 and offset 0..65536"
+    require(limit > 0 && offset >= 0) {
+        "Players limit must be positive and offset nonnegative"
     }
     return WorldQuery(
         buildJsonObject {
