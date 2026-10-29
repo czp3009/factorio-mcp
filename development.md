@@ -345,14 +345,14 @@ submitted tool requests are never replayed. This test-only workaround does not e
 |------------------|-------|
 | `UiActionAcceptanceTest` | Generic native widget gestures, restricted text, modifiers, offscreen options and recreation. |
 | `UiFlowAcceptanceTest` | Windows-specific native cleanup checks and broader UI property/inventory interaction coverage. |
-| `UiIconAcceptanceTest`, `UiNumberAcceptanceTest`, `UiIdentityAcceptanceTest` | Structured image references, original script GUI icon names, numbers and native item/quality values. |
+| `UiIconAcceptanceTest`, `UiNumberAcceptanceTest`, `UiIdentityAcceptanceTest` | Structured image references, original script GUI icon names, numbers and native item/quality values in the `ui-actions` scenario. |
 | `WorldQueryAcceptanceTest`, `RelatedWorldQueryAcceptanceTest`, `ExpandedQueryAcceptanceTest` | Direct world and related-object reads, inventories, filters, catalogs, metadata and query recovery. |
 | `WorldOverviewAcceptanceTest`, `ViewportAcceptanceTest` | Explicit areas, native viewport observations and bounded spatial results. |
 | `InputAcceptanceTest`, `WheelInputAcceptanceTest` | Finite keyboard/mouse execution, replacement, cancellation, detach and independent authoritative effects. |
 | `InputTimelineAcceptanceTest` | Overlapping and unordered intervals, held belt dragging with rotation, world tile-center paths, point dwell and failure cleanup. |
 | `ChatReadAcceptanceTest`, `ChatSendAcceptanceTest` | Original retained records, repeated content, native paging boundaries, waiting, cancellation and local submission. |
 | `HttpAcceptanceTest` | Shared HTTP sessions, every advertised tool, screenshots and repeated attach/detach. |
-| `QueryCapacityAcceptanceTest` | Large single-safe-point UI/world/chat reads, complete dropdowns and bindings, stable collection pages, a result larger than 16 MiB, and authoritative movement/release with later full CRC progress. Requires the separate `query-capacity` scenario and both peer log paths. |
+| `QueryCapacityAcceptanceTest` | Large single-safe-point UI/world/chat reads, complete dropdowns and bindings, stable collection pages, a result larger than 16 MiB, and authoritative UI clicks and movement/release with later full CRC progress. Requires the separate `query-capacity` scenario and both peer log paths. |
 | `PlayerContextAcceptanceTest`, `BlueprintMotionAcceptanceTest`, `TrainUiAcceptanceTest` | Authoritative controller transitions, held mouse blueprint placement and nested native train UI interactions. |
 
 The scenario records authoritative events and forces full CRC every 300 ticks. Compare server and client events,

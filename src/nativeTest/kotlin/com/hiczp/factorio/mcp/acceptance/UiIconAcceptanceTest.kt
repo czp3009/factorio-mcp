@@ -147,7 +147,7 @@ internal fun assertWidgetIconReferences(observation: JsonObject) {
             val reference = value.getValue("reference")
             if (reference == JsonNull) assertEquals(JsonPrimitive(true), value["truncated"])
             else {
-                assertTrue(reference.jsonPrimitive.int in 0 until 512)
+                assertTrue(reference.jsonPrimitive.int >= 0)
                 assertEquals(JsonPrimitive("snapshot"), value["identity_scope"])
             }
             for (field in

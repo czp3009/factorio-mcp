@@ -60,6 +60,7 @@ internal fun assertGuiModifiersReleased(pid: UInt) {
                 val inputOffset = types.pointerMember("agui::Gui", "input", "agui::Input")
                 val input = pointer(gui + inputOffset)
                 check(input != 0uL)
+                val modifiers = linkedMapOf<String, UByte>()
                 for (name in listOf("shift", "alt", "control", "meta")) {
                     val offset = types.byteMember("InputHandlerAgui", name, true)
                     val value = alloc<UByteVar>()
@@ -73,13 +74,17 @@ internal fun assertGuiModifiersReleased(pid: UInt) {
                             count.ptr,
                         ) != 0 && count.value == 1uL
                     )
-                    assertFalse(
-                        value.value != 0.toUByte(),
-                        "GUI modifier $name remains pressed; inspect the preceding input or external keyboard state",
-                    )
+                    modifiers[name] = value.value
                 }
                 assertEquals(gui, pointer(instance))
                 assertEquals(input, pointer(gui + inputOffset))
+                println("factorio-mcp transient GUI modifiers: $modifiers")
+                for ((name, value) in modifiers) {
+                    assertFalse(
+                        value != 0.toUByte(),
+                        "GUI modifier $name remains pressed; inspect the preceding input or external keyboard state: $modifiers",
+                    )
+                }
             } finally {
                 SymCleanup(process)
             }

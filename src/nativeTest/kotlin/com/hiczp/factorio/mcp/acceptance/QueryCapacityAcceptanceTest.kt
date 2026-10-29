@@ -4,6 +4,7 @@ package com.hiczp.factorio.mcp.acceptance
 
 import com.hiczp.factorio.mcp.McpHttpClient
 import com.hiczp.factorio.mcp.toolValue
+import com.hiczp.factorio.mcp.uiSelector
 import kotlin.test.*
 import kotlinx.cinterop.toKString
 import kotlinx.coroutines.NonCancellable
@@ -201,6 +202,20 @@ class QueryCapacityAcceptanceTest {
                 val fixture = tool("world_query", Json.parseToJsonElement("""{"selection":{"kind":"inspect","target":{"kind":"player"},"path":[{"property":"gui"},{"property":"screen"},{"index":"factorio_mcp_query_capacity"}]},"fields":["name"]}""").jsonObject)
                 assertEquals("factorio_mcp_query_capacity", fixture.getValue("objects").jsonArray.single()
                     .jsonObject.getValue("attributes").jsonObject.getValue("name").jsonPrimitive.content)
+                fun actions(path: String) = read(path).lineSequence().mapNotNull {
+                    it.substringAfter("QUERY_CAPACITY_ACTION ", "").takeIf(String::isNotBlank)
+                }.toList()
+                val initialActions = actions(serverLog).size
+                val initialClientActions = actions(clientLog).size
+                val action = tool("ui_action", buildJsonObject {
+                    put("action", "click")
+                    put("selector", uiSelector("MCP capacity action", "agui::TextButton"))
+                })
+                assertEquals("completed", action.getValue("dispatch").jsonPrimitive.content)
+                nextCrc()
+                val authoritativeActions = actions(serverLog).drop(initialActions)
+                assertEquals(1, authoritativeActions.size, "Action selectors must traverse beyond the old node cap")
+                assertEquals(authoritativeActions, actions(clientLog).drop(initialClientActions))
                 val control = tool("input_bindings", buildJsonObject {
                     putJsonArray("ids") { add("move-right") }
                 }).getValue("controls").jsonArray.single().jsonObject

@@ -39,10 +39,17 @@ script.on_event(defines.events.on_player_created, function(event)
     options[index] = "MCP bulk option " .. index
   end
   frame.add{type = "drop-down", name = "options", items = options}
+  player.gui.top.add{type = "button", name = "factorio_mcp_capacity_action", caption = "MCP capacity action"}
   for index = 1, 400 do
     player.print("MCP query capacity history " .. index)
   end
   log("factorio-mcp query capacity fixture ready for player " .. player.index)
+end)
+
+script.on_event(defines.events.on_gui_click, function(event)
+  if event.element and event.element.valid and event.element.name == "factorio_mcp_capacity_action" then
+    log("QUERY_CAPACITY_ACTION " .. helpers.table_to_json{player_index = event.player_index, tick = game.tick})
+  end
 end)
 
 script.on_event(defines.events.on_player_changed_position, function(event)

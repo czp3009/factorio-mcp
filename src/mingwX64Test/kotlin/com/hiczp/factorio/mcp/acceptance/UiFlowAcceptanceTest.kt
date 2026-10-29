@@ -97,8 +97,8 @@ class UiFlowAcceptanceTest {
                             .getValue("properties")
                             .jsonObject
                     assertEquals(3, fullBudgetTarget.getValue("options_total").jsonPrimitive.int)
-                    assertTrue(fullBudgetTarget.getValue("options_truncated").jsonPrimitive.boolean)
-                    assertTrue(fullBudgetTarget.getValue("options").jsonArray.isEmpty())
+                    assertFalse(fullBudgetTarget.getValue("options_truncated").jsonPrimitive.boolean)
+                    assertEquals(3, fullBudgetTarget.getValue("options").jsonArray.size)
                     val targeted =
                         client
                             .tool(
@@ -118,6 +118,7 @@ class UiFlowAcceptanceTest {
                             .getValue("properties")
                             .jsonObject
                     assertFalse(targetedOptions.getValue("options_truncated").jsonPrimitive.boolean)
+                    assertEquals(fullBudgetTarget.getValue("options"), targetedOptions.getValue("options"))
                     assertEquals(
                         listOf(
                             "MCP budget target first",
@@ -325,8 +326,10 @@ class UiFlowAcceptanceTest {
                         .jsonObject
                 assertEquals(79, selectedDropdown["selected_index"]!!.jsonPrimitive.int)
                 assertEquals(80, selectedDropdown["options_total"]!!.jsonPrimitive.int)
-                assertTrue(selectedDropdown["options_truncated"]!!.jsonPrimitive.boolean)
-                assertEquals(64, selectedDropdown["options"]!!.jsonArray.size)
+                assertFalse(selectedDropdown["options_truncated"]!!.jsonPrimitive.boolean)
+                assertEquals((1..80).map { "MCP option $it" }, selectedDropdown.getValue("options").jsonArray.map {
+                    it.jsonObject.getValue("text").jsonPrimitive.content
+                })
                 assertGuiModifiersReleased(pid.toUInt())
                 client
                     .tool(

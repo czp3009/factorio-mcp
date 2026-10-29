@@ -836,6 +836,7 @@ internal class X64Instructions(
                     0x60,
                     0x62,
                     0x6c,
+                    0x6d,
                     0x67,
                     0x6f,
                     0x7f,
@@ -865,7 +866,7 @@ internal class X64Instructions(
                                 0x14 ->
                                     if (word) Operation.VECTOR_UNPACK_LOW_QWORDS
                                     else Operation.VECTOR_UNPACK_LOW_FLOATS
-                                0x15 -> Operation.VECTOR_UNPACK_HIGH_QWORDS
+                                0x15, 0x6d -> Operation.VECTOR_UNPACK_HIGH_QWORDS
                                 0x60 -> Operation.VECTOR_UNPACK_LOW_BYTES
                                 0x62 -> Operation.VECTOR_UNPACK_LOW_DWORDS
                                 0x6c -> Operation.VECTOR_UNPACK_LOW_QWORDS

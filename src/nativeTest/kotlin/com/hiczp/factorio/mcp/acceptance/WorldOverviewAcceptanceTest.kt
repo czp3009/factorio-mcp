@@ -149,10 +149,13 @@ class WorldOverviewAcceptanceTest {
                 }).toolValue()
                 assertTrue(partial.getValue("truncated").jsonPrimitive.boolean)
                 assertEquals(1, partial.getValue("objects").jsonArray.size)
-                val excessive = client.tool("world_overview", buildJsonObject {
+                val wide = client.tool("world_overview", buildJsonObject {
                     put("area", area(-10.0, -10.0, 4100.0, 10.0))
-                })
-                assertTrue(excessive.getValue("isError").jsonPrimitive.boolean)
+                    put("cell_size", 32)
+                }).toolValue()
+                assertEquals(129, wide.getValue("columns").jsonPrimitive.int)
+                assertEquals(1, wide.getValue("rows").jsonPrimitive.int)
+                assertEquals(129, wide.getValue("objects").jsonArray.size)
                 repeat(12) {
                     client.tool("world_overview", request).toolValue()
                     client.tool("world_overview", summaryRequest).toolValue()

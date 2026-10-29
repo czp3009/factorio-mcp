@@ -43,6 +43,8 @@ internal class ProcessStack(private val process: ProcessHandle) {
         val pageSize = sysconf(_SC_PAGESIZE)
         var returnAddress = false
         var depth = 0
+        var previousAddress: Long? = null
+        var previousModule: String? = null
         fun pc(): Long {
             val address = values[16] ?: return 0
             require(address >= 0) { "Invalid unwind instruction address" }
@@ -62,7 +64,12 @@ internal class ProcessStack(private val process: ProcessHandle) {
                 ?: error("Unwind instruction address is not mapped executable code")
             val group = groups[Triple(current.deviceMajor, current.deviceMinor, current.inode)]
                 ?: listOf(current).takeIf { current.path == "[vdso]" }
-                ?: error("Unwind instruction address has no matching ELF file")
+                ?: error(
+                    "Unwind instruction address 0x${pc().toString(16)} has no matching ELF file " +
+                        "(mapping 0x${current.start.toString(16)}-0x${current.end.toString(16)}, " +
+                        "path=${current.path}, depth=$depth, " +
+                        "previous=${previousAddress?.let { "0x${it.toString(16)}" }} in $previousModule)"
+                )
             var found = false
             withImage(current) { image ->
                 val bias = image.loadBias(group, pageSize)
@@ -82,6 +89,8 @@ internal class ProcessStack(private val process: ProcessHandle) {
                     require(index == starts.lastIndex || frame.end <= starts[index + 1]) {
                         "Overlapping interrupted unwind ranges"
                     }
+                    previousAddress = pc()
+                    previousModule = current.path
                     values = DwarfCallFrame.caller(frame, address, values, ::read)
                     require(values.getValue(7) <= stack.end) { "Unwind CFA escapes the interrupted stack" }
                     returnAddress = true

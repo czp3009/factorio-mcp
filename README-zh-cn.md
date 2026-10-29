@@ -13,7 +13,7 @@ factorio-mcp 是一个 MCP 服务, 让 AI agent 读取 Factorio 世界数据, �
 
 ![电脑自己在动](images/电脑自己在动.jpg)
 
-已在 Factorio 2.1.23 (包含官方 DLC) 中测试. 不支持旧版游戏.
+已在 Factorio 2.1.24 (包含官方 DLC) 中测试. 不支持旧版游戏.
 
 ## 安装
 

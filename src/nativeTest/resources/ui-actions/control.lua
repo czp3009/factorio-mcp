@@ -46,6 +46,13 @@ local function build(player)
   target.visible=false
   target.add{type="drop-down",name="target",items={"MCP budget target first","MCP budget target second","MCP budget target third"},selected_index=1}
   target.add{type="sprite-button",sprite="item/copper-plate"}
+  if player.gui.screen.mcp_number_fixture then player.gui.screen.mcp_number_fixture.destroy() end
+  local numbers=player.gui.screen.add{type="frame",name="mcp_number_fixture",caption="MCP number fixture",direction="horizontal"}
+  numbers.visible=false
+  numbers.add{type="sprite-button",name="mcp_number_finite",sprite="item/iron-plate",number=12345.125}
+  numbers.add{type="sprite-button",name="mcp_number_zero",sprite="item/copper-plate",number=0}
+  numbers.add{type="sprite-button",name="mcp_number_negative",sprite="item/steel-plate",number=-0.25}
+  numbers.add{type="sprite-button",name="mcp_number_suppressed",sprite="item/stone"}
   record("created",player)
 end
 

@@ -14,7 +14,7 @@ Supports **Linux x64 and Windows x64**, with stdio and Streamable HTTP transport
 
 ![I'm not even touching it](images/im-not-even-touching-it.jpg)
 
-Tested with Factorio 2.1.23, including the official DLC. Older game versions are not supported.
+Tested with Factorio 2.1.24, including the official DLC. Older game versions are not supported.
 
 ## Installation
 
