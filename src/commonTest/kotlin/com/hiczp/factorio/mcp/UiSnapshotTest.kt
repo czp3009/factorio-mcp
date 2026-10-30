@@ -105,7 +105,7 @@ class UiSnapshotTest {
 
     @Test
     fun iconReferencesStayOpaqueAndSelectedWithoutRenderingMetadata() {
-        val normal = WidgetIcon(0)
+        val normal = WidgetIcon(0, name = "original_registered_key")
         val snapshot =
             GameSnapshot(
                 "main_menu",
@@ -141,7 +141,8 @@ class UiSnapshotTest {
         val value = icons.getValue("normal").jsonObject
         assertEquals(0, value.getValue("reference").jsonPrimitive.int)
         assertEquals("snapshot", value.getValue("identity_scope").jsonPrimitive.content)
-        assertEquals(setOf("reference", "identity_scope"), value.keys)
+        assertEquals(setOf("reference", "identity_scope", "name"), value.keys)
+        assertEquals(JsonPrimitive("original_registered_key"), value["name"])
     }
 
     @Test
@@ -181,7 +182,7 @@ class UiSnapshotTest {
                 .jsonObject
         assertEquals(JsonNull, value["reference"])
         assertEquals(JsonPrimitive(true), value["truncated"])
-        assertFalse("name" in value)
+        assertEquals(JsonNull, value["name"])
     }
 
     @Test

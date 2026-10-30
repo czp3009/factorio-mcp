@@ -2,10 +2,15 @@
 
 package com.hiczp.factorio.mcp
 
+import com.hiczp.factorio.mcp.linuxbridge.FmLinuxIconNamesLayout
 import com.hiczp.factorio.mcp.linuxbridge.FmLinuxMemberFlag
+import com.hiczp.factorio.mcp.linuxbridge.FmLinuxTooltipLayout
 import com.hiczp.factorio.mcp.linuxbridge.FmLinuxUiLayout as NativeWidgetLayout
 import kotlinx.cinterop.get
+import kotlinx.cinterop.ptr
 import kotlinx.cinterop.set
+import kotlinx.cinterop.sizeOf
+import platform.posix.memset
 
 /** Verified structural members only. Optional widget properties require their own native proofs. */
 internal data class WidgetLayout(
@@ -35,6 +40,8 @@ internal data class WidgetLayout(
     val rectangle: ElfImage.Symbol,
     val rectangleAbi: SysVRectangleAbi.Proof,
     private val functions: List<ElfImage.Symbol>,
+    val iconNames: Result<WidgetIconNamesLayout>,
+    val tooltips: Result<WidgetTooltipLayout>,
 ) {
     fun verifyLoaded(image: ElfImage, process: ProcessHandle, loadBias: Long) {
         render.verify(image, loadBias, process::readMemory)
@@ -43,6 +50,8 @@ internal data class WidgetLayout(
         elements.verify(image, loadBias, process::readMemory)
         quality.verify(image, loadBias, process::readMemory)
         icons.evidence.verify(image, loadBias, process::readMemory)
+        iconNames.getOrNull()?.evidence?.verify(image, loadBias, process::readMemory)
+        tooltips.getOrNull()?.evidence?.verify(image, loadBias, process::readMemory)
         switchNames.evidence
             .copy(functions = emptyList())
             .verify(image, loadBias, process::readMemory)
@@ -68,6 +77,11 @@ internal data class WidgetLayout(
         quality.writeTo(output.quality, output.identity.widgetType, loadBias)
         elements.writeTo(output.elements, loadBias)
         icons.writeTo(output.icons, loadBias)
+        // A retained resident may contain a previous attachment's optional metadata.
+        memset(output.iconNames.ptr, 0, sizeOf<FmLinuxIconNamesLayout>().toULong())
+        memset(output.tooltips.ptr, 0, sizeOf<FmLinuxTooltipLayout>().toULong())
+        iconNames.getOrNull()?.writeTo(output.iconNames, loadBias)
+        tooltips.getOrNull()?.writeTo(output.tooltips, loadBias)
         output.widgetSize = widgetSize.toUInt()
         output.root = root.toUInt()
         output.rangeCount = ranges.size.toUInt()
@@ -331,6 +345,8 @@ internal data class WidgetLayout(
                 rectangle,
                 rectangleAbi,
                 functions.distinct(),
+                runCatching { WidgetIconNamesLayout.resolve(image) },
+                runCatching { WidgetTooltipLayout.resolve(image, widgetSize) },
             )
         }
     }

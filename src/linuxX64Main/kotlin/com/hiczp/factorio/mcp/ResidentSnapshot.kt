@@ -9,9 +9,9 @@ import com.hiczp.factorio.mcp.linuxbridge.FM_LINUX_TEXT_SIZE
 import com.hiczp.factorio.mcp.linuxbridge.FM_LINUX_TYPE_NAME
 import com.hiczp.factorio.mcp.linuxbridge.FmLinuxPrototypeValue
 import com.hiczp.factorio.mcp.linuxbridge.FmLinuxUiElement
-import com.hiczp.factorio.mcp.linuxbridge.FmLinuxUiSnapshot
 import com.hiczp.factorio.mcp.linuxbridge.FmLinuxUiNode
 import com.hiczp.factorio.mcp.linuxbridge.FmLinuxUiOption
+import com.hiczp.factorio.mcp.linuxbridge.FmLinuxUiSnapshot
 import kotlinx.cinterop.get
 import kotlinx.cinterop.readBytes
 
@@ -22,13 +22,31 @@ internal fun FmLinuxUiSnapshot.readWidgets(
     switchNames: List<String> = emptyList(),
     progressNames: Map<Int, String> = emptyMap(),
 ): List<WidgetSnapshot> {
-    val copiedOptions = options.readObservationRecords<FmLinuxUiOption, WidgetOption>(optionCount, readMemory) { option ->
-        require(option.size <= FM_LINUX_OPTION_TEXT.toUInt())
-        WidgetOption(option.text.also { it.validateObservationBuffer(option.size.toLong()) }.readObservationBytes(readMemory).decodeToString(), option.truncated != 0u)
-    }
+    val copiedOptions =
+        options.readObservationRecords<FmLinuxUiOption, WidgetOption>(optionCount, readMemory) {
+            option ->
+            require(option.size <= FM_LINUX_OPTION_TEXT.toUInt())
+            WidgetOption(
+                option.text
+                    .also { it.validateObservationBuffer(option.size.toLong()) }
+                    .readObservationBytes(readMemory)
+                    .decodeToString(),
+                option.truncated != 0u,
+            )
+        }
     val parents = ArrayList<Int>(count.toInt())
     val widgets =
         nodes.readObservationRecords<FmLinuxUiNode, WidgetSnapshot>(count, readMemory) { node ->
+            fun icon(reference: Int, index: Int) =
+                widgetIconReference(reference)
+                    ?.copy(
+                        name =
+                            node.iconNames[index]
+                                .readObservationBytes(readMemory)
+                                .decodeToString()
+                                .takeIf { it.isNotEmpty() },
+                        nameTruncated = node.iconNameTruncated and (1u shl index) != 0u,
+                    )
             require(
                 node.depth < count &&
                     node.textSize <= FM_LINUX_TEXT_SIZE.toUInt() &&
@@ -50,7 +68,10 @@ internal fun FmLinuxUiSnapshot.readWidgets(
                             node.optionTotal <= Int.MAX_VALUE.toUInt()
                     )
                     WidgetOptions(
-                        copiedOptions.subList(node.optionFirst.toInt(), (node.optionFirst + node.optionCount).toInt()),
+                        copiedOptions.subList(
+                            node.optionFirst.toInt(),
+                            (node.optionFirst + node.optionCount).toInt(),
+                        ),
                         node.optionTotal.toInt(),
                     )
                 } else null
@@ -59,7 +80,10 @@ internal fun FmLinuxUiSnapshot.readWidgets(
                 type = typeBytes.decodeToString(0, typeEnd),
                 text =
                     if (node.textAvailable != 0u)
-                        node.text.also { it.validateObservationBuffer(node.textSize.toLong()) }.readObservationBytes(readMemory).decodeToString()
+                        node.text
+                            .also { it.validateObservationBuffer(node.textSize.toLong()) }
+                            .readObservationBytes(readMemory)
+                            .decodeToString()
                     else null,
                 enabled = node.enabled != 0u,
                 selected = node.selected != 0u,
@@ -85,6 +109,7 @@ internal fun FmLinuxUiSnapshot.readWidgets(
                             node.switchAvailable != 0u ||
                             node.numberAvailable != 0u ||
                             node.iconsAvailable != 0u ||
+                            node.tooltipStatus != 0u ||
                             node.identity.available != 0u ||
                             node.element.available != 0u ||
                             node.quality.available != 0u
@@ -138,11 +163,26 @@ internal fun FmLinuxUiSnapshot.readWidgets(
                             icons =
                                 if (node.iconsAvailable != 0u)
                                     WidgetIcons(
-                                        widgetIconReference(node.iconNormal),
-                                        widgetIconReference(node.iconHovered),
-                                        widgetIconReference(node.iconDisabled),
+                                        icon(node.iconNormal, 0),
+                                        icon(node.iconHovered, 1),
+                                        icon(node.iconDisabled, 2),
                                     )
                                 else null,
+                            tooltip =
+                                widgetTooltip(
+                                    node.tooltipStatus,
+                                    node.tooltipTruncated,
+                                    {
+                                        node.tooltipTitle
+                                            .readObservationBytes(readMemory)
+                                            .decodeToString()
+                                    },
+                                    {
+                                        node.tooltipText
+                                            .readObservationBytes(readMemory)
+                                            .decodeToString()
+                                    },
+                                ),
                             selectedIndex =
                                 if (node.dropdownAvailable != 0u) node.selectedIndex else null,
                             number =
@@ -176,9 +216,7 @@ internal fun FmLinuxUiSnapshot.readWidgets(
                                         node.step,
                                     )
                                 else null,
-                            checkState =
-                                if (node.checkAvailable != 0u) node.checkState
-                                else null,
+                            checkState = if (node.checkAvailable != 0u) node.checkState else null,
                             progress =
                                 if (node.progressAvailable != 0u)
                                     WidgetProgress(

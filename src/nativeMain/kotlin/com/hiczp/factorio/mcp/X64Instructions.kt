@@ -542,6 +542,11 @@ internal class X64Instructions(
                 result(Operation.RET)
             }
 
+            0xcc -> {
+                require(!word && !hasRex) { "Prefixed breakpoint instructions are unsupported" }
+                result(Operation.TRAP)
+            }
+
             in 0x50..0x5f -> {
                 require(!word && rex and 6 == 0) { "Unsupported stack instruction prefix" }
                 result(

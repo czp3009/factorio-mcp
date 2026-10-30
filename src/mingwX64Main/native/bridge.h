@@ -76,10 +76,14 @@ typedef struct FmNode {
     float itemHealth, magazineLeft;
     double durabilityLeft;
     int32_t iconNormal, iconHovered, iconDisabled;
+    FmObservationBuffer iconNames[3];
+    uint32_t iconNameTruncated;
     uint32_t conditionQuality, conditionComparison;
     uint32_t conditionLookup, conditionNameTruncated;
     char conditionName[256];
     uint32_t switchState, switchAllowNone;
+    uint32_t tooltipStatus, tooltipTruncated;
+    FmObservationBuffer tooltipTitle, tooltipText;
 } FmNode;
 
 typedef struct FmOption {
@@ -143,6 +147,7 @@ typedef enum FmSymbol {
     ModalChild,
     DynamicCast,
     WidgetType,
+    LabelType,
     TextBoxType,
     FocusWidget,
     TextKeyDown,
@@ -268,6 +273,16 @@ typedef struct IconLayout {
     uint32_t supported, normal, hovered, disabled;
 } IconLayout;
 
+typedef struct FmTooltipLayout {
+    uint64_t baseType, plainType;
+    uint32_t creator, title, text;
+} FmTooltipLayout;
+
+typedef struct FmIconNamesLayout {
+    uint64_t lookup;
+    uint32_t registry, stringSize;
+} FmIconNamesLayout;
+
 typedef struct WorldLayout {
     uint32_t supported, scenario, luaState, setupFinished, runningOnLoad, playerIndex;
 } WorldLayout;
@@ -332,6 +347,8 @@ typedef struct Symbols {
     ProgressLayout progress;
     ElementLayout elements;
     IconLayout icons;
+    FmTooltipLayout tooltips;
+    FmIconNamesLayout iconNames;
     WorldLayout world;
     TimedInputLayout timedInput;
     ViewportLayout viewport;

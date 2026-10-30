@@ -96,6 +96,7 @@ class UiIconAcceptanceTest {
                                         add("sprite")
                                         add("hovered_sprite")
                                         add("clicked_sprite")
+                                        if (name == "finite") add("tooltip")
                                     }
                                 },
                             )
@@ -114,6 +115,16 @@ class UiIconAcceptanceTest {
                     assertEquals(sprite, attributes.getValue("sprite").jsonPrimitive.content)
                     assertEquals("", attributes.getValue("hovered_sprite").jsonPrimitive.content)
                     assertEquals("", attributes.getValue("clicked_sprite").jsonPrimitive.content)
+                    if (name == "finite")
+                        assertEquals(
+                            buildJsonArray {
+                                add("")
+                                add("MCP tooltip ")
+                                add("[item=iron-plate]")
+                                add("\nbody")
+                            },
+                            attributes.getValue("tooltip"),
+                        )
                 }
                 println(
                     "factorio-mcp icons: four structured widget references and original Lua SpritePath values; no render graph"

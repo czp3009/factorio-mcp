@@ -346,6 +346,7 @@ submitted tool requests are never replayed. This test-only workaround does not e
 | `UiActionAcceptanceTest` | Generic native widget gestures, restricted text, modifiers, offscreen options and recreation. |
 | `UiFlowAcceptanceTest` | Windows-specific native cleanup checks and broader UI property/inventory interaction coverage. |
 | `UiIconAcceptanceTest`, `UiNumberAcceptanceTest`, `UiIdentityAcceptanceTest` | Structured image references, original script GUI icon names, numbers and native item/quality values in the `ui-actions` scenario. |
+| `UiResourceAcceptanceTest` | Registered HUD icon names, stored tooltip text, lower HUD properties and native Tips and tricks navigation. Uses the `ui-actions` scenario and live widget selectors without hovering. |
 | `WorldQueryAcceptanceTest`, `RelatedWorldQueryAcceptanceTest`, `ExpandedQueryAcceptanceTest` | Direct world and related-object reads, inventories, filters, catalogs, metadata and query recovery. |
 | `WorldOverviewAcceptanceTest`, `ViewportAcceptanceTest` | Explicit areas, native viewport observations and bounded spatial results. |
 | `InputAcceptanceTest`, `WheelInputAcceptanceTest` | Finite keyboard/mouse execution, replacement, cancellation, detach and independent authoritative effects. |

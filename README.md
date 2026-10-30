@@ -169,8 +169,9 @@ See [tools.md](tools.md) for arguments, examples, output semantics and cancellat
 - UI properties are supported selectively; custom-painted
   pixels are not reconstructed as structured controls. World reads can include hidden objects and do not reproduce
   remembered map contents. Visibility flags do not account for UI occlusion.
-- UI images are structured references, without image contents or render layers. Script GUI elements' original icon
-  names can be read with `world_query` object inspection.
+- UI reads include image references, available registered icon names and already stored plain tooltip text on a
+  best-effort basis. Image contents, render layers and dynamically generated tooltips are not reconstructed.
+  Script GUI icon paths and tooltip expressions can also be read with `world_query` object inspection.
 - `input` requires a running world. Use `ui_action` for menus and paused UI. Direct widget dragging/scrolling and
   controller input are unsupported; offscreen options can be selected directly, and running-world mouse input provides
   a dragging fallback. Wheel input over UI can be unreliable.

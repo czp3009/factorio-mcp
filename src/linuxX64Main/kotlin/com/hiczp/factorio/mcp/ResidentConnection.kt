@@ -5,8 +5,8 @@ package com.hiczp.factorio.mcp
 import com.hiczp.factorio.mcp.linuxbridge.*
 import kotlinx.cinterop.*
 import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import platform.posix.*
@@ -63,7 +63,10 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
         if (channel == null) channel = ResidentChannel(process, checkNotNull(mapping))
     }
 
-    private suspend fun borrow(site: FrontendSite, readiness: FrontendReadiness? = null): FrontendSite.Verified {
+    private suspend fun borrow(
+        site: FrontendSite,
+        readiness: FrontendReadiness? = null,
+    ): FrontendSite.Verified {
         check(trace == null) { "Previous trace cleanup is incomplete; retry detach" }
         val owner = ThreadTrace(process.pid)
         trace = owner
@@ -222,6 +225,8 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
                         ),
                         truncated = shared.snapshot.truncated != 0u,
                         paused = result.paused,
+                        iconNamesUnavailableReason = widgets.iconNames.exceptionOrNull()?.message,
+                        tooltipsUnavailableReason = widgets.tooltips.exceptionOrNull()?.message,
                     )
                 },
             )
@@ -281,14 +286,24 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
                 }
 
     private fun renderingControl(): RenderingControlMetadata =
-        renderingControlMetadata ?: process.withExecutable { image ->
-            RenderingControlMetadata.resolve(image).also { it.verifyLoaded(image, process, loadBias) }
-        }.also { renderingControlMetadata = it }
+        renderingControlMetadata
+            ?: process
+                .withExecutable { image ->
+                    RenderingControlMetadata.resolve(image).also {
+                        it.verifyLoaded(image, process, loadBias)
+                    }
+                }
+                .also { renderingControlMetadata = it }
 
     private suspend fun stopRendering(): GameSnapshot {
         val metadata = renderingControl()
-        val result = checkNotNull(channel).execute(FM_LINUX_STOP_RENDERING,
-            { shared -> metadata.write(shared.renderingControl, loadBias) }, { _, result -> result })
+        val result =
+            checkNotNull(channel)
+                .execute(
+                    FM_LINUX_STOP_RENDERING,
+                    { shared -> metadata.write(shared.renderingControl, loadBias) },
+                    { _, result -> result },
+                )
         check(result.code == 0) { "Cannot safely stop native rendering: ${result.code}" }
         return GameSnapshot(result.state, true, result.frame.toLong(), paused = result.paused)
     }
@@ -321,7 +336,12 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
                 FM_LINUX_SCREENSHOT,
                 { shared ->
                     metadata.writeTo(shared.frameContext, loadBias)
-                    metadata.rendering.write(shared.rendering, shared.renderingSetting, metadata.size.global, loadBias)
+                    metadata.rendering.write(
+                        shared.rendering,
+                        shared.renderingSetting,
+                        metadata.size.global,
+                        loadBias,
+                    )
                     site.writeTo(shared.frameSite)
                     FrameApiBinding.writeTo(api, shared.frameApi)
                 },
@@ -513,25 +533,34 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
 
         var task: GameInputTask? = null
         try {
-            // The resident creates storage so a sandboxed client never needs to read MCP's /proc/fd.
-            // Complete conversion and retain the independent mapping before canceling an earlier task.
+            // The resident creates storage so a sandboxed client never needs to read MCP's
+            // /proc/fd.
+            // Complete conversion and retain the independent mapping before canceling an earlier
+            // task.
             var descriptor = -1
-            val pending = connection.execute(
-                FM_LINUX_INPUT_PREPARE,
-                { it.inputOwner = getpid().toUInt() },
-                { shared, result ->
-                    check(result.code == 0) { "Native input storage preparation failed: ${result.code}" }
-                    descriptor = shared.inputDescriptor
-                    val mapping = SharedMapping.open(process.fileDescriptorPath(descriptor), sizeOf<FmLinuxInputTask>())
-                    NativeInputTask(
-                        process.pid,
-                        request,
-                        { names -> names.map { SdlScancodes.chord(listOf(it)).single() } },
-                        ::alive,
-                        mapping,
-                    )
-                },
-            )
+            val pending =
+                connection.execute(
+                    FM_LINUX_INPUT_PREPARE,
+                    { it.inputOwner = getpid().toUInt() },
+                    { shared, result ->
+                        check(result.code == 0) {
+                            "Native input storage preparation failed: ${result.code}"
+                        }
+                        descriptor = shared.inputDescriptor
+                        val mapping =
+                            SharedMapping.open(
+                                process.fileDescriptorPath(descriptor),
+                                sizeOf<FmLinuxInputTask>(),
+                            )
+                        NativeInputTask(
+                            process.pid,
+                            request,
+                            { names -> names.map { SdlScancodes.chord(listOf(it)).single() } },
+                            ::alive,
+                            mapping,
+                        )
+                    },
+                )
             val retained = inputTasks.retain(pending)
             task = retained
             val context = inputContext()
@@ -615,7 +644,9 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
                 try {
                     if (process.alive()) {
                         val result = connection.execute(FM_LINUX_INPUT_DISCARD)
-                        check(result.code == 0) { "Native input storage cleanup failed: ${result.code}; retry detach" }
+                        check(result.code == 0) {
+                            "Native input storage cleanup failed: ${result.code}; retry detach"
+                        }
                     }
                 } catch (cleanup: Throwable) {
                     failure.addSuppressed(cleanup)
@@ -755,13 +786,18 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
                         if (connection.actionOwned) "; cleanup is incomplete, retry detach" else ""
                 }
                 val output = shared.chatSnapshot
-                require(
-                    output.count <= Int.MAX_VALUE.toUInt() && output.consoleIdentity != 0uL
-                )
+                require(output.count <= Int.MAX_VALUE.toUInt() && output.consoleIdentity != 0uL)
                 val totals =
-                    List(2) { output.totals[it].also { count -> require(count <= Int.MAX_VALUE.toULong()) } }
+                    List(2) {
+                        output.totals[it].also { count ->
+                            require(count <= Int.MAX_VALUE.toULong())
+                        }
+                    }
                 val records =
-                    output.records.readObservationRecords<FmLinuxChatRecord, ChatRecord>(output.count, readObservation) { row ->
+                    output.records.readObservationRecords<FmLinuxChatRecord, ChatRecord>(
+                        output.count,
+                        readObservation,
+                    ) { row ->
                         require(
                             row.identity != 0uL &&
                                 row.stream <= 1u &&
@@ -776,22 +812,27 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
                             row.tick,
                             row.stream.toInt(),
                             row.playerIndex.toInt(),
-                            row.text.also { it.validateObservationBuffer(row.textSize.toLong()) }
-                                .readObservationBytes(readObservation).decodeToString(),
-                            row.raw.also { it.validateObservationBuffer(row.rawSize.toLong()) }
-                                .readObservationBytes(readObservation).decodeToString(),
+                            row.text
+                                .also { it.validateObservationBuffer(row.textSize.toLong()) }
+                                .readObservationBytes(readObservation)
+                                .decodeToString(),
+                            row.raw
+                                .also { it.validateObservationBuffer(row.rawSize.toLong()) }
+                                .readObservationBytes(readObservation)
+                                .decodeToString(),
                             row.truncated and 1u != 0u,
                             row.truncated and 2u != 0u,
-                            row.playerName.also { it.validateObservationBuffer(row.playerNameSize.toLong()) }
-                                .readObservationBytes(readObservation).decodeToString(),
+                            row.playerName
+                                .also { it.validateObservationBuffer(row.playerNameSize.toLong()) }
+                                .readObservationBytes(readObservation)
+                                .decodeToString(),
                             row.truncated and 4u != 0u,
                         )
                     }
                 require(
                     records.map { it.identity }.distinct().size == records.size &&
                         (0..1).all { stream ->
-                            records.count { it.stream == stream }.toULong() ==
-                                totals[stream]
+                            records.count { it.stream == stream }.toULong() == totals[stream]
                         }
                 )
                 GameSnapshot(
@@ -905,8 +946,11 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
                         true,
                         result.frame.toLong(),
                         paused = result.paused,
-                        worldJson = output.text.also { it.validateObservationBuffer(output.size.toLong()) }
-                            .readObservationBytes(readObservation).decodeToString(),
+                        worldJson =
+                            output.text
+                                .also { it.validateObservationBuffer(output.size.toLong()) }
+                                .readObservationBytes(readObservation)
+                                .decodeToString(),
                     )
                 },
             )

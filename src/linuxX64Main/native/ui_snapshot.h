@@ -141,6 +141,16 @@ typedef struct FmLinuxIconLayout {
     uint32_t normal, hovered, disabled;
 } FmLinuxIconLayout;
 
+typedef struct FmLinuxIconNamesLayout {
+    uint64_t global, lookup, destroy;
+    uint32_t registry, stringSize, stringData, stringLength;
+} FmLinuxIconNamesLayout;
+
+typedef struct FmLinuxTooltipLayout {
+    uint64_t baseType, plainType;
+    uint32_t plainSize, creator, title, text, stringSize, stringData, stringLength;
+} FmLinuxTooltipLayout;
+
 typedef struct FmLinuxUiLayout {
     uint32_t guiSize;
     uint32_t widgetSize;
@@ -170,6 +180,8 @@ typedef struct FmLinuxUiLayout {
     FmLinuxElementLayout elements;
     FmLinuxQualityLayout quality;
     FmLinuxIconLayout icons;
+    FmLinuxIconNamesLayout iconNames;
+    FmLinuxTooltipLayout tooltips;
 } FmLinuxUiLayout;
 
 typedef struct FmLinuxUiNode {
@@ -217,6 +229,10 @@ typedef struct FmLinuxUiNode {
     FmLinuxUiElement element;
     FmLinuxUiQuality quality;
     int32_t iconNormal, iconHovered, iconDisabled;
+    FmLinuxObservationBuffer iconNames[3];
+    uint32_t iconNameTruncated;
+    uint32_t tooltipStatus, tooltipTruncated;
+    FmLinuxObservationBuffer tooltipTitle, tooltipText;
 } FmLinuxUiNode;
 
 typedef struct FmLinuxUiSnapshot {

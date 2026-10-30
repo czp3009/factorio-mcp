@@ -229,12 +229,28 @@ one icon for another. An absent `icons` property means no supported component wa
 reports missing adapter metadata. Image pixels, filenames, crops, colors and render layers are not reconstructed.
 Use `screenshot` when missing visual information is needed.
 
+Each referenced icon also has `name`: the game's utility-resource registration key when its existing lookup can
+identify the resource, otherwise null. Names are copied verbatim, without adding a namespace or deriving names from
+pixels or filenames. For example, a native button may report `"name": "side_menu_production_icon"`.
+`name_truncated: true` reports a bounded name; `icon_names_unavailable_reason` reports unavailable lookup metadata.
+Opaque references remain available when names cannot be read.
+
+Widgets with a stored tooltip provider expose `properties.tooltip`. `status: "stored"` includes the provider's
+original `title` and `text`, including empty strings, rich-text markers and line breaks. `title_truncated` and
+`text_truncated` report bounded copies. An unsupported provider reports `status: "unsupported_provider"`; a failed
+stored-text read reports `status: "unavailable"`. An absent property means no stored provider was observed or its
+metadata is unavailable; `tooltips_unavailable_reason` reports the latter. This does not establish that hovering
+would show no tooltip: style defaults and dynamically generated tooltips are outside this passive read.
+The reader never hovers, creates a tooltip or invokes a tooltip callback.
+
 For existing script GUI elements, `world_query` object inspection also reads the game's original `SpritePath` values,
 such as `item/iron-plate`. Follow `player.gui.screen` (or another existing GUI root) by element name or index, then
 request `sprite`, `hovered_sprite` and `clicked_sprite` where the element supports them. Empty configured strings
 remain empty strings; they are not filled from a rendered fallback. `clicked_sprite` is a Lua configuration field,
 not the native icon button's `disabled` reference. These observations do not provide a name for every native UI image
 or correlate Lua elements with snapshot-local widget IDs.
+The same inspection can request `tooltip` and `elem_tooltip` where supported. These retain the game's original
+localization expression or element descriptor; they are not expanded into generated hover content.
 
 ```json
 {

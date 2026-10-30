@@ -37,6 +37,7 @@ private val symbolPrefixes =
         "?widgetIsModalChild@Gui@agui@@",
         "__RTDynamicCast",
         "??_R0?AVWidget@agui@@@8",
+        "??_R0?AVLabel@agui@@@8",
         "??_R0?AVTextBox@agui@@@8",
         "?focus@Widget@agui@@",
         "?keyDown@TextBox@agui@@",
@@ -112,6 +113,8 @@ internal class ResolvedSymbols(
     val progress: Result<ProgressLayouts>,
     val elements: Result<ElementLayouts>,
     val icons: Result<IconLayout>,
+    val tooltips: Result<TooltipLayout>,
+    val iconNames: Result<IconNamesLayout>,
     val conditions: Result<QualityConditionLayouts>,
     val switches: Result<SwitchLayouts>,
     val chat: Result<ChatLayouts>,
@@ -138,6 +141,8 @@ internal class ResolvedSymbols(
         progress.getOrNull()?.write(target.progress)
         elements.getOrNull()?.write(target.elements)
         icons.getOrNull()?.write(target.icons)
+        tooltips.getOrNull()?.write(target.tooltips)
+        iconNames.getOrNull()?.write(target.iconNames)
         conditions.getOrNull()?.write(target.conditions)
         switches.getOrNull()?.write(target.switches)
         chat.getOrNull()?.write(target.chat)
@@ -160,6 +165,9 @@ private class SymbolCollector {
     val numberTypes = mutableListOf<ULong>()
     val progressTypes = mutableListOf<ULong>()
     val iconTypes = mutableListOf<ULong>()
+    val tooltipBaseTypes = mutableListOf<ULong>()
+    val tooltipPlainTypes = mutableListOf<ULong>()
+    val iconNameEntries = mutableListOf<ULong>()
     val conditionTypes = mutableListOf<ULong>()
     val qualityRegistries = mutableListOf<ULong>()
     val comparisonStrings = mutableListOf<ULong>()
@@ -222,6 +230,12 @@ internal fun resolveSymbols(process: HANDLE, module: ProcessModule): ResolvedSym
                             result.switchTypes.add(info.pointed.Address)
                         if (name == "??_R0?AVIconButton@@@8")
                             result.iconTypes.add(info.pointed.Address)
+                        if (name == "??_R0?AVToolTipCreatorBase@agui@@@8")
+                            result.tooltipBaseTypes.add(info.pointed.Address)
+                        if (name == "??_R0?AVPlainToolTipCreator@agui@@@8")
+                            result.tooltipPlainTypes.add(info.pointed.Address)
+                        if (name.startsWith("?getNameForSprite@UtilitySprites@@"))
+                            result.iconNameEntries.add(info.pointed.Address)
                         if (name == "?str@Comparison@@QEBAPEBDXZ")
                             result.comparisonStrings.add(info.pointed.Address)
                         if (
@@ -311,9 +325,15 @@ internal fun resolveSymbols(process: HANDLE, module: ProcessModule): ResolvedSym
         }
         val renderingControl = runCatching {
             val index = FmSymbol.HeadlessMode.value.toInt()
-            require(collector.symbols.count(index) == 1) { "Missing or ambiguous rendering state symbol" }
+            require(collector.symbols.count(index) == 1) {
+                "Missing or ambiguous rendering state symbol"
+            }
             types.validateStaticBoolean("GlobalContext", "headlessMode")
-            RenderingControlLayouts(types, addresses[FmSymbol.Global.value.toInt()], addresses[index])
+            RenderingControlLayouts(
+                types,
+                addresses[FmSymbol.Global.value.toInt()],
+                addresses[index],
+            )
         }
         ResolvedSymbols(
             addresses,
@@ -400,6 +420,15 @@ internal fun resolveSymbols(process: HANDLE, module: ProcessModule): ResolvedSym
             },
             runCatching { IconLayout(types, collector.iconTypes) },
             runCatching {
+                TooltipLayout(types, collector.tooltipBaseTypes, collector.tooltipPlainTypes)
+            },
+            runCatching {
+                require(collector.symbols.count(FmSymbol.StringDestroy.value.toInt()) == 1)
+                IconNamesLayout(types, collector.iconNameEntries, image, module) { rva, size ->
+                    readModule(process, module, rva, size)
+                }
+            },
+            runCatching {
                 QualityConditionLayouts(
                     types,
                     info.LoadedPdbName.toKString(),
@@ -415,7 +444,8 @@ internal fun resolveSymbols(process: HANDLE, module: ProcessModule): ResolvedSym
             },
             runCatching { SwitchLayouts(types, collector.switchTypes) },
             runCatching {
-                for (index in FmSymbol.LocalisedRaw.value.toInt() until FmSymbol.HeadlessMode.value.toInt()) {
+                for (index in
+                    FmSymbol.LocalisedRaw.value.toInt() until FmSymbol.HeadlessMode.value.toInt()) {
                     check(collector.symbols.count(index) == 1) {
                         "Chat unavailable: missing or ambiguous ${symbolPrefixes[index]}"
                     }

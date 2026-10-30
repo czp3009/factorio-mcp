@@ -2,6 +2,7 @@
 #include <cassert>
 #include <cstddef>
 #include <array>
+#include <string>
 
 struct Icon {
     void *padding{};
@@ -9,6 +10,24 @@ struct Icon {
 };
 
 static Icon *receiver{};
+static int lookups, destroyed;
+static void lookup(const void *registry, void *output, const void *sprite) {
+    assert(registry && sprite);
+    ++lookups;
+    new (output) std::string("fixture_registered_icon");
+}
+static void destroy(void *value) {
+    static_cast<std::string *>(value)->~basic_string();
+    ++destroyed;
+}
+
+static const char *data(const void *value) {
+    return static_cast<const std::string *>(value)->data();
+}
+
+static size_t size(const void *value) {
+    return static_cast<const std::string *>(value)->size();
+}
 
 static void *cast(void *widget, long, void *, void *, int) {
     return widget == reinterpret_cast<void *>(1) ? receiver : nullptr;
@@ -44,6 +63,25 @@ int main() {
     icon.normal = &sources[0];
     snapshot.collect(reinterpret_cast<void *>(1), node);
     assert(node.iconNormal == 0);
+    struct TestGlobal {
+        unsigned char padding[47];
+        void *registry;
+    } global{};
+    global.registry = &source;
+    void *root = &global;
+    symbols.address[Global] = reinterpret_cast<uintptr_t>(&root);
+    symbols.address[StringData] = reinterpret_cast<uintptr_t>(data);
+    symbols.address[StringSize] = reinterpret_cast<uintptr_t>(size);
+    symbols.address[StringDestroy] = reinterpret_cast<uintptr_t>(destroy);
+    symbols.iconNames = {reinterpret_cast<uintptr_t>(lookup), offsetof(TestGlobal, registry), sizeof(std::string)};
+    ObservationStorage storage;
+    icon.hovered = icon.normal;
+    IconReferences named(symbols);
+    named.collect(reinterpret_cast<void *>(1), node, &storage);
+    named.collect(reinterpret_cast<void *>(1), node, &storage);
+    assert(lookups == 1 && destroyed == 1);
+    assert(observationText(node.iconNames[0]) == "fixture_registered_icon");
+    assert(node.iconNames[0].address == node.iconNames[1].address);
     IconReferences fresh(symbols);
     icon.normal = &sources.back();
     fresh.collect(reinterpret_cast<void *>(1), node);

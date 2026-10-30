@@ -12,6 +12,49 @@ template <class T> T read(const void *object, unsigned offset) {
 }
 } // namespace
 
+const void *readWidgetText(const Symbols &symbols, void *widget) {
+    auto cast = [&](FmSymbol type) {
+        return reinterpret_cast<void *(*)(void *, long, void *, void *, int)>(symbols.address[DynamicCast])(
+            widget, 0, reinterpret_cast<void *>(symbols.address[WidgetType]),
+            reinterpret_cast<void *>(symbols.address[type]), 0);
+    };
+    auto getter = [&](FmSymbol method, void *receiver) {
+        return reinterpret_cast<const void *(*)(void *)>(symbols.address[method])(receiver);
+    };
+    if (auto *receiver = cast(TextBoxType))
+        return getter(TextBoxText, receiver);
+    if (auto *receiver = cast(LabelType))
+        return getter(LabelText, receiver);
+    return getter(Text, widget);
+}
+
+void collectTooltip(const Symbols &symbols, void *widget, FmNode &node, ObservationStorage &storage) {
+    const auto &layout = symbols.tooltips;
+    if (!layout.plainType)
+        return;
+    auto *creator = read<void *>(widget, layout.creator);
+    if (!creator)
+        return;
+    node.properties |= 16384;
+    node.tooltipStatus = 2;
+    auto *plain = reinterpret_cast<void *(*)(void *, long, void *, void *, int)>(symbols.address[DynamicCast])(
+        creator, 0, reinterpret_cast<void *>(layout.baseType), reinterpret_cast<void *>(layout.plainType), 0);
+    if (!plain)
+        return;
+    auto copy = [&](uint32_t offset, FmObservationBuffer &output, uint32_t flag) {
+        const void *text = static_cast<const unsigned char *>(plain) + offset;
+        const auto size = reinterpret_cast<size_t (*)(const void *)>(symbols.address[StringSize])(text);
+        const auto *data = reinterpret_cast<const char *(*)(const void *)>(symbols.address[StringData])(text);
+        bool truncated = false;
+        output = storage.copyText(data, size, truncated);
+        if (truncated)
+            node.tooltipTruncated |= flag;
+    };
+    copy(layout.title, node.tooltipTitle, 1);
+    copy(layout.text, node.tooltipText, 2);
+    node.tooltipStatus = 3;
+}
+
 IconReferences::IconReferences(const Symbols &symbols) : symbols(symbols) {}
 
 int IconReferences::observe(const void *sprite) {
@@ -26,7 +69,7 @@ int IconReferences::observe(const void *sprite) {
     return index;
 }
 
-void IconReferences::collect(void *widget, FmNode &node) {
+void IconReferences::collect(void *widget, FmNode &node, ObservationStorage *storage) {
     const auto &layout = symbols.icons;
     if (!layout.supported)
         return;
@@ -38,6 +81,40 @@ void IconReferences::collect(void *widget, FmNode &node) {
     node.iconNormal = observe(read<const void *>(receiver, layout.normal));
     node.iconHovered = observe(read<const void *>(receiver, layout.hovered));
     node.iconDisabled = observe(read<const void *>(receiver, layout.disabled));
+    const auto &nameLayout = symbols.iconNames;
+    if (!nameLayout.lookup || !storage)
+        return;
+    const auto *global = *reinterpret_cast<const void **>(symbols.address[Global]);
+    const auto *registry = global ? read<const void *>(global, nameLayout.registry) : nullptr;
+    if (!registry)
+        return;
+    const uint32_t offsets[] = {layout.normal, layout.hovered, layout.disabled};
+    for (size_t i = 0; i < 3; ++i) {
+        const auto *sprite = read<const void *>(receiver, offsets[i]);
+        if (!sprite)
+            continue;
+        auto found = names.find(sprite);
+        if (found == names.end()) {
+            require(nameLayout.stringSize && nameLayout.stringSize <= 256, "Invalid sprite-name storage");
+            alignas(16) unsigned char result[256]{};
+            reinterpret_cast<void (*)(const void *, void *, const void *)>(nameLayout.lookup)(registry, result, sprite);
+            auto destroy = reinterpret_cast<void (*)(void *)>(symbols.address[StringDestroy]);
+            std::pair<FmObservationBuffer, bool> copied{};
+            try {
+                auto size = reinterpret_cast<size_t (*)(const void *)>(symbols.address[StringSize])(result);
+                auto *data = reinterpret_cast<const char *(*)(const void *)>(symbols.address[StringData])(result);
+                copied.first = storage->copyText(data, size, copied.second);
+            } catch (...) {
+                destroy(result);
+                throw;
+            }
+            destroy(result);
+            found = names.emplace(sprite, copied).first;
+        }
+        node.iconNames[i] = found->second.first;
+        if (found->second.second)
+            node.iconNameTruncated |= 1u << i;
+    }
 }
 
 void collectVisibility(const Symbols &symbols, void *widget, FmNode &node) {

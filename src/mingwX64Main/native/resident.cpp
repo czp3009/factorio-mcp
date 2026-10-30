@@ -82,17 +82,9 @@ static void collect(void *widget) {
     void *type = fn<void *(*)(void *)>(TypeId)(widget);
     const char *name = fn<const char *(*)(void *)>(TypeName)(type);
     copyText(node.type, sizeof(node.type), name, strlen(name), node, 2);
-    Symbol getter = Text;
-    if (strcmp(name, "class agui::Label") == 0)
-        getter = LabelText;
-    void *textReceiver = fn<void *(*)(void *, long, void *, void *, int)>(DynamicCast)(
-        widget, 0, reinterpret_cast<void *>(symbols.address[WidgetType]),
-        reinterpret_cast<void *>(symbols.address[TextBoxType]), 0);
-    if (textReceiver)
-        getter = TextBoxText;
-    void *text = fn<void *(*)(void *)>(getter)(textReceiver ? textReceiver : widget);
-    auto data = fn<const char *(*)(void *)>(StringData);
-    auto size = fn<size_t (*)(void *)>(StringSize);
+    const void *text = readWidgetText(symbols, widget);
+    auto data = fn<const char *(*)(const void *)>(StringData);
+    auto size = fn<size_t (*)(const void *)>(StringSize);
     bool truncated = false;
     node.text = observations.copyText(data(text), size(text), truncated);
     if (truncated)
@@ -410,7 +402,8 @@ static void service(void *root, void *gui) {
                     collectSwitch(symbols, widget, node);
                     collectElement(symbols, widget, node);
                     collectQualityCondition(symbols, widget, node);
-                    icons.collect(widget, node);
+                    icons.collect(widget, node, &observations);
+                    collectTooltip(symbols, widget, node, observations);
                 }
             }
         }

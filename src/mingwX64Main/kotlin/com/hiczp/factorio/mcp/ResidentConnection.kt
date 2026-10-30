@@ -454,7 +454,10 @@ internal class ResidentConnection(private val pid: UInt) {
             val result = state.pointed.result
             check(result.error == 0) { result.message.toKString() }
             check(result.count >= 0) { "Invalid resident node count" }
-            check(result.controlCount <= result.registryCount && result.registryCount <= Int.MAX_VALUE.toUInt()) {
+            check(
+                result.controlCount <= result.registryCount &&
+                    result.registryCount <= Int.MAX_VALUE.toUInt()
+            ) {
                 "Invalid resident control count"
             }
             val context = currentCoroutineContext()
@@ -473,13 +476,19 @@ internal class ResidentConnection(private val pid: UInt) {
                                 transferred.ptr,
                             )
                         } != 0 && transferred.value == size.toULong()
-                    ) { "Cannot read resident observation" }
+                    ) {
+                        "Cannot read resident observation"
+                    }
                     bytes
                 }
             }
-            // The IPC mutex protects these owned copies until every process-memory chunk has been read.
+            // The IPC mutex protects these owned copies until every process-memory chunk has been
+            // read.
             val options =
-                result.options.readObservationRecords<FmOption, WidgetOption>(result.optionCount, readObservation) {
+                result.options.readObservationRecords<FmOption, WidgetOption>(
+                    result.optionCount,
+                    readObservation,
+                ) {
                     check(it.truncated <= 1u) { "Invalid option truncation flag" }
                     WidgetOption(it.text.readObservationText(readObservation), it.truncated != 0u)
                 }
@@ -493,7 +502,19 @@ internal class ResidentConnection(private val pid: UInt) {
                 },
                 result.attached != 0,
                 result.frame.toLong(),
-                result.nodes.readObservationRecords<FmNode, WidgetSnapshot>(result.count.toUInt(), readObservation) { node ->
+                result.nodes.readObservationRecords<FmNode, WidgetSnapshot>(
+                    result.count.toUInt(),
+                    readObservation,
+                ) { node ->
+                    fun icon(reference: Int, index: Int) =
+                        widgetIconReference(reference)
+                            ?.copy(
+                                name =
+                                    node.iconNames[index]
+                                        .readObservationText(readObservation)
+                                        .takeIf { it.isNotEmpty() },
+                                nameTruncated = node.iconNameTruncated and (1u shl index) != 0u,
+                            )
                     WidgetSnapshot(
                         node.depth,
                         node.type.toKString(),
@@ -594,11 +615,18 @@ internal class ResidentConnection(private val pid: UInt) {
                                 icons =
                                     if (node.properties and 2048u != 0u)
                                         WidgetIcons(
-                                            widgetIconReference(node.iconNormal),
-                                            widgetIconReference(node.iconHovered),
-                                            widgetIconReference(node.iconDisabled),
+                                            icon(node.iconNormal, 0),
+                                            icon(node.iconHovered, 1),
+                                            icon(node.iconDisabled, 2),
                                         )
                                     else null,
+                                tooltip =
+                                    widgetTooltip(
+                                        node.tooltipStatus,
+                                        node.tooltipTruncated,
+                                        { node.tooltipTitle.readObservationText(readObservation) },
+                                        { node.tooltipText.readObservationText(readObservation) },
+                                    ),
                                 qualityCondition =
                                     if (node.properties and 4096u != 0u)
                                         WidgetQualityCondition(
@@ -675,7 +703,10 @@ internal class ResidentConnection(private val pid: UInt) {
                 } else null,
                 result.imageWidth.toInt(),
                 result.imageHeight.toInt(),
-                result.controls.readObservationRecords<FmControl, ControlSnapshot>(result.controlCount, readObservation) {
+                result.controls.readObservationRecords<FmControl, ControlSnapshot>(
+                    result.controlCount,
+                    readObservation,
+                ) {
                     symbols.controls.getOrThrow().read(it)
                 },
                 result.registryCount.toInt(),
@@ -686,8 +717,11 @@ internal class ResidentConnection(private val pid: UInt) {
                     check(result.worldSize in 1u..Int.MAX_VALUE.toUInt()) {
                         "Invalid world query result size"
                     }
-                    val text = result.worldJson.also { it.validateObservationBuffer(result.worldSize.toLong()) }
-                        .readObservationBytes(readObservation).decodeToString()
+                    val text =
+                        result.worldJson
+                            .also { it.validateObservationBuffer(result.worldSize.toLong()) }
+                            .readObservationBytes(readObservation)
+                            .decodeToString()
                     if (query != null && "inspection" in query.arguments) {
                         checkNotNull(runtimeApi).annotate(decodeWorldQuery(text)).toString()
                     } else text
@@ -698,6 +732,8 @@ internal class ResidentConnection(private val pid: UInt) {
                 progressUnavailableReason = symbols.progress.exceptionOrNull()?.message,
                 elementUnavailableReason = symbols.elements.exceptionOrNull()?.message,
                 iconsUnavailableReason = symbols.icons.exceptionOrNull()?.message,
+                tooltipsUnavailableReason = symbols.tooltips.exceptionOrNull()?.message,
+                iconNamesUnavailableReason = symbols.iconNames.exceptionOrNull()?.message,
                 qualityConditionUnavailableReason = symbols.conditions.exceptionOrNull()?.message,
                 switchUnavailableReason = symbols.switches.exceptionOrNull()?.message,
                 chat =

@@ -49,7 +49,7 @@ local function build(player)
   if player.gui.screen.mcp_number_fixture then player.gui.screen.mcp_number_fixture.destroy() end
   local numbers=player.gui.screen.add{type="frame",name="mcp_number_fixture",caption="MCP number fixture",direction="horizontal"}
   numbers.visible=false
-  numbers.add{type="sprite-button",name="mcp_number_finite",sprite="item/iron-plate",number=12345.125}
+  numbers.add{type="sprite-button",name="mcp_number_finite",sprite="item/iron-plate",number=12345.125,tooltip={"","MCP tooltip ","[item=iron-plate]","\nbody"}}
   numbers.add{type="sprite-button",name="mcp_number_zero",sprite="item/copper-plate",number=0}
   numbers.add{type="sprite-button",name="mcp_number_negative",sprite="item/steel-plate",number=-0.25}
   numbers.add{type="sprite-button",name="mcp_number_suppressed",sprite="item/stone"}

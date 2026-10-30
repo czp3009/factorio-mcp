@@ -38,6 +38,8 @@ internal data class GameSnapshot(
     val progressUnavailableReason: String? = null,
     val elementUnavailableReason: String? = null,
     val iconsUnavailableReason: String? = null,
+    val iconNamesUnavailableReason: String? = null,
+    val tooltipsUnavailableReason: String? = null,
     val qualityConditionUnavailableReason: String? = null,
     val switchUnavailableReason: String? = null,
     val chat: ChatSnapshot? = null,

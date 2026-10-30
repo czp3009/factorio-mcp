@@ -65,7 +65,34 @@ internal data class WidgetProperties(
     val icons: WidgetIcons? = null,
     val qualityCondition: WidgetQualityCondition? = null,
     val switch: WidgetSwitch? = null,
+    val tooltip: WidgetTooltip? = null,
 )
+
+/** Only already stored plain text is observed; providers are never invoked. */
+internal data class WidgetTooltip(
+    val status: String,
+    val title: String? = null,
+    val text: String? = null,
+    val titleTruncated: Boolean = false,
+    val textTruncated: Boolean = false,
+)
+
+internal fun widgetTooltip(
+    status: UInt,
+    truncated: UInt,
+    title: () -> String,
+    text: () -> String,
+): WidgetTooltip? {
+    require(truncated and 3u == truncated) { "Invalid tooltip truncation flags" }
+    return when (status) {
+        0u -> null
+        2u -> WidgetTooltip("unsupported_provider")
+        3u ->
+            WidgetTooltip("stored", title(), text(), truncated and 1u != 0u, truncated and 2u != 0u)
+        4u -> WidgetTooltip("unavailable")
+        else -> error("Invalid resident tooltip status")
+    }
+}
 
 internal data class WidgetSwitch(val stateValue: Int, val state: String, val allowNone: Boolean)
 
@@ -84,8 +111,13 @@ internal data class WidgetIcons(
     val disabled: WidgetIcon?,
 )
 
-/** An opaque reference valid only in this snapshot. */
-internal data class WidgetIcon(val reference: Int?, val truncated: Boolean = false)
+/** A snapshot-local reference and the game's optional resource registration key. */
+internal data class WidgetIcon(
+    val reference: Int?,
+    val truncated: Boolean = false,
+    val name: String? = null,
+    val nameTruncated: Boolean = false,
+)
 
 /** Native references never expose addresses; -1 is absent and -2 is a bounded omission. */
 internal fun widgetIconReference(value: Int): WidgetIcon? {

@@ -2,6 +2,7 @@
 #include "ui_reference.h"
 #include "ui_number.h"
 #include "ui_icons.h"
+#include "ui_tooltips.h"
 #include "linux_ipc.h"
 #include "memory_read.h"
 #include "widget_text.h"
@@ -176,7 +177,7 @@ int rectangle(uintptr_t object, const FmLinuxUiLayout &layout, FmLinuxRectangle 
 
 bool validUiLayout(const FmLinuxUiLayout &layout) {
     if (!validNumberLayout(layout.number) || !validIconLayout(layout.icons) || !validIdentityLayout(layout.identity) ||
-        !validElementLayout(layout.elements) || !validQualityLayout(layout.quality))
+        !validElementLayout(layout.elements) || !validQualityLayout(layout.quality) || !validTooltipLayout(layout.tooltips, layout.widgetSize))
         return false;
     if (layout.switchCount > 64)
         return false;
@@ -457,8 +458,9 @@ static int readUi(void *gui, const FmLinuxUiLayout &layout, uint32_t limit, cons
             return error;
         if (const int error = collectQuality(objects[index], layout.quality, layout.identity, node.quality))
             return error;
-        if (const int error = icons.collect(objects[index], node))
+        if (const int error = icons.collect(objects[index], node, &layout.iconNames, &output))
             return error;
+        collectTooltip(objects[index], layout.tooltips, node, output);
         if (const int error = rectangle(objects[index], layout, node.bounds))
             return error;
         if (layout.toggle.function) {

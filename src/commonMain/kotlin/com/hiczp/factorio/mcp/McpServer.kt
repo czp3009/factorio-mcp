@@ -121,7 +121,7 @@ internal fun createServer(game: GameSession): Server {
     }
     tool(
         "ui_read",
-        "Read interface structure and native properties in menus, paused worlds and gameplay. Returns postorder nodes with text, own flags, parent links and snapshot-local IDs; actions require live selectors. Selected subtrees narrow output, while selector resolution requires a complete bounded traversal. Missing properties mean unsupported or unavailable; inspect reasons and truncation. Flags and bounds do not establish effective visibility or action eligibility. Options and selected_index are zero-based. Icon references are opaque and snapshot-local; original script GUI icon names are readable through world_query inspection. Interpret native values and hierarchy yourself. Use screenshot for missing visual information.",
+        "Read interface structure and native properties in menus, paused worlds and gameplay. Returns postorder nodes with text, own flags, parent links and snapshot-local IDs; actions require live selectors. Selected subtrees narrow output, while selector resolution requires a complete bounded traversal. Missing properties mean unsupported or unavailable; inspect reasons and truncation. Flags and bounds do not establish effective visibility or action eligibility. Options and selected_index are zero-based. Icon references are snapshot-local, with game-registered names when available. Tooltip reads copy stored plain text without hovering or invoking providers. Script GUI icon paths and tooltip expressions are available through world_query inspection. Interpret native values and hierarchy yourself. Use screenshot for missing visual information.",
         buildJsonObject {
             putJsonObject("max_nodes") {
                 put("type", "integer")
@@ -199,9 +199,7 @@ internal fun createServer(game: GameSession): Server {
         val search = args["search"]?.stringArgument()
         val offset = args["offset"]?.intArgument() ?: 0
         val limit = args["limit"]?.intArgument() ?: 64
-        require(offset >= 0 && limit > 0) {
-            "offset must be nonnegative and limit positive"
-        }
+        require(offset >= 0 && limit > 0) { "offset must be nonnegative and limit positive" }
         game.bindings(ids, search, offset, limit)
     }
     tool(
@@ -246,7 +244,9 @@ internal fun createServer(game: GameSession): Server {
     tool(
         "stop_rendering",
         "Stop drawing the game window once, without minimizing it. Simulation and structured tools remain available, including menus and paused worlds. Later user or window/system events may resume drawing. Returns dispatch:completed after local execution; no persistent state or automatic restoration on detach. Screenshots fail while native rendering is suspended. Requires an attached graphical client.",
-    ) { game.stopRendering() }
+    ) {
+        game.stopRendering()
+    }
     register(
         "screenshot",
         "Capture the next rendered game+UI frame as PNG, or cancel the active capture and wait for cleanup. Only one capture may be pending; another capture fails while busy. Prefer structured reads; use images for missing visual information, verification or requested images. Requires active rendering (OpenGL on Linux, DirectX on Windows); game-suspended rendering returns an error at frontend admission. A stalled frontend or graphics backend can still delay capture. Excludes desktop and OS/Steam overlays. Cancellation also works through MCP request cancellation.",

@@ -36,6 +36,8 @@ internal fun GameSnapshot.uiJson(bounds: Boolean, filtered: Boolean = false): Js
         progressUnavailableReason?.let { put("progress_unavailable_reason", it) }
         elementUnavailableReason?.let { put("element_unavailable_reason", it) }
         iconsUnavailableReason?.let { put("icons_unavailable_reason", it) }
+        iconNamesUnavailableReason?.let { put("icon_names_unavailable_reason", it) }
+        tooltipsUnavailableReason?.let { put("tooltips_unavailable_reason", it) }
         qualityConditionUnavailableReason?.let { put("quality_condition_unavailable_reason", it) }
         switchUnavailableReason?.let { put("switch_unavailable_reason", it) }
         if (nodes.any { it.visible != null }) put("visibility_basis", "own_widget_flags")
@@ -96,6 +98,15 @@ private fun WidgetProperties.json(): JsonObject = buildJsonObject {
             put("normal", it.normal?.json() ?: JsonNull)
             put("hovered", it.hovered?.json() ?: JsonNull)
             put("disabled", it.disabled?.json() ?: JsonNull)
+        }
+    }
+    tooltip?.let {
+        putJsonObject("tooltip") {
+            put("status", it.status)
+            it.title?.let { title -> put("title", title) }
+            it.text?.let { text -> put("text", text) }
+            if (it.titleTruncated) put("title_truncated", true)
+            if (it.textTruncated) put("text_truncated", true)
         }
     }
     element?.let { element ->
@@ -174,6 +185,8 @@ private fun WidgetIcon.json(): JsonObject = buildJsonObject {
     put("reference", reference?.let(::JsonPrimitive) ?: JsonNull)
     if (reference != null) put("identity_scope", "snapshot")
     if (truncated) put("truncated", true)
+    put("name", name?.let(::JsonPrimitive) ?: JsonNull)
+    if (nameTruncated) put("name_truncated", true)
 }
 
 private fun WidgetItem.json(): JsonObject = buildJsonObject {
