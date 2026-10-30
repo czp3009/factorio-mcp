@@ -326,6 +326,8 @@ internal class ResidentConnection(private val pid: UInt) {
         inputName: String? = null,
         chatText: String? = null,
     ): GameSnapshot {
+        if (operation == 6) symbols.rendering.getOrThrow()
+        if (operation == 12) symbols.renderingControl.getOrThrow()
         if (operation == 7) symbols.controls.getOrThrow()
         if (operation == 8) symbols.world.getOrThrow()
         if (operation == 10 || operation == 11) {

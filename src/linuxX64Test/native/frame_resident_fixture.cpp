@@ -23,7 +23,9 @@ struct Api { bool (*swap)(void *); };
 struct Window;
 struct Graphics { uintptr_t *table; Window *window; };
 struct Window { uintptr_t *table; Graphics *graphics; void *native; };
-struct Global { Window *window; };
+struct Setting { uintptr_t table; const char *name; uint64_t length; uint8_t halt; };
+struct Settings { uintptr_t table; Setting item; };
+struct Global { Window *window; uint8_t minimized, suppressed; Settings *settings; };
 static uintptr_t swapCaller;
 static unsigned swaps = 0, reads = 0;
 
@@ -81,6 +83,38 @@ int main() {
     graphics.window = &window;
     Global global{&window};
     Global *globalPointer = &global;
+    uint8_t headless = 0;
+    uintptr_t settingTable[1]{};
+    constexpr char settingName[] = "halt-rendering-when-minimized";
+    Settings settings{123, {reinterpret_cast<uintptr_t>(settingTable), settingName, sizeof(settingName) - 1, 1}};
+    global.settings = &settings;
+    shared->rendering = {reinterpret_cast<uintptr_t>(&globalPointer), reinterpret_cast<uintptr_t>(&headless), 123,
+        sizeof(Global), sizeof(Settings), offsetof(Global, minimized), offsetof(Global, suppressed),
+        offsetof(Global, settings), offsetof(Settings, item) + offsetof(Setting, halt)};
+    shared->renderingSetting = {reinterpret_cast<uintptr_t>(settingTable), sizeof(Setting), offsetof(Settings, item),
+        offsetof(Setting, name), offsetof(Setting, length)};
+    shared->renderingControl = {reinterpret_cast<uintptr_t>(&globalPointer), reinterpret_cast<uintptr_t>(&headless),
+        sizeof(Global), offsetof(Global, suppressed)};
+    const auto readSetting = [](uint64_t address, auto &output) {
+        std::memcpy(&output, reinterpret_cast<const void *>(address), sizeof(output));
+        return true;
+    };
+    assert(validRenderingSetting(shared->rendering, shared->renderingSetting, readSetting));
+    settings.item.length--;
+    assert(!validRenderingSetting(shared->rendering, shared->renderingSetting, readSetting));
+    settings.item.length++;
+    settings.item.name = "halt-rendering-when-minimizeX";
+    assert(!validRenderingSetting(shared->rendering, shared->renderingSetting, readSetting));
+    settings.item.name = settingName;
+    settings.item.table++;
+    assert(!validRenderingSetting(shared->rendering, shared->renderingSetting, readSetting));
+    settings.item.table--;
+    assert(!validRenderingSetting(shared->rendering, shared->renderingSetting,
+        [](uint64_t, auto &) { return false; }));
+    const auto validSetting = shared->renderingSetting;
+    shared->renderingSetting.member = sizeof(Settings);
+    assert(!validRenderingSetting(shared->rendering, shared->renderingSetting, readSetting));
+    shared->renderingSetting = validSetting;
     Api apiTable{originalSwap};
     swap(&apiTable, &native);
     shared->frameContext = {reinterpret_cast<uintptr_t>(&globalPointer),
@@ -106,7 +140,53 @@ int main() {
         assert(shared->command == FM_LINUX_COMPLETE && shared->result == -result);
         fm_ipc_store(&shared->command, FM_LINUX_IDLE);
     };
+    shared->operation = FM_LINUX_STOP_RENDERING;
+    fm_ipc_store(&shared->cancel, 1);
+    fm_ipc_store(&shared->command, FM_LINUX_PENDING);
+    logic(&gui);
+    consume(ECANCELED);
+    assert(!global.suppressed);
+    const auto control = shared->renderingControl;
+    shared->renderingControl.suppressed = sizeof(Global);
+    request(FM_LINUX_STOP_RENDERING);
+    consume(FM_RENDERING_CONTROL_INVALID);
+    assert(!global.suppressed);
+    shared->renderingControl = control;
+    for (unsigned attempt = 0; attempt < 2; ++attempt) {
+        settings.item.halt = 0;
+        request(FM_LINUX_STOP_RENDERING);
+        consume(0);
+        assert(global.suppressed && !global.minimized && !settings.item.halt);
+        assert(apiTable.swap == originalSwap && reads == 0 && !shared->actionOwned);
+        request(FM_LINUX_SCREENSHOT);
+        consume(FM_RENDERING_SUSPENDED);
+        request(FM_LINUX_FRAME);
+        consume(0);
+    }
+    global.suppressed = 0;
+    request(FM_LINUX_FRAME);
+    consume(0);
+    assert(!global.suppressed);
+    settings.item.halt = 1;
+    settings.item.length--;
+    request(FM_LINUX_SCREENSHOT);
+    consume(EINVAL);
+    assert(apiTable.swap == originalSwap && reads == 0);
+    settings.item.length++;
+    for (unsigned attempt = 0; attempt < 2; ++attempt) {
+        // The state changes after queueing but before GUI admission. No frame hook is acquired.
+        shared->operation = FM_LINUX_SCREENSHOT;
+        fm_ipc_store(&shared->command, FM_LINUX_PENDING);
+        global.minimized = 1;
+        logic(&gui);
+        consume(FM_RENDERING_SUSPENDED);
+        assert(apiTable.swap == originalSwap && reads == 0 && shared->frameBytes == 0);
+    }
+    global.minimized = 0;
     for (unsigned capture = 1; capture <= 2; ++capture) {
+        // A minimized window whose other suppression flag is clear may still render.
+        global.minimized = capture == 2;
+        settings.item.halt = 0;
         request(FM_LINUX_SCREENSHOT);
         assert(shared->command == FM_LINUX_RUNNING && apiTable.swap != originalSwap);
         swap(&apiTable, &native);
@@ -116,6 +196,8 @@ int main() {
         for (unsigned i = 0; i < 12; ++i)
             assert(shared->framePixels[i] == (i < 6 ? 2 : 1));
     }
+    global.minimized = 0;
+    settings.item.halt = 1;
     request(FM_LINUX_SCREENSHOT);
     fm_ipc_store(&shared->cancel, 1);
     logic(&gui); // No presentation is necessary to acknowledge cancellation.
@@ -129,9 +211,12 @@ int main() {
     consume(ESTALE);
     assert(reads == 2 && shared->frameBytes == 0);
     api[4] = reinterpret_cast<uintptr_t>(&pixels);
+    request(FM_LINUX_STOP_RENDERING);
+    consume(0);
     request(FM_LINUX_DETACH);
     consume(0);
     assert(!shared->attached && apiTable.swap == originalSwap && *table == *originalTable);
+    assert(global.suppressed);
     std::memcpy(&gui, &originalTable, sizeof(originalTable));
     assert(munmap(page, pageSize) == 0);
     return 0;

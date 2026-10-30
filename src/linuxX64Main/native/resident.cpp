@@ -504,11 +504,28 @@ extern "C" void fm_after_gui_logic(void *receiver, uintptr_t caller) noexcept {
         result = ECANCELED;
     } else if (shared->operation == FM_LINUX_FRAME) {
         result = shared->gameStateError;
+    } else if (shared->operation == FM_LINUX_STOP_RENDERING) {
+        result = shared->gameStateError ? shared->gameStateError : shared->gameState.state == 3 ? EBUSY : 0;
+        if (!result)
+            result = stopRendering(shared->renderingControl,
+                [](uint64_t address, auto &value) { return fm::read(address, value); },
+                [](uint64_t address, uint8_t value) {
+                    iovec local{&value, sizeof(value)};
+                    iovec remote{reinterpret_cast<void *>(address), sizeof(value)};
+                    return process_vm_writev(getpid(), &local, 1, &remote, 1, 0) == sizeof(value);
+                });
     } else if (shared->operation == FM_LINUX_SCREENSHOT) {
         shared->frameSize = {};
         shared->frameBytes = 0;
         shared->frameGlError = 0;
         result = validFrameContext(shared->frameContext) ? 0 : EINVAL;
+        if (!result && !validRenderingSetting(shared->rendering, shared->renderingSetting,
+                [](uint64_t address, auto &value) { return fm::read(address, value); }))
+            result = EINVAL;
+        if (!result)
+            result = renderingAdmission(shared->rendering, [](uint64_t address, auto &value) {
+                return fm::read(address, value);
+            });
         FrameReadbackApi api{};
         if (!result)
             result = readFrameApi(shared->frameApi, api);

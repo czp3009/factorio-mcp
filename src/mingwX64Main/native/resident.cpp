@@ -420,8 +420,29 @@ static void service(void *root, void *gui) {
         }
         if (shared->cancel)
             throw std::runtime_error("Tool was cancelled during UI traversal");
-        if (shared->operation == 6)
+        if (shared->operation == 12) {
+            require(!loading, "Rendering control is unavailable during loading");
+            const int stopped = stopRendering(symbols.renderingControl, [](uint64_t address, auto &value) {
+                SIZE_T copied = 0;
+                return ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void *>(address),
+                                         &value, sizeof(value), &copied) && copied == sizeof(value);
+            }, [](uint64_t address, uint8_t value) {
+                SIZE_T copied = 0;
+                return WriteProcessMemory(GetCurrentProcess(), reinterpret_cast<void *>(address),
+                                          &value, sizeof(value), &copied) && copied == sizeof(value);
+            });
+            require(stopped == FM_RENDERING_STOPPED, "Cannot safely stop native rendering");
+        }
+        if (shared->operation == 6) {
+            const int admission = renderingAdmission(symbols.rendering, [](uint64_t address, auto &value) {
+                SIZE_T copied = 0;
+                return ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void *>(address),
+                                         &value, sizeof(value), &copied) && copied == sizeof(value);
+            });
+            require(admission != FM_RENDERING_SUSPENDED, "Screenshot unavailable while rendering is suspended.");
+            require(admission == FM_RENDERING_AVAILABLE, "Cannot read the native rendering condition");
             return;
+        }
     } catch (const std::exception &error) {
         result.error = 1;
         strncpy_s(result.message, error.what(), _TRUNCATE);

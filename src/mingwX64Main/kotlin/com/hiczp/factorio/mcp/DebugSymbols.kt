@@ -88,6 +88,7 @@ private val symbolPrefixes =
         "?noData@InputAction@@",
         "?isCorrectDataTypeForAction@InputAction@@",
         "??_R0?AV?\$basic_string@DU?\$char_traits@D@std@@V?\$allocator@D@2@@std@@@8",
+        "?headlessMode@GlobalContext@@2_NA",
     )
 
 internal class ResolvedSymbols(
@@ -114,6 +115,8 @@ internal class ResolvedSymbols(
     val conditions: Result<QualityConditionLayouts>,
     val switches: Result<SwitchLayouts>,
     val chat: Result<ChatLayouts>,
+    val rendering: Result<RenderingLayouts>,
+    val renderingControl: Result<RenderingControlLayouts>,
 ) {
     fun write(target: Symbols) {
         memset(target.ptr, 0, sizeOf<Symbols>().toULong())
@@ -138,6 +141,8 @@ internal class ResolvedSymbols(
         conditions.getOrNull()?.write(target.conditions)
         switches.getOrNull()?.write(target.switches)
         chat.getOrNull()?.write(target.chat)
+        rendering.getOrNull()?.write(target.rendering)
+        renderingControl.getOrNull()?.write(target.renderingControl)
         if (world.isSuccess && controls.isSuccess && pauseOffsets != null)
             timedInput.getOrNull()?.write(target.timedInput)
         target.processEventsEnd = processEventsEnd
@@ -304,6 +309,12 @@ internal fun resolveSymbols(process: HANDLE, module: ProcessModule): ResolvedSym
             }
             FrontendInputLayouts(types) to end(FmSymbol.ProcessEvents.value.toInt())
         }
+        val renderingControl = runCatching {
+            val index = FmSymbol.HeadlessMode.value.toInt()
+            require(collector.symbols.count(index) == 1) { "Missing or ambiguous rendering state symbol" }
+            types.validateStaticBoolean("GlobalContext", "headlessMode")
+            RenderingControlLayouts(types, addresses[FmSymbol.Global.value.toInt()], addresses[index])
+        }
         ResolvedSymbols(
             addresses,
             end(FmSymbol.Prepare.value.toInt()),
@@ -404,13 +415,15 @@ internal fun resolveSymbols(process: HANDLE, module: ProcessModule): ResolvedSym
             },
             runCatching { SwitchLayouts(types, collector.switchTypes) },
             runCatching {
-                for (index in FmSymbol.LocalisedRaw.value.toInt() until symbolPrefixes.size) {
+                for (index in FmSymbol.LocalisedRaw.value.toInt() until FmSymbol.HeadlessMode.value.toInt()) {
                     check(collector.symbols.count(index) == 1) {
                         "Chat unavailable: missing or ambiguous ${symbolPrefixes[index]}"
                     }
                 }
                 ChatLayouts(types)
             },
+            runCatching { RenderingLayouts(types, renderingControl.getOrThrow()) },
+            renderingControl,
         )
     } finally {
         SymCleanup(process)

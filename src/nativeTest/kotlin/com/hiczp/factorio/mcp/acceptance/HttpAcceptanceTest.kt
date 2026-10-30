@@ -69,6 +69,7 @@ class HttpAcceptanceTest {
                         "ui_read",
                         "ui_action",
                         "screenshot",
+                        "stop_rendering",
                         "input_bindings",
                         "world_query",
                         "world_overview",
@@ -84,6 +85,7 @@ class HttpAcceptanceTest {
                 )
                 assertTrue(client.tool("ui_read").getValue("isError").jsonPrimitive.boolean)
                 assertTrue(client.tool("screenshot").getValue("isError").jsonPrimitive.boolean)
+                assertTrue(client.tool("stop_rendering").getValue("isError").jsonPrimitive.boolean)
                 assertTrue(client.tool("input_bindings").getValue("isError").jsonPrimitive.boolean)
                 assertTrue(client.tool("world_overview").getValue("isError").jsonPrimitive.boolean)
                 assertTrue(client.tool("chat_read").getValue("isError").jsonPrimitive.boolean)

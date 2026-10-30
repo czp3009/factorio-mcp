@@ -1227,6 +1227,22 @@ The result is `{"dispatch":"completed"}`. It does not guarantee server acceptanc
 record; game/mod rules still apply. Do not retry after an uncertain result. Both tools require a loaded world/local
 player.
 
+## Stop rendering
+
+`stop_rendering` takes no arguments (`{}`) and returns `{"dispatch":"completed"}` after local execution.
+It requests drawing suppression once, without minimizing, hiding or focusing the game window. It requires an
+attached, initialized graphical client and works in menus, paused worlds and gameplay. It does not pause simulation
+or change persistent settings. Structured observations and actions remain available.
+
+This is not a persistent mode: later user, window or system events may resume drawing, even before the result is
+received. There is no monitoring, automatic reapplication or restoration on detach. Repeated explicit calls are
+allowed, including when drawing is already suppressed. Do not replay a call whose result is uncertain.
+
+The tool shares the command queue with screenshots. An earlier screenshot completes, fails or is cancelled before
+the stop executes. A later screenshot checks the current native state and fails promptly at the frontend safe point
+while rendering is suppressed; if normal events have resumed drawing, it captures normally. `stop_rendering` does
+not cancel a pending screenshot; use `screenshot` with `action:"cancel"` if needed.
+
 ## Screenshots
 
 `screenshot` accepts `action: "capture"` (default) or `action: "cancel"`. Capture returns PNG image content plus its
@@ -1236,7 +1252,11 @@ It starts no new capture and returns `cancelled:false` when no capture is pendin
 also cancels capture. After cancellation finishes, a new capture can be submitted.
 It captures Factorio's DirectX output on Windows or OpenGL output in the Linux adapter, including UI and world,
 without activating the window. It excludes desktop and Steam overlays. The source field is `factorio_rendered_frame` on
-both platforms. Capture can wait for rendering to resume when minimized or suspended.
+both platforms. If the game's native condition suppresses rendering at frontend admission, capture returns
+`Screenshot unavailable while rendering is suspended.` and releases its queue reservation. Minimization alone does
+not reject capture: drawing may continue when `halt-rendering-when-minimized` is disabled. Paused worlds can be
+captured while rendering continues. A stalled frontend or graphics backend can still leave capture pending; this
+check does not detect every rendering stall.
 Capture supports at most 8192 pixels per side, 16,777,216 pixels in total and a 16 MiB encoded PNG; exceeding these
 bounds returns an error.
 
@@ -1253,6 +1273,8 @@ instead preserves partial progress. These are distinct from MCP transport/protoc
 
 Tools have no execution deadline. Use explicit MCP cancellation to stop a pending call. HTTP socket closure alone is
 not guaranteed to cancel it. Single-phase requests and input admission share one attachment-wide queue; a waiting
-screenshot delays later calls until capture or cancellation. `screenshot` with `action:"cancel"` bypasses that queue
+screenshot delays later calls until capture, rejection or cancellation. Rendering suspension is checked when the
+frontend handles the request; a frontend that cannot reach that point can still delay it.
+`screenshot` with `action:"cancel"` bypasses that queue
 to stop the pending capture. An admitted input sequence completes independently while
 other calls proceed. `detach` cancels admitted input as well as active and queued requests.

@@ -3,7 +3,6 @@
 package com.hiczp.factorio.mcp.acceptance
 
 import com.hiczp.factorio.mcp.McpHttpClient
-import com.hiczp.factorio.mcp.PngEncoder
 import com.hiczp.factorio.mcp.toolValue
 import kotlinx.cinterop.toKString
 import kotlinx.coroutines.NonCancellable
@@ -20,6 +19,53 @@ import kotlin.test.*
 
 /** Explicit SDK endpoint/PID capture; the caller owns game and endpoint lifetimes. */
 class ScreenshotAcceptanceTest {
+    @Test
+    fun suspendedRenderingRejectsRepeatedCapturesAndAllowsObservations() = runBlocking {
+        fun environment(name: String) = checkNotNull(getenv(name)) { "Select $name explicitly" }.toKString()
+        val pid = environment("FACTORIO_MCP_TEST_PID").toInt()
+        val client = McpHttpClient(environment("FACTORIO_MCP_ACCEPTANCE_URL"))
+        try {
+            withTimeout(600_000) {
+                client.initialize()
+                client.tool("attach", buildJsonObject { put("pid", pid) }).toolValue()
+                // The operator keeps native rendering suspended throughout this test.
+                repeat(2) {
+                    val result = withTimeout(30_000) { client.tool("screenshot") }
+                    assertTrue(result.getValue("isError").jsonPrimitive.boolean)
+                    assertEquals("Screenshot unavailable while rendering is suspended.",
+                        result.getValue("structuredContent").jsonObject.getValue("error").jsonPrimitive.content)
+                    client.tool("ui_read", buildJsonObject { put("max_nodes", 32) }).toolValue()
+                }
+                if (getenv("FACTORIO_MCP_TEST_SCREENSHOT_WORLD")?.toKString() == "1") {
+                    client.tool("world_query", buildJsonObject {
+                        putJsonObject("selection") {
+                            put("kind", "tiles")
+                            putJsonObject("area") {
+                                putJsonObject("left_top") {
+                                    put("x", -1)
+                                    put("y", -1)
+                                }
+                                putJsonObject("right_bottom") {
+                                    put("x", 1)
+                                    put("y", 1)
+                                }
+                            }
+                        }
+                        put("limit", 4)
+                    }).toolValue()
+                }
+            }
+        } finally {
+            withContext(NonCancellable) {
+                try {
+                    client.tool("detach").toolValue()
+                } finally {
+                    client.close()
+                }
+            }
+        }
+    }
+
     @Test
     fun capturesConsecutivePngFramesAndDetaches() = runBlocking {
         fun environment(name: String) = checkNotNull(getenv(name)) { "Select $name explicitly" }.toKString()
@@ -46,7 +92,7 @@ class ScreenshotAcceptanceTest {
                     }.jsonObject
                     assertEquals("image/png", image.getValue("mimeType").jsonPrimitive.content)
                     val bytes = Base64.decode(image.getValue("data").jsonPrimitive.content)
-                    assertTrue(bytes.size in 33..PngEncoder.MAX_BYTES)
+                    assertTrue(bytes.size in 33..16 * 1024 * 1024)
                     assertContentEquals(byteArrayOf(-119, 80, 78, 71, 13, 10, 26, 10), bytes.copyOf(8))
                     fun integer(offset: Int) = (offset until offset + 4).fold(0) { value, i ->
                         (value shl 8) or (bytes[i].toInt() and 255)

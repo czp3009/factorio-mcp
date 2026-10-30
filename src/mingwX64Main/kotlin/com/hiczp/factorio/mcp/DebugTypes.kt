@@ -176,6 +176,15 @@ internal class DebugTypes(private val process: HANDLE, private val base: ULong) 
         }
     }
 
+    fun validateStaticBoolean(owner: String, member: String) {
+        val field = children(type(owner)).single { name(it) == member }
+        check(uint(field, IMAGEHLP_SYMBOL_TYPE_INFO.TI_GET_SYMTAG) == 7u &&
+            uint(field, IMAGEHLP_SYMBOL_TYPE_INFO.TI_GET_DATAKIND) == 8u)
+        val value = uint(field, IMAGEHLP_SYMBOL_TYPE_INFO.TI_GET_TYPEID)
+        check(uint(value, IMAGEHLP_SYMBOL_TYPE_INFO.TI_GET_SYMTAG) == 16u &&
+            uint(value, IMAGEHLP_SYMBOL_TYPE_INFO.TI_GET_BASETYPE) == 10u && length(value) == 1uL)
+    }
+
     fun directBaseOffset(owner: String, expected: String): UInt {
         val ownerType = type(owner)
         val base =

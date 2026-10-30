@@ -37,6 +37,7 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
     private var chatMetadata: ChatMetadata? = null
     private var chatReadMetadata: ChatReadMetadata? = null
     private var frameMetadata: FrameContextMetadata? = null
+    private var renderingControlMetadata: RenderingControlMetadata? = null
     private var frameBinding: FrameHookBinding? = null
     private var runtimeApi: RuntimeApi? = null
     private var loadBias = 0L
@@ -119,6 +120,7 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
         chatMetadata = null
         chatReadMetadata = null
         frameMetadata = null
+        renderingControlMetadata = null
         frameBinding = null
         loadBias = site.loadBias
         val gameState =
@@ -181,6 +183,7 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
         if (operation == 2) return observeState()
         if (operation == 7) return inputBindings()
         if (operation == 6) return screenshot()
+        if (operation == 12) return stopRendering()
         if (operation == 10) return readChat()
         if (operation == 5)
             return when (checkNotNull(action).kind) {
@@ -277,12 +280,26 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
                     keyboardStateMetadata = it.state
                 }
 
+    private fun renderingControl(): RenderingControlMetadata =
+        renderingControlMetadata ?: process.withExecutable { image ->
+            RenderingControlMetadata.resolve(image).also { it.verifyLoaded(image, process, loadBias) }
+        }.also { renderingControlMetadata = it }
+
+    private suspend fun stopRendering(): GameSnapshot {
+        val metadata = renderingControl()
+        val result = checkNotNull(channel).execute(FM_LINUX_STOP_RENDERING,
+            { shared -> metadata.write(shared.renderingControl, loadBias) }, { _, result -> result })
+        check(result.code == 0) { "Cannot safely stop native rendering: ${result.code}" }
+        return GameSnapshot(result.state, true, result.frame.toLong(), paused = result.paused)
+    }
+
     private suspend fun screenshot(): GameSnapshot {
+        val control = renderingControl()
         val metadata =
             frameMetadata
                 ?: process
                     .withExecutable { image ->
-                        FrameContextMetadata.resolve(image).also {
+                        FrameContextMetadata.resolve(image, control).also {
                             it.verifyLoaded(image, process, loadBias)
                         }
                     }
@@ -304,10 +321,14 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
                 FM_LINUX_SCREENSHOT,
                 { shared ->
                     metadata.writeTo(shared.frameContext, loadBias)
+                    metadata.rendering.write(shared.rendering, shared.renderingSetting, metadata.size.global, loadBias)
                     site.writeTo(shared.frameSite)
                     FrameApiBinding.writeTo(api, shared.frameApi)
                 },
                 { shared, result ->
+                    check(result.code != -FM_LINUX_SCREENSHOT_SUSPENDED.toInt()) {
+                        "Screenshot unavailable while rendering is suspended."
+                    }
                     check(result.code == 0) {
                         "Native screenshot failed: ${result.code} (OpenGL ${shared.frameGlError})"
                     }

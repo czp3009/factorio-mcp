@@ -19,6 +19,9 @@
 #include "mouse_input_event.h"
 #include "input_dispatch.h"
 #include "game_state.h"
+#include "../../nativeMain/native/rendering_state.h"
+#include "../../nativeMain/native/rendering_control.h"
+#include "rendering_setting.h"
 
 enum FmLinuxCommand {
     FM_LINUX_IDLE = 0,
@@ -45,8 +48,11 @@ enum FmLinuxOperation {
     FM_LINUX_INPUT = 15,
     FM_LINUX_INPUT_CANCEL = 16,
     FM_LINUX_INPUT_PREPARE = 17,
-    FM_LINUX_INPUT_DISCARD = 18
+    FM_LINUX_INPUT_DISCARD = 18,
+    FM_LINUX_STOP_RENDERING = 19
 };
+
+enum { FM_LINUX_SCREENSHOT_SUSPENDED = FM_RENDERING_SUSPENDED };
 
 // Raw same-callback scalar observations only. Borrowed game pointers never cross the native wire.
 typedef struct FmLinuxInputContextSnapshot {
@@ -130,6 +136,9 @@ typedef struct FmLinuxShared {
     FmLinuxChatReadConfig chatReadConfig;
     FmLinuxChatSnapshot chatSnapshot;
     FmLinuxFrameContextConfig frameContext;
+    FmRenderingState rendering;
+    FmRenderingControl renderingControl;
+    FmLinuxRenderingSetting renderingSetting;
     FmLinuxFrameApiConfig frameApi;
     FmLinuxFrameHookSite frameSite;
     FmLinuxFrameSize frameSize;

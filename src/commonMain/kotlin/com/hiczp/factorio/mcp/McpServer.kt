@@ -243,9 +243,13 @@ internal fun createServer(game: GameSession): Server {
     ) { args ->
         game.input(parseInputSequence(args))
     }
+    tool(
+        "stop_rendering",
+        "Stop drawing the game window once, without minimizing it. Simulation and structured tools remain available, including menus and paused worlds. Later user or window/system events may resume drawing. Returns dispatch:completed after local execution; no persistent state or automatic restoration on detach. Screenshots fail while native rendering is suspended. Requires an attached graphical client.",
+    ) { game.stopRendering() }
     register(
         "screenshot",
-        "Capture the next rendered game+UI frame as PNG, or cancel the active capture and wait for cleanup. Only one capture may be pending; another capture fails while busy. Prefer structured reads; use images for missing visual information, verification or requested images. Requires active rendering (DirectX on Windows, OpenGL on Linux); suspended rendering may leave capture pending and block queued tools. Excludes desktop and OS/Steam overlays. Cancellation also works through MCP request cancellation.",
+        "Capture the next rendered game+UI frame as PNG, or cancel the active capture and wait for cleanup. Only one capture may be pending; another capture fails while busy. Prefer structured reads; use images for missing visual information, verification or requested images. Requires active rendering (OpenGL on Linux, DirectX on Windows); game-suspended rendering returns an error at frontend admission. A stalled frontend or graphics backend can still delay capture. Excludes desktop and OS/Steam overlays. Cancellation also works through MCP request cancellation.",
         buildJsonObject {
             putJsonObject("action") {
                 put("type", "string")

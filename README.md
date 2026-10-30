@@ -146,6 +146,7 @@ See [development instructions](https://github.com/czp3009/factorio-mcp/blob/mast
 | `ui_read`        | Read UI structure, text, flags and supported control values.                     |
 | `ui_action`      | Click a widget, replace text or press a key.                                     |
 | `screenshot`     | Get a PNG of the rendered game and UI.                                           |
+| `stop_rendering` | Stop drawing once without minimizing; later window/system events may resume it. |
 | `input_bindings` | Map native/mod control IDs to current keyboard/mouse bindings.                   |
 | `input`          | Execute concurrent keyboard/mouse timelines with viewport or world motion.         |
 | `world_query`    | Inspect world objects and related properties, players, inventories and catalogs. |
@@ -173,8 +174,8 @@ See [tools.md](tools.md) for arguments, examples, output semantics and cancellat
 - `input` requires a running world. Use `ui_action` for menus and paused UI. Direct widget dragging/scrolling and
   controller input are unsupported; offscreen options can be selected directly, and running-world mouse input provides
   a dragging fallback. Wheel input over UI can be unreliable.
-- Screenshots require DirectX on Windows or OpenGL on Linux and exclude desktop/Steam overlays. Minimized or suspended
-  rendering can leave a screenshot pending and delay other tools. Only one capture runs at a time;
+- Screenshots require OpenGL on Linux or DirectX on Windows and exclude desktop/Steam overlays. When the game suspends
+  rendering, capture returns an error once the frontend handles the request. Only one capture runs at a time;
   use `screenshot` with `action:"cancel"` to stop it. Frequent capture can reduce game performance.
 - Tools have no execution deadline. Explicit MCP cancellation is supported; automatic cancellation on HTTP socket
   closure is not guaranteed.

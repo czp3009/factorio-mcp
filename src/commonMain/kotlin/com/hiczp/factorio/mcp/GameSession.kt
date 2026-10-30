@@ -205,6 +205,12 @@ internal class GameSession(private val open: (Int) -> GameConnection = ::GamePro
         buildJsonObject { put("dispatch", "completed") }
     }
 
+    suspend fun stopRendering(): JsonObject = observe {
+        val target = attachment ?: error("Call attach before stop_rendering")
+        useConnection(target) { it.execute(12) }
+        buildJsonObject { put("dispatch", "completed") }
+    }
+
     suspend fun screenshot(): GameSnapshot = supervisorScope {
         val task = async(start = CoroutineStart.LAZY) {
             observe {

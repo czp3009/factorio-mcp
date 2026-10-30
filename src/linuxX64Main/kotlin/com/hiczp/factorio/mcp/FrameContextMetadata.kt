@@ -9,10 +9,14 @@ internal data class FrameContextMetadata(
     val size: GraphicsFrameSize,
     val swap: GraphicsSwapCall,
     val apiSlots: Map<String, Long>,
+    val rendering: RenderingMetadata,
+    val renderingControl: RenderingControlMetadata,
     val evidence: ElfEvidence,
 ) {
-    fun verifyLoaded(image: ElfImage, process: ProcessHandle, bias: Long) =
+    fun verifyLoaded(image: ElfImage, process: ProcessHandle, bias: Long) {
+        renderingControl.verifyLoaded(image, process, bias)
         evidence.verify(image, bias, process::readMemory)
+    }
 
     fun writeTo(output: FmLinuxFrameContextConfig, bias: Long) {
         require(bias >= 0 && bias % 8 == 0L)
@@ -40,21 +44,23 @@ internal data class FrameContextMetadata(
     }
 
     companion object {
-        fun resolve(image: ElfImage): FrameContextMetadata {
+        fun resolve(image: ElfImage, control: RenderingControlMetadata = RenderingControlMetadata.resolve(image)): FrameContextMetadata {
             val pointers = mutableMapOf<Long, Long>()
             val scalars = mutableMapOf<Long, Long>()
             val (resolved, readonly) =
                 image.withReadonlyEvidence {
                     image.withFunctionEvidence {
-                        val size = GraphicsFrameSize.resolve(image)
+                        val size = GraphicsFrameSize.resolve(image, control.window)
                         val swap = GraphicsSwapCall.resolve(image, size)
+                        val rendering = RenderingMetadata.resolve(image, control)
                         val lookup =
                             SdlDynamicApi.resolve(image, "SDL_GL_GetProcAddress", listOf(7))
                         for (api in listOf(size.pixels, swap.api, lookup)) pointers[api.slot] =
                             api.implementation
                         val apiSlots = GlLoaderBinding.resolve(image, FrameApiBinding.names, lookup)
                         val words = image.pointers
-                        for (type in listOf("23GraphicsInterfaceOpenGL", "9SDLWindow")) {
+                        for (type in listOf("23GraphicsInterfaceOpenGL", "9SDLWindow", "16GraphicsSettings",
+                            "16SimpleConfigItemIbE", "17StorageConfigItemIbE", "14ConfigItemBase")) {
                             val identity = ItaniumType.resolve(image, type)
                             scalars[identity.addressPoint - 16] = 0
                             pointers[identity.addressPoint - 8] = identity.typeInfo
@@ -71,6 +77,7 @@ internal data class FrameContextMetadata(
                                 ),
                                 window.method(image, "_ZN9SDLWindow9getWindowEv"),
                                 window.method(image, "_ZNK9SDLWindow4swapEv"),
+                                window.method(image, "_ZNK9SDLWindow13flushIfNeededEv"),
                             )
                         // The poll slot only establishes the file-derived current-window
                         // association. Capture
@@ -80,13 +87,15 @@ internal data class FrameContextMetadata(
                         // entries checked.
                         for (method in methods) pointers[method.entryAddress] =
                             method.function.address
-                        Resolved(size, swap, apiSlots)
+                        Resolved(size, swap, apiSlots, rendering)
                     }
                 }
             return FrameContextMetadata(
                 resolved.first.size,
                 resolved.first.swap,
                 resolved.first.apiSlots,
+                resolved.first.rendering,
+                control,
                 ElfEvidence(resolved.second, readonly, pointers, scalars),
             )
         }
@@ -95,6 +104,7 @@ internal data class FrameContextMetadata(
             val size: GraphicsFrameSize,
             val swap: GraphicsSwapCall,
             val apiSlots: Map<String, Long>,
+            val rendering: RenderingMetadata,
         )
     }
 }

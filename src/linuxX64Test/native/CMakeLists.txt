@@ -7,6 +7,8 @@ add_subdirectory("../../linuxX64Main/native" resident)
 
 # Fixtures run in the standard Release build too. Never compile away checks or calls inside assert().
 add_compile_options(-UNDEBUG)
+add_executable(rendering_state_fixture ../../nativeTest/native/rendering_state_fixture.cpp)
+add_test(NAME rendering_state_fixture COMMAND rendering_state_fixture)
 
 foreach(padding IN ITEMS 1 23)
     add_executable(game_state_fixture_${padding} game_state_fixture.cpp ../../linuxX64Main/native/game_state.cpp)

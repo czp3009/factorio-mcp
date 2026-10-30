@@ -383,6 +383,21 @@ verify later CRC progress without desynchronization after the queries. Ordinary 
 
 ### Manual lifecycle and mixed flows
 
+`StopRenderingAcceptanceTest.stopsOnceAndKeepsTheFrontendAvailableAcrossDetach` uses the explicit HTTP endpoint
+and PID. Keep the graphical window unminimized and observe native rendering state and drawing activity separately;
+the test checks dispatch, repeated calls, screenshot rejection, continued reads and detach/reattach. Run it in
+menus, paused worlds and a running disposable world, including with halt-when-minimized disabled. Use a normal
+test-window exposed/restored event for subsequent PNG checks. Compare resource samples separately from tool
+completion, and restore any test configuration afterward.
+
+`ScreenshotAcceptanceTest` is shared by both platforms. Run
+`capturesConsecutivePngFramesAndDetaches` with `FACTORIO_MCP_TEST_SCREENSHOT_PREFIX` selecting the PNG output path.
+Run `suspendedRenderingRejectsRepeatedCapturesAndAllowsObservations` while the operator keeps rendering suspended;
+set `FACTORIO_MCP_TEST_SCREENSHOT_WORLD=1` to include a tile query in a loaded world. Both require the explicit HTTP
+endpoint and PID above. Repeat capture checks in menus, rendered paused worlds, after restoration, and with minimized
+rendering permitted by the graphics setting. Window-state control and configuration restoration belong to the test
+operator. A minimized OS window does not by itself establish that the game has suspended rendering.
+
 Use initialized HTTP sessions for exploratory menus, pause, world replacement, game exit, MCP restart and mixed reads.
 Prefer structured queries and widget actions. Retain requests/replies and any required game screenshots under `temp/`.
 Do not force focus, simulate OS input or inspect the desktop without testing permission.

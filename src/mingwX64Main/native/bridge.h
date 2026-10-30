@@ -5,6 +5,8 @@
 #include <stdint.h>
 #include <tlhelp32.h>
 #include "../../nativeMain/native/input_timeline_wire.h"
+#include "../../nativeMain/native/rendering_state.h"
+#include "../../nativeMain/native/rendering_control.h"
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -192,6 +194,7 @@ typedef enum FmSymbol {
     ActionNoData,
     ActionDataType,
     StringTypeInfo,
+    HeadlessMode,
     SymbolCount
 } FmSymbol;
 
@@ -333,6 +336,8 @@ typedef struct Symbols {
     TimedInputLayout timedInput;
     ViewportLayout viewport;
     ChatLayout chat;
+    FmRenderingState rendering;
+    FmRenderingControl renderingControl;
 } Symbols;
 
 typedef struct Shared {

@@ -92,6 +92,14 @@ class HttpTransportTest {
                     schema.getValue("properties").jsonObject.keys,
                 )
                 val attached = first.tool("attach", buildJsonObject { put("pid", 12) })
+                val stopSchema = tools.map { it.jsonObject }.single {
+                    it.getValue("name").jsonPrimitive.content == "stop_rendering"
+                }.getValue("inputSchema").jsonObject
+                assertTrue(stopSchema.getValue("properties").jsonObject.isEmpty())
+                assertTrue(stopSchema["required"]?.jsonArray.isNullOrEmpty())
+                assertTrue(first.tool("stop_rendering", buildJsonObject { put("enabled", false) })
+                    .getValue("isError").jsonPrimitive.boolean)
+                assertEquals("completed", first.tool("stop_rendering").toolValue().getValue("dispatch").jsonPrimitive.content)
                 assertEquals(attached.toolValue(), attached.getValue("structuredContent"))
                 val world =
                     first

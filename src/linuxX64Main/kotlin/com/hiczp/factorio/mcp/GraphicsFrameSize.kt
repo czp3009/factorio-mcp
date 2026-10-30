@@ -20,28 +20,7 @@ internal data class GraphicsFrameSize(
     val nativeWindow: Long,
 ) {
     companion object {
-        fun resolve(image: ElfImage): GraphicsFrameSize {
-            val global = image.symbol("global")
-            require(global.type == 1 && global.size == 8L)
-            val globalSize =
-                SysVGlobalAllocation.resolve(
-                        image,
-                        "_ZN9MainTasks6createERK13ParsedOptions",
-                        "_ZN13GlobalContextC2ERKN10Filesystem4PathES3_",
-                        "global",
-                    )
-                    .size
-            // nextEvent's hidden result precedes its Window argument. Reuse the existing verified
-            // native poll dispatch instead of inferring argument positions from the symbol
-            // spelling.
-            val poll = EventPollCall.resolve(image, EventHeader.resolve(image))
-            val pumpBytes = image.functionBytes(poll.pump, 32768).slice(0, poll.pumpReturnOffset)
-            val pump = X64ControlFlow(X64Instructions(pumpBytes).all(2048))
-            val pumpCall = pump.instructions.last()
-            require(pumpCall.operation == Operation.CALL)
-            val globalWindow =
-                GlobalPointerLoad(pump, poll.pump.address, global.address, globalSize)
-                    .at(pumpCall.offset, 6)
+        fun resolve(image: ElfImage, owner: FrontendWindow): GraphicsFrameSize {
             val graphics = ItaniumVtable.resolve(image, "_ZTV23GraphicsInterfaceOpenGL")
             val window = ItaniumVtable.resolve(image, "_ZTV9SDLWindow")
             val graphicsSize = SysVObjectSize.resolve(image, "23GraphicsInterfaceOpenGL")
@@ -117,9 +96,9 @@ internal data class GraphicsFrameSize(
                 )
             require(windowGraphics != nativePointer.offset)
             return GraphicsFrameSize(
-                global.address,
-                globalSize,
-                globalWindow,
+                owner.global,
+                owner.globalSize,
+                owner.member,
                 pixels,
                 graphics.addressPoint,
                 graphicsSize,

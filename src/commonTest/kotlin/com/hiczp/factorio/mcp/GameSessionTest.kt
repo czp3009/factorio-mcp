@@ -67,7 +67,7 @@ class GameSessionTest {
                 if (exitOnFailure) live = false
                 error("Native operation failed")
             }
-            if (operation in listOf(3, 5, 6, 8)) {
+            if (operation in listOf(3, 5, 6, 8, 12)) {
                 if (operation == 3) reads++
                 started.complete(Unit)
                 if (blocked)
@@ -380,6 +380,26 @@ class GameSessionTest {
     }
 
     @Test
+    fun rejectedScreenshotReleasesAdmissionAndObservationQueue() = runBlocking {
+        withTimeout(1000) {
+            val connection = Connection().apply {
+                failOperation = 6
+                exitOnFailure = false
+            }
+            val session = GameSession { connection }
+            session.attach(12)
+            assertFailsWith<IllegalStateException> { session.screenshot() }
+            session.read(10, false)
+            assertEquals(1, connection.reads)
+            connection.failOperation = null
+            session.screenshot()
+            assertEquals(2, connection.calls.count { it == 6 })
+            assertFalse(session.cancelScreenshot().getValue("cancelled").jsonPrimitive.boolean)
+            session.close()
+        }
+    }
+
+    @Test
     fun screenshotRejectsConcurrentCaptureAndCancellationWaitsForCleanup() = runBlocking {
         withTimeout(1000) {
             val connection =
@@ -434,7 +454,7 @@ class GameSessionTest {
 
     @Test
     fun detachAlsoDrainsActionsAndScreenshots() = runBlocking {
-        for (operation in listOf(5, 6, 8)) {
+        for (operation in listOf(5, 6, 8, 12)) {
             val connection = Connection().apply { blocked = true }
             val session = GameSession { connection }
             session.attach(12)
@@ -443,6 +463,7 @@ class GameSessionTest {
                     runCatching {
                         if (operation == 5) session.action(UiAction(emptyList(), 1))
                         else if (operation == 8) session.query(WorldQuery(buildJsonObject {}))
+                        else if (operation == 12) session.stopRendering()
                         else session.screenshot()
                     }
                 }
@@ -457,6 +478,71 @@ class GameSessionTest {
                 assertTrue(connection.cleaned)
                 assertEquals(listOf(1, operation, 4), connection.calls)
             }
+        }
+    }
+
+    @Test
+    fun stopRenderingSharesTheScreenshotQueueWithoutCancellingOrRestoring() = runBlocking {
+        withTimeout(3000) {
+            val entered = CompletableDeferred<Unit>()
+            val frame = CompletableDeferred<Unit>()
+            val calls = mutableListOf<Int>()
+            var suppressed = false
+            val session = GameSession {
+                object : GameConnection {
+                    override suspend fun execute(operation: Int, limit: Int, action: UiAction?): GameSnapshot {
+                        calls += operation
+                        if (operation == 6) {
+                            check(!suppressed) { "Screenshot unavailable while rendering is suspended." }
+                            entered.complete(Unit)
+                            frame.await()
+                        }
+                        if (operation == 12) suppressed = true
+                        return GameSnapshot("main_menu", operation != 4, 1)
+                    }
+                    override suspend fun isAlive() = true
+                    override suspend fun close() = Unit
+                }
+            }
+            assertFailsWith<IllegalStateException> { session.stopRendering() }
+            session.attach(12)
+            val capture = async { session.screenshot() }
+            entered.await()
+            val stop = async(start = CoroutineStart.UNDISPATCHED) { session.stopRendering() }
+            yield()
+            assertFalse(12 in calls)
+            assertFalse(capture.isCompleted)
+            frame.complete(Unit)
+            capture.await()
+            assertEquals("completed", stop.await().getValue("dispatch").jsonPrimitive.content)
+            assertEquals(listOf(1, 6, 12), calls)
+            session.stopRendering()
+            assertFailsWith<IllegalStateException> { session.screenshot() }
+            session.read(10, false)
+            suppressed = false
+            session.screenshot()
+            session.stopRendering()
+            session.detach()
+            assertTrue(suppressed)
+        }
+    }
+
+    @Test
+    fun stopRenderingCancelledWhileQueuedNeverReachesNativeCode() = runBlocking {
+        withTimeout(3000) {
+            val connection = Connection().apply { blocked = true }
+            val session = GameSession { connection }
+            session.attach(12)
+            val capture = async { runCatching { session.screenshot() } }
+            connection.started.await()
+            val stop = async(start = CoroutineStart.UNDISPATCHED) { session.stopRendering() }
+            stop.cancelAndJoin()
+            assertFalse(12 in connection.calls)
+            session.cancelScreenshot()
+            assertIs<CancellationException>(capture.await().exceptionOrNull())
+            connection.blocked = false
+            session.stopRendering()
+            session.close()
         }
     }
 
