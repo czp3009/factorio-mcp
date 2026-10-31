@@ -27,6 +27,7 @@ class HttpTransportTest {
         withTimeout(15000) {
             val started = CompletableDeferred<Unit>()
             var cleaned = false
+            val renderingRequests = mutableListOf<Boolean>()
             val game = GameSession {
                 object : GameConnection {
                     override suspend fun execute(
@@ -46,6 +47,11 @@ class HttpTransportTest {
                     }
 
                     override suspend fun isAlive() = true
+
+                    override suspend fun setRendering(enabled: Boolean): GameSnapshot {
+                        renderingRequests += enabled
+                        return execute(12, 4096, null)
+                    }
 
                     override suspend fun query(query: WorldQuery) =
                         GameSnapshot(
@@ -92,14 +98,22 @@ class HttpTransportTest {
                     schema.getValue("properties").jsonObject.keys,
                 )
                 val attached = first.tool("attach", buildJsonObject { put("pid", 12) })
-                val stopSchema = tools.map { it.jsonObject }.single {
-                    it.getValue("name").jsonPrimitive.content == "stop_rendering"
+                val renderingSchema = tools.map { it.jsonObject }.single {
+                    it.getValue("name").jsonPrimitive.content == "set_rendering"
                 }.getValue("inputSchema").jsonObject
-                assertTrue(stopSchema.getValue("properties").jsonObject.isEmpty())
-                assertTrue(stopSchema["required"]?.jsonArray.isNullOrEmpty())
-                assertTrue(first.tool("stop_rendering", buildJsonObject { put("enabled", false) })
-                    .getValue("isError").jsonPrimitive.boolean)
-                assertEquals("completed", first.tool("stop_rendering").toolValue().getValue("dispatch").jsonPrimitive.content)
+                assertEquals(setOf("enabled"), renderingSchema.getValue("properties").jsonObject.keys)
+                assertEquals(listOf("enabled"), renderingSchema.getValue("required").jsonArray.map { it.jsonPrimitive.content })
+                for (invalid in listOf("{}", "{\"enabled\":null}", "{\"enabled\":1}", "{\"enabled\":\"true\"}",
+                    "{\"enabled\":true,\"extra\":false}")) {
+                    assertTrue(first.tool("set_rendering", Json.parseToJsonElement(invalid).jsonObject)
+                        .getValue("isError").jsonPrimitive.boolean)
+                }
+                assertTrue(renderingRequests.isEmpty())
+                for (enabled in listOf(false, true)) {
+                    assertEquals("completed", first.tool("set_rendering", buildJsonObject { put("enabled", enabled) })
+                        .toolValue().getValue("dispatch").jsonPrimitive.content)
+                }
+                assertEquals(listOf(false, true), renderingRequests)
                 assertEquals(attached.toolValue(), attached.getValue("structuredContent"))
                 val world =
                     first

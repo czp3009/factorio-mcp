@@ -186,7 +186,6 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
         if (operation == 2) return observeState()
         if (operation == 7) return inputBindings()
         if (operation == 6) return screenshot()
-        if (operation == 12) return stopRendering()
         if (operation == 10) return readChat()
         if (operation == 5)
             return when (checkNotNull(action).kind) {
@@ -295,16 +294,19 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
                 }
                 .also { renderingControlMetadata = it }
 
-    private suspend fun stopRendering(): GameSnapshot {
+    suspend fun setRendering(enabled: Boolean): GameSnapshot {
         val metadata = renderingControl()
         val result =
             checkNotNull(channel)
                 .execute(
-                    FM_LINUX_STOP_RENDERING,
-                    { shared -> metadata.write(shared.renderingControl, loadBias) },
+                    FM_LINUX_SET_RENDERING,
+                    { shared ->
+                        metadata.write(shared.renderingControl, loadBias)
+                        shared.renderingControl.enabled = if (enabled) 1u else 0u
+                    },
                     { _, result -> result },
                 )
-        check(result.code == 0) { "Cannot safely stop native rendering: ${result.code}" }
+        check(result.code == 0) { "Cannot safely set native rendering: ${result.code}" }
         return GameSnapshot(result.state, true, result.frame.toLong(), paused = result.paused)
     }
 

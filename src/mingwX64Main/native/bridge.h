@@ -359,7 +359,7 @@ typedef struct Symbols {
 
 typedef struct Shared {
     volatile LONG attached, command, cancel, state;
-    uint32_t operation, limit;
+    uint32_t operation, limit, renderingEnabled;
     FmAction action;
     volatile LONG64 frame;
     FmResult result;

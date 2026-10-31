@@ -415,7 +415,9 @@ static void service(void *root, void *gui) {
             throw std::runtime_error("Tool was cancelled during UI traversal");
         if (shared->operation == 12) {
             require(!loading, "Rendering control is unavailable during loading");
-            const int stopped = stopRendering(symbols.renderingControl, [](uint64_t address, auto &value) {
+            auto control = symbols.renderingControl;
+            control.enabled = shared->renderingEnabled;
+            const int applied = setRendering(control, [](uint64_t address, auto &value) {
                 SIZE_T copied = 0;
                 return ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void *>(address),
                                          &value, sizeof(value), &copied) && copied == sizeof(value);
@@ -424,7 +426,7 @@ static void service(void *root, void *gui) {
                 return WriteProcessMemory(GetCurrentProcess(), reinterpret_cast<void *>(address),
                                           &value, sizeof(value), &copied) && copied == sizeof(value);
             });
-            require(stopped == FM_RENDERING_STOPPED, "Cannot safely stop native rendering");
+            require(applied == FM_RENDERING_APPLIED, "Cannot safely set native rendering");
         }
         if (shared->operation == 6) {
             const int admission = renderingAdmission(symbols.rendering, [](uint64_t address, auto &value) {

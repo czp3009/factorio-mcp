@@ -146,7 +146,7 @@ See [development instructions](https://github.com/czp3009/factorio-mcp/blob/mast
 | `ui_read`        | Read UI structure, text, flags and supported control values.                     |
 | `ui_action`      | Click a widget, replace text or press a key.                                     |
 | `screenshot`     | Get a PNG of the rendered game and UI.                                           |
-| `stop_rendering` | Stop drawing once without minimizing; later window/system events may resume it. |
+| `set_rendering` | Suppress or restore drawing once; window/system events may change it again. |
 | `input_bindings` | Map native/mod control IDs to current keyboard/mouse bindings.                   |
 | `input`          | Execute concurrent keyboard/mouse timelines with viewport or world motion.         |
 | `world_query`    | Inspect world objects and related properties, players, inventories and catalogs. |

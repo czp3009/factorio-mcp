@@ -140,7 +140,7 @@ int main() {
         assert(shared->command == FM_LINUX_COMPLETE && shared->result == -result);
         fm_ipc_store(&shared->command, FM_LINUX_IDLE);
     };
-    shared->operation = FM_LINUX_STOP_RENDERING;
+    shared->operation = FM_LINUX_SET_RENDERING;
     fm_ipc_store(&shared->cancel, 1);
     fm_ipc_store(&shared->command, FM_LINUX_PENDING);
     logic(&gui);
@@ -148,13 +148,13 @@ int main() {
     assert(!global.suppressed);
     const auto control = shared->renderingControl;
     shared->renderingControl.suppressed = sizeof(Global);
-    request(FM_LINUX_STOP_RENDERING);
+    request(FM_LINUX_SET_RENDERING);
     consume(FM_RENDERING_CONTROL_INVALID);
     assert(!global.suppressed);
     shared->renderingControl = control;
     for (unsigned attempt = 0; attempt < 2; ++attempt) {
         settings.item.halt = 0;
-        request(FM_LINUX_STOP_RENDERING);
+        request(FM_LINUX_SET_RENDERING);
         consume(0);
         assert(global.suppressed && !global.minimized && !settings.item.halt);
         assert(apiTable.swap == originalSwap && reads == 0 && !shared->actionOwned);
@@ -163,7 +163,13 @@ int main() {
         request(FM_LINUX_FRAME);
         consume(0);
     }
-    global.suppressed = 0;
+    shared->renderingControl.enabled = 1;
+    for (unsigned attempt = 0; attempt < 2; ++attempt) {
+        request(FM_LINUX_SET_RENDERING);
+        consume(0);
+        assert(!global.suppressed && !global.minimized && !settings.item.halt);
+        assert(apiTable.swap == originalSwap && reads == 0 && !shared->actionOwned);
+    }
     request(FM_LINUX_FRAME);
     consume(0);
     assert(!global.suppressed);
@@ -211,7 +217,8 @@ int main() {
     consume(ESTALE);
     assert(reads == 2 && shared->frameBytes == 0);
     api[4] = reinterpret_cast<uintptr_t>(&pixels);
-    request(FM_LINUX_STOP_RENDERING);
+    shared->renderingControl.enabled = 0;
+    request(FM_LINUX_SET_RENDERING);
     consume(0);
     request(FM_LINUX_DETACH);
     consume(0);

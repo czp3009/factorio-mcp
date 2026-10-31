@@ -1,5 +1,5 @@
 package com.hiczp.factorio.mcp.buildlogic
 
 object ProjectInfo {
-    const val VERSION = "0.0.7"
+    const val VERSION = "0.0.8"
 }

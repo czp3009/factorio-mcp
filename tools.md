@@ -1243,20 +1243,23 @@ The result is `{"dispatch":"completed"}`. It does not guarantee server acceptanc
 record; game/mod rules still apply. Do not retry after an uncertain result. Both tools require a loaded world/local
 player.
 
-## Stop rendering
+## Rendering control
 
-`stop_rendering` takes no arguments (`{}`) and returns `{"dispatch":"completed"}` after local execution.
-It requests drawing suppression once, without minimizing, hiding or focusing the game window. It requires an
+`set_rendering` requires a boolean `enabled` and returns `{"dispatch":"completed"}` after local execution.
+Use `{"enabled":false}` to suppress drawing once or `{"enabled":true}` to clear that suppression once,
+without minimizing, hiding or focusing the game window. It requires an
 attached, initialized graphical client and works in menus, paused worlds and gameplay. It does not pause simulation
 or change persistent settings. Structured observations and actions remain available.
 
-This is not a persistent mode: later user, window or system events may resume drawing, even before the result is
+This is not a persistent mode: later user, window or system events may change drawing, even before the result is
 received. There is no monitoring, automatic reapplication or restoration on detach. Repeated explicit calls are
-allowed, including when drawing is already suppressed. Do not replay a call whose result is uncertain.
+allowed, including when the requested flag is already set. Enabling does not override minimization with
+`halt-rendering-when-minimized` enabled or force the graphics backend to produce a frame. Completion reports the
+local operation, without waiting for a rendered frame. Do not replay a call whose result is uncertain.
 
 The tool shares the command queue with screenshots. An earlier screenshot completes, fails or is cancelled before
-the stop executes. A later screenshot checks the current native state and fails promptly at the frontend safe point
-while rendering is suppressed; if normal events have resumed drawing, it captures normally. `stop_rendering` does
+the change executes. A later screenshot checks the current native state and fails promptly at the frontend safe point
+while rendering is suppressed; if drawing is available again, it captures normally. `set_rendering` does
 not cancel a pending screenshot; use `screenshot` with `action:"cancel"` if needed.
 
 ## Screenshots

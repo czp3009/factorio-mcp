@@ -142,7 +142,7 @@ Windows 上应将与 `factorio.exe` 匹配的 `factorio.pdb` 保留在同一目�
 | `ui_read` | 读取 UI 结构, 文本, 标志和受支持的控件属性值. |
 | `ui_action` | 点击控件, 替换文本或向控件发送按键. |
 | `screenshot` | 获取包含游戏画面和 UI 的 PNG 截图. |
-| `stop_rendering` | 单次停止绘制, 不最小化窗口; 后续窗口或系统事件可能恢复绘制. |
+| `set_rendering` | 单次停止或恢复绘制; 后续窗口或系统事件可能再次改变绘制状态. |
 | `input_bindings` | 查询游戏本体及模组的 control ID 对应的当前键鼠绑定. |
 | `input` | 执行并行的键鼠时间线, 支持视口像素和世界坐标路径. |
 | `world_query` | 查询世界对象及其相关属性, 以及玩家, 物品栏和原型目录. |

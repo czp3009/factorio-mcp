@@ -87,6 +87,8 @@ class GameSessionTest {
 
         override suspend fun query(query: WorldQuery) = execute(8, 4096, null)
 
+        override suspend fun setRendering(enabled: Boolean) = execute(12, 4096, null)
+
         override suspend fun awaitExit() {
             observing.complete(Unit)
             if (notifications) exit.await() else awaitCancellation()
@@ -463,7 +465,7 @@ class GameSessionTest {
                     runCatching {
                         if (operation == 5) session.action(UiAction(emptyList(), 1))
                         else if (operation == 8) session.query(WorldQuery(buildJsonObject {}))
-                        else if (operation == 12) session.stopRendering()
+                        else if (operation == 12) session.setRendering(false)
                         else session.screenshot()
                     }
                 }
@@ -482,7 +484,7 @@ class GameSessionTest {
     }
 
     @Test
-    fun stopRenderingSharesTheScreenshotQueueWithoutCancellingOrRestoring() = runBlocking {
+    fun setRenderingSharesTheScreenshotQueueWithoutCancellingOrRestoring() = runBlocking {
         withTimeout(3000) {
             val entered = CompletableDeferred<Unit>()
             val frame = CompletableDeferred<Unit>()
@@ -497,18 +499,22 @@ class GameSessionTest {
                             entered.complete(Unit)
                             frame.await()
                         }
-                        if (operation == 12) suppressed = true
                         return GameSnapshot("main_menu", operation != 4, 1)
+                    }
+                    override suspend fun setRendering(enabled: Boolean): GameSnapshot {
+                        val result = execute(12, 4096, null)
+                        suppressed = !enabled
+                        return result
                     }
                     override suspend fun isAlive() = true
                     override suspend fun close() = Unit
                 }
             }
-            assertFailsWith<IllegalStateException> { session.stopRendering() }
+            assertFailsWith<IllegalStateException> { session.setRendering(false) }
             session.attach(12)
             val capture = async { session.screenshot() }
             entered.await()
-            val stop = async(start = CoroutineStart.UNDISPATCHED) { session.stopRendering() }
+            val stop = async(start = CoroutineStart.UNDISPATCHED) { session.setRendering(false) }
             yield()
             assertFalse(12 in calls)
             assertFalse(capture.isCompleted)
@@ -516,32 +522,33 @@ class GameSessionTest {
             capture.await()
             assertEquals("completed", stop.await().getValue("dispatch").jsonPrimitive.content)
             assertEquals(listOf(1, 6, 12), calls)
-            session.stopRendering()
+            session.setRendering(false)
             assertFailsWith<IllegalStateException> { session.screenshot() }
             session.read(10, false)
-            suppressed = false
+            session.setRendering(true)
+            session.setRendering(true)
             session.screenshot()
-            session.stopRendering()
+            session.setRendering(false)
             session.detach()
             assertTrue(suppressed)
         }
     }
 
     @Test
-    fun stopRenderingCancelledWhileQueuedNeverReachesNativeCode() = runBlocking {
-        withTimeout(3000) {
+    fun setRenderingCancelledWhileQueuedNeverReachesNativeCode() = runBlocking {
+        for (enabled in listOf(false, true)) withTimeout(3000) {
             val connection = Connection().apply { blocked = true }
             val session = GameSession { connection }
             session.attach(12)
             val capture = async { runCatching { session.screenshot() } }
             connection.started.await()
-            val stop = async(start = CoroutineStart.UNDISPATCHED) { session.stopRendering() }
+            val stop = async(start = CoroutineStart.UNDISPATCHED) { session.setRendering(enabled) }
             stop.cancelAndJoin()
             assertFalse(12 in connection.calls)
             session.cancelScreenshot()
             assertIs<CancellationException>(capture.await().exceptionOrNull())
             connection.blocked = false
-            session.stopRendering()
+            session.setRendering(enabled)
             session.close()
         }
     }

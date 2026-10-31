@@ -242,10 +242,17 @@ internal fun createServer(game: GameSession): Server {
         game.input(parseInputSequence(args))
     }
     tool(
-        "stop_rendering",
-        "Stop drawing the game window once, without minimizing it. Simulation and structured tools remain available, including menus and paused worlds. Later user or window/system events may resume drawing. Returns dispatch:completed after local execution; no persistent state or automatic restoration on detach. Screenshots fail while native rendering is suspended. Requires an attached graphical client.",
-    ) {
-        game.stopRendering()
+        "set_rendering",
+        "Request drawing suppression or restoration once. Simulation and structured tools remain available, including menus and paused worlds. Window/system events may change drawing again; minimization can still suspend it after enabling. Returns dispatch:completed after local execution, without waiting for a frame. No persistent mode or restoration on detach. Shares the screenshot queue; cancel a stalled capture explicitly. Requires an attached graphical client.",
+        buildJsonObject {
+            putJsonObject("enabled") {
+                put("type", "boolean")
+                put("description", "False suppresses drawing once; true clears that suppression once.")
+            }
+        },
+        listOf("enabled"),
+    ) { args ->
+        game.setRendering(args.getValue("enabled").booleanArgument())
     }
     register(
         "screenshot",

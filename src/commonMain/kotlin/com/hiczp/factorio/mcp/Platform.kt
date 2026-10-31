@@ -57,6 +57,9 @@ internal interface GameConnection {
     suspend fun sendChat(text: String): GameSnapshot =
         error("Chat submission is unavailable on this adapter")
 
+    suspend fun setRendering(enabled: Boolean): GameSnapshot =
+        error("Rendering control is unavailable on this adapter")
+
     suspend fun beginInput(request: InputSequenceRequest): GameInputTask =
         error("Timed input is unavailable on this adapter")
 
@@ -74,6 +77,8 @@ internal expect class GameProcess(pid: Int) : GameConnection {
     override suspend fun query(query: WorldQuery): GameSnapshot
 
     override suspend fun sendChat(text: String): GameSnapshot
+
+    override suspend fun setRendering(enabled: Boolean): GameSnapshot
 
     override suspend fun beginInput(request: InputSequenceRequest): GameInputTask
 

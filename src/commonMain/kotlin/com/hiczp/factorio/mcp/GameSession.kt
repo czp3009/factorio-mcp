@@ -205,9 +205,9 @@ internal class GameSession(private val open: (Int) -> GameConnection = ::GamePro
         buildJsonObject { put("dispatch", "completed") }
     }
 
-    suspend fun stopRendering(): JsonObject = observe {
-        val target = attachment ?: error("Call attach before stop_rendering")
-        useConnection(target) { it.execute(12) }
+    suspend fun setRendering(enabled: Boolean): JsonObject = observe {
+        val target = attachment ?: error("Call attach before set_rendering")
+        useConnection(target) { it.setRendering(enabled) }
         buildJsonObject { put("dispatch", "completed") }
     }
 

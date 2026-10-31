@@ -504,10 +504,10 @@ extern "C" void fm_after_gui_logic(void *receiver, uintptr_t caller) noexcept {
         result = ECANCELED;
     } else if (shared->operation == FM_LINUX_FRAME) {
         result = shared->gameStateError;
-    } else if (shared->operation == FM_LINUX_STOP_RENDERING) {
+    } else if (shared->operation == FM_LINUX_SET_RENDERING) {
         result = shared->gameStateError ? shared->gameStateError : shared->gameState.state == 3 ? EBUSY : 0;
         if (!result)
-            result = stopRendering(shared->renderingControl,
+            result = setRendering(shared->renderingControl,
                 [](uint64_t address, auto &value) { return fm::read(address, value); },
                 [](uint64_t address, uint8_t value) {
                     iovec local{&value, sizeof(value)};

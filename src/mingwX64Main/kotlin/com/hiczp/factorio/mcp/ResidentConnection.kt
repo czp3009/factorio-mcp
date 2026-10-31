@@ -325,6 +325,7 @@ internal class ResidentConnection(private val pid: UInt) {
         query: WorldQuery? = null,
         inputName: String? = null,
         chatText: String? = null,
+        renderingEnabled: Boolean? = null,
     ): GameSnapshot {
         if (operation == 6) symbols.rendering.getOrThrow()
         if (operation == 12) symbols.renderingControl.getOrThrow()
@@ -380,6 +381,9 @@ internal class ResidentConnection(private val pid: UInt) {
             check(state.pointed.attached != 0) { "Resident is detached; call attach" }
             state.pointed.operation = if (operation == 1) 2u else operation.toUInt()
             state.pointed.limit = limit.toUInt()
+            if (operation == 12) {
+                state.pointed.renderingEnabled = if (checkNotNull(renderingEnabled)) 1u else 0u
+            }
             writeAction(
                 state.pointed.action,
                 action,

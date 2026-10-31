@@ -156,6 +156,9 @@ internal actual class GameProcess actual constructor(private val pid: Int) : Gam
     actual override suspend fun sendChat(text: String): GameSnapshot =
         withContext(dispatcher) { checkNotNull(client).execute(11, 4096, null, chatText = validateChatMessage(text)) }
 
+    actual override suspend fun setRendering(enabled: Boolean): GameSnapshot =
+        withContext(dispatcher) { checkNotNull(client).execute(12, 4096, null, renderingEnabled = enabled) }
+
     actual override suspend fun beginInput(request: InputSequenceRequest): GameInputTask {
         var admitted: GameInputTask? = null
         try {

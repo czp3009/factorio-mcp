@@ -59,39 +59,52 @@ int main() {
     FmRenderingControl control{layout.global, layout.headless, layout.globalSize, layout.suppressed};
     unsigned writes = 0;
     auto write = [&](uint64_t address, uint8_t value) {
-        assert(address == reinterpret_cast<uintptr_t>(&global.suppressed) && value == 1);
+        assert(address == reinterpret_cast<uintptr_t>(&global.suppressed) && value <= 1);
         ++writes;
         global.suppressed = value;
         return true;
     };
     global.minimized = 0;
     for (uint8_t halt : {uint8_t{0}, uint8_t{1}}) {
+        control.enabled = 0;
         settings.halt = halt;
         global.suppressed = 0;
         const auto before = writes;
-        assert(stopRendering(control, read, write) == FM_RENDERING_STOPPED);
-        assert(stopRendering(control, read, write) == FM_RENDERING_STOPPED);
+        assert(setRendering(control, read, write) == FM_RENDERING_APPLIED);
+        assert(setRendering(control, read, write) == FM_RENDERING_APPLIED);
         assert(writes == before + 1 && global.suppressed == 1 && global.minimized == 0 && settings.halt == halt);
         assert(renderingAdmission(layout, read) == FM_RENDERING_SUSPENDED);
-        global.suppressed = 0; // A normal event may restore rendering; no owned state reapplies it.
+        control.enabled = 1;
+        assert(setRendering(control, read, write) == FM_RENDERING_APPLIED);
+        assert(setRendering(control, read, write) == FM_RENDERING_APPLIED);
+        assert(writes == before + 2 && !global.suppressed && !global.minimized && settings.halt == halt);
         assert(renderingAdmission(layout, read) == FM_RENDERING_AVAILABLE);
+        global.minimized = 1;
+        assert(setRendering(control, read, write) == FM_RENDERING_APPLIED);
+        assert(global.minimized && settings.halt == halt && writes == before + 2);
+        assert(renderingAdmission(layout, read) == (halt ? FM_RENDERING_SUSPENDED : FM_RENDERING_AVAILABLE));
+        global.minimized = 0;
     }
+    control.enabled = 0;
     const auto before = writes;
     auto invalid = control;
     invalid.suppressed = sizeof(Global);
-    assert(stopRendering(invalid, read, write) == FM_RENDERING_CONTROL_INVALID);
+    assert(setRendering(invalid, read, write) == FM_RENDERING_CONTROL_INVALID);
+    invalid = control;
+    invalid.enabled = 2;
+    assert(setRendering(invalid, read, write) == FM_RENDERING_CONTROL_INVALID);
     invalid = control;
     invalid.globalSize = 0;
-    assert(stopRendering(invalid, read, write) == FM_RENDERING_CONTROL_INVALID);
+    assert(setRendering(invalid, read, write) == FM_RENDERING_CONTROL_INVALID);
     headless = 1;
-    assert(stopRendering(control, read, write) == FM_RENDERING_CONTROL_HEADLESS);
+    assert(setRendering(control, read, write) == FM_RENDERING_CONTROL_HEADLESS);
     headless = 0;
     global.suppressed = 2;
-    assert(stopRendering(control, read, write) == FM_RENDERING_CONTROL_UNREADABLE);
+    assert(setRendering(control, read, write) == FM_RENDERING_CONTROL_UNREADABLE);
     global.suppressed = 0;
-    assert(stopRendering(control, [](uint64_t, auto &) { return false; }, write) == FM_RENDERING_CONTROL_UNREADABLE);
-    assert(stopRendering(control, read, [](uint64_t, uint8_t) { return false; }) == FM_RENDERING_CONTROL_UNWRITABLE);
+    assert(setRendering(control, [](uint64_t, auto &) { return false; }, write) == FM_RENDERING_CONTROL_UNREADABLE);
+    assert(setRendering(control, read, [](uint64_t, uint8_t) { return false; }) == FM_RENDERING_CONTROL_UNWRITABLE);
     assert(writes == before && global.suppressed == 0);
     pointer = nullptr;
-    assert(stopRendering(control, read, write) == FM_RENDERING_CONTROL_UNREADABLE);
+    assert(setRendering(control, read, write) == FM_RENDERING_CONTROL_UNREADABLE);
 }
