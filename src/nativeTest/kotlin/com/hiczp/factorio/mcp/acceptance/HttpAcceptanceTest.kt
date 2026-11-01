@@ -84,7 +84,7 @@ class HttpAcceptanceTest {
                     client.tool("status").toolValue().getValue("attached").jsonPrimitive.boolean
                 )
                 assertTrue(client.tool("ui_read").getValue("isError").jsonPrimitive.boolean)
-                assertTrue(client.tool("screenshot").getValue("isError").jsonPrimitive.boolean)
+                assertTrue(client.tool("screenshot", buildJsonObject { put("format", "png") }).getValue("isError").jsonPrimitive.boolean)
                 assertTrue(client.tool("set_rendering", buildJsonObject { put("enabled", false) }).getValue("isError").jsonPrimitive.boolean)
                 assertTrue(client.tool("input_bindings").getValue("isError").jsonPrimitive.boolean)
                 assertTrue(client.tool("world_overview").getValue("isError").jsonPrimitive.boolean)
@@ -199,7 +199,7 @@ class HttpAcceptanceTest {
                             .jsonPrimitive
                             .boolean
                     )
-                    val screenshot = client.tool("screenshot")
+                    val screenshot = client.tool("screenshot", buildJsonObject { put("format", "png") })
                     val cancelled =
                         client
                             .tool("screenshot", buildJsonObject { put("action", "cancel") })

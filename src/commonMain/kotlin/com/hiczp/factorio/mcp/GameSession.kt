@@ -30,7 +30,7 @@ internal class GameSession(private val open: (Int) -> GameConnection = ::GamePro
     private val command = Mutex()
     private val registry = Mutex()
     private val screenshotAdmission = Mutex()
-    private var activeScreenshot: Deferred<GameSnapshot>? = null
+    private var activeScreenshot: Deferred<ScreenshotResult>? = null
     private val observations = mutableSetOf<Job>()
     private val observerScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var attachment: Attachment? = null
@@ -211,11 +211,17 @@ internal class GameSession(private val open: (Int) -> GameConnection = ::GamePro
         buildJsonObject { put("dispatch", "completed") }
     }
 
-    suspend fun screenshot(): GameSnapshot = supervisorScope {
+    suspend fun screenshot(
+        format: ImageFormat = ImageFormat.JPG,
+        maxHeight: Int? = null,
+    ): ScreenshotResult = supervisorScope {
+        require(maxHeight == null || maxHeight > 0) { "max_height must be positive" }
         val task = async(start = CoroutineStart.LAZY) {
             observe {
                 val target = attachment ?: error("Call attach before screenshot")
-                useConnection(target) { it.execute(6) }
+                val snapshot = useConnection(target) { it.execute(6) }
+                val image = checkNotNull(snapshot.image) { "Native screenshot has no pixels" }
+                ScreenshotResult(snapshot, ImageEncoder.encode(ImageEncoder.resize(image, maxHeight), format))
             }
         }
         try {

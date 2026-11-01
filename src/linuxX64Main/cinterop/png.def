@@ -1,0 +1,4 @@
+package = com.hiczp.factorio.mcp.png
+headers = png.h
+headerFilter = png.h pngconf.h pnglibconf.h
+linkerOpts = -lpng16

@@ -15,7 +15,6 @@ extern "C" {
 #define FM_MAX_LUA_SOURCE 131072
 #define FM_MAX_QUERY_ARGUMENTS (16 * 1024 * 1024)
 #define FM_MAX_PATH 16
-#define FM_MAX_IMAGE (16 * 1024 * 1024)
 
 typedef struct FmObservationBuffer {
     uint64_t address, size;
@@ -106,13 +105,13 @@ typedef struct FmControl {
 typedef struct FmResult {
     int32_t error, state, attached, count, truncated, paused;
     uint64_t frame;
-    uint32_t imageSize, imageWidth, imageHeight;
+    uint32_t imageWidth, imageHeight;
     char message[512];
     uint32_t controlCount, registryCount;
     FmObservationBuffer controls, nodes;
     uint32_t optionCount;
     FmObservationBuffer options;
-    unsigned char image[FM_MAX_IMAGE];
+    FmObservationBuffer framePixels;
     uint32_t worldSize;
     FmObservationBuffer worldJson;
     FmChatSnapshot chat;

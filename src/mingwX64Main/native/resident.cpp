@@ -342,7 +342,8 @@ static void service(void *root, void *gui) {
     result.attached = shared->attached;
     result.frame = shared->frame;
     result.paused = paused;
-    result.imageSize = 0;
+    result.imageWidth = 0;
+    result.imageHeight = 0;
     result.controlCount = 0;
     result.optionCount = 0;
     result.registryCount = 0;
@@ -479,7 +480,7 @@ static HRESULT present(IDXGISwapChain *swapChain, UINT sync, UINT flags) {
     if (!(flags & DXGI_PRESENT_TEST) && enabled && shared && shared->operation == 6 && shared->command == 2) {
         try {
             require(!shared->cancel, "Screenshot cancelled before capture");
-            captureFrame(swapChain, shared->result);
+            captureFrame(swapChain, shared->result, observations);
         } catch (const std::exception &error) {
             shared->result.error = 1;
             strncpy_s(shared->result.message, error.what(), _TRUNCATE);

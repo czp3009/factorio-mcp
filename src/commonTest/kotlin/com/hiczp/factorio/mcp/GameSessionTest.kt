@@ -80,7 +80,7 @@ class GameSessionTest {
             }
             if (operation == 4) check(!blocked || cleaned)
             if (operation == 4) check(inputs.all { it.closed })
-            return GameSnapshot(state, operation != 4, 1)
+            return GameSnapshot(state, operation != 4, 1, image = if (operation == 6) RgbImage(1, 1, ByteArray(3)) else null)
         }
 
         override suspend fun isAlive() = live
@@ -499,7 +499,7 @@ class GameSessionTest {
                             entered.complete(Unit)
                             frame.await()
                         }
-                        return GameSnapshot("main_menu", operation != 4, 1)
+                        return GameSnapshot("main_menu", operation != 4, 1, image = if (operation == 6) RgbImage(1, 1, ByteArray(3)) else null)
                     }
                     override suspend fun setRendering(enabled: Boolean): GameSnapshot {
                         val result = execute(12, 4096, null)

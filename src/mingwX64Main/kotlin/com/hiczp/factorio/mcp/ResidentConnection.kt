@@ -702,11 +702,16 @@ internal class ResidentConnection(private val pid: UInt) {
                 result.truncated != 0,
                 if (result.paused < 0) null else result.paused != 0,
                 if (operation == 6) {
-                    check(result.imageSize in 1u..FM_MAX_IMAGE.toUInt()) { "Invalid image size" }
-                    result.image.reinterpret<ByteVar>().readBytes(result.imageSize.toInt())
+                    result.framePixels.validateObservationBuffer(
+                        ImageEncoder.rgbSize(result.imageWidth.toInt(), result.imageHeight.toInt())
+                            .toLong()
+                    )
+                    RgbImage(
+                        result.imageWidth.toInt(),
+                        result.imageHeight.toInt(),
+                        result.framePixels.readObservationBytes(readObservation),
+                    )
                 } else null,
-                result.imageWidth.toInt(),
-                result.imageHeight.toInt(),
                 result.controls.readObservationRecords<FmControl, ControlSnapshot>(
                     result.controlCount,
                     readObservation,

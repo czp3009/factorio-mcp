@@ -70,6 +70,14 @@ kotlin {
     linuxX64 {
         val mainDirectory = "src/${compilations.getByName("main").defaultSourceSet.name}"
         val testDirectory = "src/${compilations.getByName("test").defaultSourceSet.name}"
+        compilations.getByName("main").cinterops.create("png") {
+            definitionFile.set(layout.projectDirectory.file("$mainDirectory/cinterop/png.def"))
+            includeDirs("$mainDirectory/cinterop/libpng")
+        }
+        compilations.getByName("main").cinterops.create("jpeg") {
+            definitionFile.set(layout.projectDirectory.file("$mainDirectory/cinterop/jpeg.def"))
+            includeDirs("$mainDirectory/cinterop/libjpeg-turbo")
+        }
         val interop = compilations.getByName("main").cinterops.create("linux") {
             definitionFile.set(layout.projectDirectory.file("$mainDirectory/cinterop/linux.def"))
             includeDirs("$mainDirectory/native")
@@ -80,6 +88,22 @@ kotlin {
         }
         binaries.executable { entryPoint = "com.hiczp.factorio.mcp.main" }
         if (HostManager.host == konanTarget) {
+            // Kotlin/Native's sysroot does not search the host's system library directories.
+            val pngLibraryDirectory = providers.exec {
+                commandLine("pkg-config", "--variable=libdir", "libpng")
+            }.standardOutput.asText.map { it.trim() }
+            binaries.configureEach {
+                linkTaskProvider.configure {
+                    toolOptions.freeCompilerArgs.addAll(
+                        pngLibraryDirectory.map {
+                            // Distribution codecs may require newer glibc symbols than the bundled sysroot.
+                            // Resolve their indirect dependencies with the host loader; application symbols
+                            // are still checked by the linker.
+                            listOf("-linker-option", "-L$it", "-linker-option", "--allow-shlib-undefined")
+                        }
+                    )
+                }
+            }
             registerNpmVerification("libfactorio_mcp_resident.so", "linux-x64", "npm")
             val taskSuffix = name.replaceFirstChar { it.uppercaseChar() }
             val outputScope = "${HostManager.host.name}/$name"
@@ -149,6 +173,9 @@ kotlin {
     mingwX64 {
         val mainDirectory = "src/${compilations.getByName("main").defaultSourceSet.name}"
         val testDirectory = "src/${compilations.getByName("test").defaultSourceSet.name}"
+        compilations.getByName("main").cinterops.create("image") {
+            definitionFile.set(layout.projectDirectory.file("$mainDirectory/cinterop/image.def"))
+        }
         compilations.getByName("main").cinterops.create("bridge") {
             definitionFile.set(layout.projectDirectory.file("$mainDirectory/cinterop/bridge.def"))
             includeDirs("$mainDirectory/native")

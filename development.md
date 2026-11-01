@@ -9,7 +9,8 @@ Contributor instructions for the Linux and Windows implementations. User setup a
 
 Build on Linux x64 or Windows x64 with a JDK compatible with the Gradle wrapper, CMake 3.24+ and Ninja on `PATH`.
 Gradle downloads Kotlin/Native and uses its bundled compiler, assembler and linker; a separate LLVM installation is
-unnecessary. Linux needs the system C/C++ development headers and standard libraries. On Windows, install Visual
+unnecessary. Linux needs the system C/C++ development headers, standard libraries, libpng and libjpeg-turbo development files and
+pkg-config (`sudo apt install libpng-dev libturbojpeg0-dev pkg-config` on Debian/Ubuntu). On Windows, install Visual
 Studio Build Tools with the MSVC C++ build components and Windows SDK. The Visual Studio
 IDE is unnecessary.
 
@@ -38,7 +39,9 @@ Windows and WSL can use the same checkout. Run their builds sequentially; metada
 when the host-visible project path changes. Gradle releases its process and project-cache handles after each build.
 Linux uses `linuxX64`, with `factorio-mcp.kexe` and the adjacent `libfactorio_mcp_resident.so`;
 Windows uses `mingwX64`, with `factorio-mcp.exe` and `factorio_bridge.dll`.
-The Linux PNG encoder uses Kotlin/Native's standard zlib bindings and the system `libz.so.1` runtime library.
+Image encoding uses the platform bindings in Kotlin/Native: libpng and TurboJPEG on Linux, and Windows Imaging
+Component on Windows. Height reduction uses shared area resampling before encoding. Linux binaries dynamically link
+the system `libpng16.so.16` and `libturbojpeg.so.0`; their dependencies are handled by the distribution packages.
 Keep each executable with its adjacent library. To build one variant, use `linkReleaseExecutableLinuxX64` or
 `linkReleaseExecutableMingwX64` (replace `Release` with `Debug` for that variant).
 
@@ -393,7 +396,8 @@ completion, and restore any test configuration afterward.
 
 `ScreenshotAcceptanceTest` is shared by both platforms. Run
 `capturesConsecutivePngFramesAndDetaches` with `FACTORIO_MCP_TEST_SCREENSHOT_PREFIX` selecting the PNG output path.
-Run `suspendedRenderingRejectsRepeatedCapturesAndAllowsObservations` while the operator keeps rendering suspended;
+Run `capturesJpgAndHeightLimitedFrames` with the same output prefix to verify default JPG, both resized formats,
+original dimensions and no enlargement. Run `suspendedRenderingRejectsRepeatedCapturesAndAllowsObservations` while the operator keeps rendering suspended;
 set `FACTORIO_MCP_TEST_SCREENSHOT_WORLD=1` to include a tile query in a loaded world. Both require the explicit HTTP
 endpoint and PID above. Repeat capture checks in menus, rendered paused worlds, after restoration, and with minimized
 rendering permitted by the graphics setting. Window-state control and configuration restoration belong to the test

@@ -4,6 +4,7 @@ package com.hiczp.factorio.mcp.acceptance
 
 import com.hiczp.factorio.mcp.McpHttpClient
 import com.hiczp.factorio.mcp.toolValue
+import com.hiczp.factorio.mcp.decodeImage
 import kotlinx.cinterop.toKString
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.runBlocking
@@ -15,10 +16,71 @@ import kotlinx.io.files.SystemFileSystem
 import kotlinx.serialization.json.*
 import platform.posix.getenv
 import kotlin.io.encoding.Base64
+import kotlin.math.roundToInt
 import kotlin.test.*
 
 /** Explicit SDK endpoint/PID capture; the caller owns game and endpoint lifetimes. */
 class ScreenshotAcceptanceTest {
+    @Test
+    fun capturesJpgAndHeightLimitedFrames() = runBlocking<Unit> {
+        fun environment(name: String) = checkNotNull(getenv(name)) { "Select $name explicitly" }.toKString()
+        val client = McpHttpClient(environment("FACTORIO_MCP_ACCEPTANCE_URL"))
+        val pid = environment("FACTORIO_MCP_TEST_PID").toInt()
+        val prefix = environment("FACTORIO_MCP_TEST_SCREENSHOT_PREFIX")
+        try {
+            withTimeout(600_000) {
+                client.initialize()
+                client.tool("attach", buildJsonObject { put("pid", pid) }).toolValue()
+                val cases = listOf(
+                    "png-original" to buildJsonObject { put("format", "png") },
+                    "jpg-default" to buildJsonObject {},
+                    "jpg-720" to buildJsonObject {
+                        put("format", "jpg")
+                        put("max_height", 720)
+                    },
+                    "png-720" to buildJsonObject {
+                        put("format", "png")
+                        put("max_height", 720)
+                    },
+                    "jpg-no-enlargement" to buildJsonObject { put("max_height", Int.MAX_VALUE) },
+                )
+                for ((name, arguments) in cases) {
+                    val response = client.tool("screenshot", arguments)
+                    val metadata = response.toolValue()
+                    val sourceWidth = metadata.getValue("source_width").jsonPrimitive.int
+                    val sourceHeight = metadata.getValue("source_height").jsonPrimitive.int
+                    val width = metadata.getValue("width").jsonPrimitive.int
+                    val height = metadata.getValue("height").jsonPrimitive.int
+                    val requestedHeight = arguments["max_height"]?.jsonPrimitive?.int ?: sourceHeight
+                    assertEquals(minOf(sourceHeight, requestedHeight), height)
+                    assertEquals(maxOf(1, (sourceWidth.toDouble() * height / sourceHeight).roundToInt()), width)
+                    val format = arguments["format"]?.jsonPrimitive?.content ?: "jpg"
+                    assertEquals(format, metadata.getValue("format").jsonPrimitive.content)
+                    val content = response.getValue("content").jsonArray.single {
+                        it.jsonObject["type"]?.jsonPrimitive?.content == "image"
+                    }.jsonObject
+                    assertEquals(if (format == "jpg") "image/jpeg" else "image/png",
+                        content.getValue("mimeType").jsonPrimitive.content)
+                    val bytes = Base64.decode(content.getValue("data").jsonPrimitive.content)
+                    val decoded = decodeImage(bytes)
+                    assertEquals(width, decoded.width)
+                    assertEquals(height, decoded.height)
+                    SystemFileSystem.sink(Path("$prefix-$name.$format")).buffered().use { it.write(bytes) }
+                    println("Screenshot $name: ${width}x$height from ${sourceWidth}x$sourceHeight, ${bytes.size} bytes; metadata=$metadata")
+                }
+                client.tool("detach").toolValue()
+            }
+        } finally {
+            withContext(NonCancellable) {
+                try {
+                    client.tool("detach").toolValue()
+                } finally {
+                    client.close()
+                }
+            }
+        }
+    }
+
     @Test
     fun suspendedRenderingRejectsRepeatedCapturesAndAllowsObservations() = runBlocking {
         fun environment(name: String) = checkNotNull(getenv(name)) { "Select $name explicitly" }.toKString()
@@ -30,7 +92,7 @@ class ScreenshotAcceptanceTest {
                 client.tool("attach", buildJsonObject { put("pid", pid) }).toolValue()
                 // The operator keeps native rendering suspended throughout this test.
                 repeat(2) {
-                    val result = withTimeout(30_000) { client.tool("screenshot") }
+                    val result = withTimeout(30_000) { client.tool("screenshot", buildJsonObject { put("format", "png") }) }
                     assertTrue(result.getValue("isError").jsonPrimitive.boolean)
                     assertEquals("Screenshot unavailable while rendering is suspended.",
                         result.getValue("structuredContent").jsonObject.getValue("error").jsonPrimitive.content)
@@ -80,7 +142,7 @@ class ScreenshotAcceptanceTest {
                 client.tool("attach", buildJsonObject { put("pid", pid) }).toolValue()
                 attached = true
                 repeat(2) { index ->
-                    val response = client.tool("screenshot")
+                    val response = client.tool("screenshot", buildJsonObject { put("format", "png") })
                     val metadata = response.toolValue()
                     assertEquals("factorio_rendered_frame", metadata.getValue("source").jsonPrimitive.content)
                     assertEquals("game_and_ui", metadata.getValue("scope").jsonPrimitive.content)

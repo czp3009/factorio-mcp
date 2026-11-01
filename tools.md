@@ -61,7 +61,7 @@ still constrain a call. A finite game collection is not necessarily a small coll
 | `ui_action` | One widget action | `set_text`: 1024 Unicode scalar values; selector path: 16 steps | No | One dispatch result. |
 | `input` | Explicit timeline | 256 entries; 64 intervals per entry; relative tick at most 4,294,967,295 | No | One execution result, not a collection query. |
 | `chat_send` | One explicit message | 4096 UTF-8 bytes | No | One dispatch result. |
-| `screenshot` | One next rendered frame | 8192 pixels per side, 16,777,216 total pixels, 16 MiB PNG | No | Image size follows the rendered frame. |
+| `screenshot` | One next rendered frame | 8192 pixels per side, 16,777,216 total pixels, 16 MiB encoded image | No | Optional proportional height reduction. |
 
 All world-query arguments must fit the 16 MiB request buffer. Spatial coordinates remain within ±1,000,000 tiles;
 query areas no longer have separate width/height caps. UI selectors, inspection paths and action inputs retain their
@@ -1264,8 +1264,21 @@ not cancel a pending screenshot; use `screenshot` with `action:"cancel"` if need
 
 ## Screenshots
 
-`screenshot` accepts `action: "capture"` (default) or `action: "cancel"`. Capture returns PNG image content plus its
-width, height, UI frame and observed game state. Only one capture can be pending; another capture returns a busy error.
+`screenshot` accepts `action: "capture"` (default) or `action: "cancel"`. Capture returns standard MCP Base64 image
+content plus the format, output `width`/`height`, original `source_width`/`source_height`, UI frame and observed game
+state. Only one capture can be pending; another capture returns a busy error.
+
+- `format`: `"jpg"` (default, JPEG quality 85) or `"png"` (lossless encoding).
+- `max_height`: optional positive 32-bit integer in pixels. Taller frames are reduced proportionally using area
+  resampling; width is rounded to the nearest integer, with a minimum of one pixel. Smaller frames are never enlarged.
+  Omit to retain original dimensions. The full frame is preserved, without cropping, stretching or changing the game
+  window, rendering resolution or field of view. PNG is lossless relative to the resized pixels when resizing is used.
+
+For ordinary visual inspection, start with `{"format":"jpg","max_height":720}`. Request `{"format":"png"}` for a
+lossless original-size image. The image MIME type is `image/jpeg` or `image/png`, matching the encoded bytes.
+Output pixel coordinates must be scaled by `source_width/width` and `source_height/height` to map to the original
+frame. Capture options are rejected with `action:"cancel"`.
+
 Cancel stops the active capture, waits for cooperative cleanup and returns `{"dispatch":"completed","cancelled":true}`.
 It starts no new capture and returns `cancelled:false` when no capture is pending. Explicit MCP request cancellation
 also cancels capture. After cancellation finishes, a new capture can be submitted.
@@ -1276,7 +1289,7 @@ both platforms. If the game's native condition suppresses rendering at frontend 
 not reject capture: drawing may continue when `halt-rendering-when-minimized` is disabled. Paused worlds can be
 captured while rendering continues. A stalled frontend or graphics backend can still leave capture pending; this
 check does not detect every rendering stall.
-Capture supports at most 8192 pixels per side, 16,777,216 pixels in total and a 16 MiB encoded PNG; exceeding these
+Capture supports at most 8192 pixels per side, 16,777,216 pixels in total and a 16 MiB encoded image; exceeding these
 bounds returns an error.
 
 ## Completion and cancellation

@@ -256,7 +256,7 @@ internal fun createServer(game: GameSession): Server {
     }
     register(
         "screenshot",
-        "Capture the next rendered game+UI frame as PNG, or cancel the active capture and wait for cleanup. Only one capture may be pending; another capture fails while busy. Prefer structured reads; use images for missing visual information, verification or requested images. Requires active rendering (OpenGL on Linux, DirectX on Windows); game-suspended rendering returns an error at frontend admission. A stalled frontend or graphics backend can still delay capture. Excludes desktop and OS/Steam overlays. Cancellation also works through MCP request cancellation.",
+        "Capture the next rendered game+UI frame, or cancel the active capture and wait for cleanup. Prefer structured reads; use images for missing visual information, verification or requested images. Start with JPG and max_height:720 to reduce image traffic; use PNG for lossless pixels. Only one capture may be pending. Requires active rendering (OpenGL on Linux, DirectX on Windows); suspended rendering returns an error at frontend admission. A stalled frontend or graphics backend can delay capture. Excludes desktop and OS/Steam overlays. MCP request cancellation also stops capture.",
         buildJsonObject {
             putJsonObject("action") {
                 put("type", "string")
@@ -270,28 +270,52 @@ internal fun createServer(game: GameSession): Server {
                     "Cancel stops the current capture without starting another; repeatable when idle.",
                 )
             }
+            putJsonObject("format") {
+                put("type", "string")
+                putJsonArray("enum") {
+                    add("jpg")
+                    add("png")
+                }
+                put("default", "jpg")
+                put("description", "JPG uses fixed quality 85; PNG is lossless.")
+            }
+            putJsonObject("max_height") {
+                put("type", "integer")
+                put("minimum", 1)
+                put("maximum", Int.MAX_VALUE)
+                put("description", "Shrink to at most this pixel height, preserving aspect ratio. Never enlarges or crops. Omit for original dimensions.")
+            }
         },
     ) { args ->
         val action = args["action"]?.stringArgument() ?: "capture"
         require(action == "capture" || action == "cancel") { "action must be capture or cancel" }
+        val format = ImageFormat.parse(args["format"]?.stringArgument() ?: "jpg")
+        val maxHeight = args["max_height"]?.intArgument()
+        require(maxHeight == null || maxHeight > 0) { "max_height must be positive" }
         if (action == "cancel") {
+            require(args.keys.none { it == "format" || it == "max_height" }) {
+                "format and max_height apply only to capture"
+            }
             return@register toolResult(game.cancelScreenshot())
         }
-        val snapshot = game.screenshot()
+        val (snapshot, image) = game.screenshot(format, maxHeight)
         val metadata = buildJsonObject {
             put("source", "factorio_rendered_frame")
             put("scope", "game_and_ui")
             put("state", snapshot.state)
             put("ui_frame", snapshot.frame)
-            put("width", snapshot.imageWidth)
-            put("height", snapshot.imageHeight)
+            put("source_width", checkNotNull(snapshot.image).width)
+            put("source_height", snapshot.image.height)
+            put("width", image.width)
+            put("height", image.height)
+            put("format", image.format.argument)
         }
         CallToolResult(
             structuredContent = metadata,
             content =
                 listOf(
                     TextContent(Json.encodeToString(JsonObject.serializer(), metadata)),
-                    ImageContent(Base64.encode(checkNotNull(snapshot.image)), "image/png"),
+                    ImageContent(Base64.encode(image.bytes), image.format.mimeType),
                 ),
         )
     }

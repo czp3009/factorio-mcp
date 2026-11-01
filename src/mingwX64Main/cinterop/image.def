@@ -1,0 +1,4 @@
+package = com.hiczp.factorio.mcp.wic
+headers = wincodec.h
+headerFilter = wincodec.h
+linkerOpts = -lwindowscodecs -lole32 -loleaut32

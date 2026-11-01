@@ -18,6 +18,9 @@ Tested with Factorio 2.1.24, including the official DLC. Older game versions are
 
 ## Installation
 
+Linux requires libpng (`libpng16.so.16`) and libjpeg-turbo (`libturbojpeg.so.0`). On Debian/Ubuntu, install them with
+`sudo apt install libpng16-16t64 libturbojpeg0` (older releases name the PNG package `libpng16-16`).
+
 Choose **stdio** or **Streamable HTTP** below. Each supports downloading from GitHub Releases or using npm (via npx).
 Adjust the JSON configuration format to your MCP client's requirements.
 
@@ -145,7 +148,7 @@ See [development instructions](https://github.com/czp3009/factorio-mcp/blob/mast
 | `detach`         | Disconnect and cancel pending tools without closing the game.                    |
 | `ui_read`        | Read UI structure, text, flags and supported control values.                     |
 | `ui_action`      | Click a widget, replace text or press a key.                                     |
-| `screenshot`     | Get a PNG of the rendered game and UI.                                           |
+| `screenshot`     | Get a JPG or PNG of the rendered game and UI, with optional height reduction.                                           |
 | `set_rendering` | Suppress or restore drawing once; window/system events may change it again. |
 | `input_bindings` | Map native/mod control IDs to current keyboard/mouse bindings.                   |
 | `input`          | Execute concurrent keyboard/mouse timelines with viewport or world motion.         |

@@ -21,6 +21,7 @@ struct ObservationStorage {
     std::vector<FmControl> controls;
     std::vector<FmChatRecord> chatRecords;
     std::vector<char> worldJson;
+    std::vector<unsigned char> framePixels;
     // Moving an inner vector preserves the byte allocation referenced by its wire descriptor.
     std::vector<std::vector<char>> strings;
 
@@ -41,5 +42,6 @@ struct ObservationStorage {
         result.controls = result.controlCount ? observationBuffer(controls) : FmObservationBuffer{};
         result.chat.records = result.chat.count ? observationBuffer(chatRecords) : FmObservationBuffer{};
         result.worldJson = result.worldSize ? observationBuffer(worldJson) : FmObservationBuffer{};
+        result.framePixels = observationBuffer(framePixels);
     }
 };

@@ -1,0 +1,4 @@
+package = com.hiczp.factorio.mcp.jpeg
+headers = turbojpeg.h
+headerFilter = turbojpeg.h
+linkerOpts = -lturbojpeg

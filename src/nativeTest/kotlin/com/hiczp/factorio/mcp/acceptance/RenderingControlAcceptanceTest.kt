@@ -32,7 +32,7 @@ class RenderingControlAcceptanceTest {
                 repeat(2) {
                     assertEquals(buildJsonObject { put("dispatch", "completed") },
                         client.tool("set_rendering", buildJsonObject { put("enabled", false) }).toolValue())
-                    val capture = withTimeout(30_000) { client.tool("screenshot") }
+                    val capture = withTimeout(30_000) { client.tool("screenshot", buildJsonObject { put("format", "png") }) }
                     assertTrue(capture.getValue("isError").jsonPrimitive.boolean)
                     assertEquals("Screenshot unavailable while rendering is suspended.",
                         capture.getValue("structuredContent").jsonObject.getValue("error").jsonPrimitive.content)
@@ -49,7 +49,7 @@ class RenderingControlAcceptanceTest {
                 }
                 client.tool("detach").toolValue()
                 client.tool("attach", buildJsonObject { put("pid", pid) }).toolValue()
-                val capture = withTimeout(30_000) { client.tool("screenshot") }
+                val capture = withTimeout(30_000) { client.tool("screenshot", buildJsonObject { put("format", "png") }) }
                 assertTrue(capture.getValue("isError").jsonPrimitive.boolean)
                 client.tool("ui_read", buildJsonObject { put("max_nodes", 32) }).toolValue()
                 repeat(2) {
@@ -57,7 +57,7 @@ class RenderingControlAcceptanceTest {
                         client.tool("set_rendering", buildJsonObject { put("enabled", true) }).toolValue())
                 }
                 repeat(2) {
-                    val response = withTimeout(30_000) { client.tool("screenshot") }
+                    val response = withTimeout(30_000) { client.tool("screenshot", buildJsonObject { put("format", "png") }) }
                     val metadata = response.toolValue()
                     assertEquals("factorio_rendered_frame", metadata.getValue("source").jsonPrimitive.content)
                     assertTrue(metadata.getValue("width").jsonPrimitive.int > 0)
@@ -79,7 +79,7 @@ class RenderingControlAcceptanceTest {
                 assertEquals(before["paused"], resumed["paused"])
                 client.tool("detach").toolValue()
                 client.tool("attach", buildJsonObject { put("pid", pid) }).toolValue()
-                withTimeout(30_000) { client.tool("screenshot") }.toolValue()
+                withTimeout(30_000) { client.tool("screenshot", buildJsonObject { put("format", "png") }) }.toolValue()
                 println("Repeated stop/resume, native screenshot rejection, UI/world reads, state and both detach/reattach states verified: $resumed")
             }
         } finally {
@@ -104,7 +104,7 @@ class RenderingControlAcceptanceTest {
                 client.tool("attach", buildJsonObject { put("pid", environment("FACTORIO_MCP_TEST_PID").toInt()) }).toolValue()
                 for (enabled in listOf(false, true, true)) {
                     client.tool("set_rendering", buildJsonObject { put("enabled", enabled) }).toolValue()
-                    val capture = withTimeout(30_000) { client.tool("screenshot") }
+                    val capture = withTimeout(30_000) { client.tool("screenshot", buildJsonObject { put("format", "png") }) }
                     assertTrue(capture.getValue("isError").jsonPrimitive.boolean)
                     assertEquals("Screenshot unavailable while rendering is suspended.",
                         capture.getValue("structuredContent").jsonObject.getValue("error").jsonPrimitive.content)

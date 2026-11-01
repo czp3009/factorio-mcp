@@ -9,6 +9,6 @@ add_library(factorio_bridge SHARED
     widget_properties.cpp world_query.cpp viewport.cpp resident_input.cpp input_events.cpp
     chat.cpp
 )
-target_link_libraries(factorio_bridge PRIVATE factorio_input_sequence ole32 windowscodecs)
+target_link_libraries(factorio_bridge PRIVATE factorio_input_sequence)
 target_compile_definitions(factorio_bridge PRIVATE FM_BUILD WIN32_LEAN_AND_MEAN NOMINMAX _ITERATOR_DEBUG_LEVEL=0)
 target_compile_options(factorio_bridge PRIVATE /O2 /EHsc /W4)

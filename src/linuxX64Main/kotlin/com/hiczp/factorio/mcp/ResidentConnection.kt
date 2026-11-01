@@ -356,12 +356,7 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
                     }
                     val width = shared.frameSize.width.toInt()
                     val height = shared.frameSize.height.toInt()
-                    require(
-                        width in 1..8192 &&
-                            height in 1..8192 &&
-                            width.toLong() * height <= 16_777_216
-                    )
-                    val bytes = width * height * 3
+                    val bytes = ImageEncoder.rgbSize(width, height)
                     require(shared.frameBytes.toLong() == bytes.toLong()) {
                         "Incomplete native screenshot"
                     }
@@ -370,10 +365,7 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
                         true,
                         result.frame.toLong(),
                         paused = result.paused,
-                        image =
-                            PngEncoder.encode(width, height, shared.framePixels.readBytes(bytes)),
-                        imageWidth = width,
-                        imageHeight = height,
+                        image = RgbImage(width, height, shared.framePixels.readBytes(bytes)),
                     )
                 },
             )

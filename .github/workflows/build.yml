@@ -117,6 +117,10 @@ jobs:
           ./gradlew.bat --no-daemon --console=plain build "verifyNpm${target}Package"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Install Linux image development library
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libpng-dev libturbojpeg0-dev pkg-config
+
       - name: Build and test on Linux or macOS
         if: runner.os != 'Windows'
         shell: bash
