@@ -4,6 +4,7 @@ import io.ktor.server.cio.*
 import io.ktor.server.engine.*
 import io.modelcontextprotocol.kotlin.sdk.server.mcpStreamableHttp
 import kotlin.io.encoding.Base64
+import kotlin.math.abs
 import kotlin.test.*
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -14,7 +15,7 @@ class ScreenshotToolTest {
     fun returnsSelectedEncodingAndDimensionsAndRejectsInvalidArgumentsBeforeCapture() = runBlocking {
         withTimeout(30_000) {
             var captures = 0
-            val source = RgbImage(7, 5, ByteArray(105) { 90 })
+            val source = RgbImage(7, 5, ByteArray(105) { ((it / 3 * 73) % 256).toByte() })
             val game = GameSession {
                 object : GameConnection {
                     override suspend fun execute(operation: Int, limit: Int, action: UiAction?): GameSnapshot {
@@ -43,23 +44,37 @@ class ScreenshotToolTest {
                 val properties = tools.single {
                     it.jsonObject.getValue("name").jsonPrimitive.content == "screenshot"
                 }.jsonObject.getValue("inputSchema").jsonObject.getValue("properties").jsonObject
-                assertEquals(setOf("action", "format", "max_height"), properties.keys)
+                assertEquals(setOf("action", "format", "max_height", "quality"), properties.keys)
                 assertEquals("jpg", properties.getValue("format").jsonObject.getValue("default").jsonPrimitive.content)
+                val qualitySchema = properties.getValue("quality").jsonObject
+                assertEquals("integer", qualitySchema.getValue("type").jsonPrimitive.content)
+                assertEquals(1, qualitySchema.getValue("minimum").jsonPrimitive.int)
+                assertEquals(100, qualitySchema.getValue("maximum").jsonPrimitive.int)
+                assertEquals(85, qualitySchema.getValue("default").jsonPrimitive.int)
                 connected.tool("attach", buildJsonObject { put("pid", 12) }).toolValue()
                 for (invalid in listOf(
                     """{"format":"jpeg"}""", """{"format":null}""", """{"format":1}""",
                     """{"max_height":0}""", """{"max_height":-1}""", """{"max_height":1.5}""",
                     """{"max_height":"720"}""", """{"max_height":null}""", """{"max_height":2147483648}""",
-                    """{"quality":85}""", """{"region":{}}""",
+                    """{"quality":0}""", """{"quality":-1}""", """{"quality":101}""",
+                    """{"quality":1.5}""", """{"quality":"85"}""", """{"quality":null}""",
+                    """{"quality":true}""", """{"quality":2147483648}""", """{"quality":{}}""",
+                    """{"format":"png","quality":85}""", """{"region":{}}""",
                     """{"action":"cancel","format":"png"}""", """{"action":"cancel","max_height":720}""",
+                    """{"action":"cancel","quality":85}""",
                 )) {
                     assertTrue(connected.tool("screenshot", Json.parseToJsonElement(invalid).jsonObject)
                         .getValue("isError").jsonPrimitive.boolean, invalid)
                 }
                 assertEquals(0, captures)
+                val qualityErrors = mutableMapOf<Int, Long>()
                 for ((arguments, dimensions) in listOf(
                     "{}" to (7 to 5),
                     """{"max_height":3}""" to (4 to 3),
+                    """{"quality":1}""" to (7 to 5),
+                    """{"quality":85}""" to (7 to 5),
+                    """{"format":"jpg","quality":100}""" to (7 to 5),
+                    """{"quality":50,"max_height":3}""" to (4 to 3),
                     """{"format":"png","max_height":3}""" to (4 to 3),
                     """{"format":"png","max_height":2147483647}""" to (7 to 5),
                 )) {
@@ -69,6 +84,12 @@ class ScreenshotToolTest {
                     val metadata = result.toolValue()
                     assertEquals(metadata, result.getValue("structuredContent"))
                     assertEquals(format, metadata.getValue("format").jsonPrimitive.content)
+                    if (format == "jpg") {
+                        assertEquals(args["quality"]?.jsonPrimitive?.int ?: 85,
+                            metadata.getValue("quality").jsonPrimitive.int)
+                    } else {
+                        assertFalse("quality" in metadata)
+                    }
                     assertEquals(7, metadata.getValue("source_width").jsonPrimitive.int)
                     assertEquals(5, metadata.getValue("source_height").jsonPrimitive.int)
                     assertEquals(dimensions.first, metadata.getValue("width").jsonPrimitive.int)
@@ -81,8 +102,14 @@ class ScreenshotToolTest {
                     val decoded = decodeImage(Base64.decode(content.getValue("data").jsonPrimitive.content))
                     assertEquals(dimensions.first, decoded.width)
                     assertEquals(dimensions.second, decoded.height)
+                    if (format == "jpg" && decoded.width == source.width && decoded.height == source.height) {
+                        qualityErrors[metadata.getValue("quality").jsonPrimitive.int] = source.pixels.indices.sumOf { i ->
+                            abs((source.pixels[i].toInt() and 255) - (decoded.pixels[i].toInt() and 255)).toLong()
+                        }
+                    }
                 }
-                assertEquals(4, captures)
+                assertTrue(qualityErrors.getValue(100) < qualityErrors.getValue(1))
+                assertEquals(8, captures)
                 repeat(2) {
                     assertFalse(connected.tool("screenshot", buildJsonObject { put("action", "cancel") })
                         .toolValue().getValue("cancelled").jsonPrimitive.boolean)

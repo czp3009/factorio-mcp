@@ -22,7 +22,7 @@ import kotlin.test.*
 /** Explicit SDK endpoint/PID capture; the caller owns game and endpoint lifetimes. */
 class ScreenshotAcceptanceTest {
     @Test
-    fun capturesJpgAndHeightLimitedFrames() = runBlocking<Unit> {
+    fun capturesJpgWithQualityAndHeightLimitedFrames() = runBlocking<Unit> {
         fun environment(name: String) = checkNotNull(getenv(name)) { "Select $name explicitly" }.toKString()
         val client = McpHttpClient(environment("FACTORIO_MCP_ACCEPTANCE_URL"))
         val pid = environment("FACTORIO_MCP_TEST_PID").toInt()
@@ -34,9 +34,13 @@ class ScreenshotAcceptanceTest {
                 val cases = listOf(
                     "png-original" to buildJsonObject { put("format", "png") },
                     "jpg-default" to buildJsonObject {},
+                    "jpg-quality-1" to buildJsonObject { put("quality", 1) },
+                    "jpg-quality-85" to buildJsonObject { put("quality", 85) },
+                    "jpg-quality-100" to buildJsonObject { put("quality", 100) },
                     "jpg-720" to buildJsonObject {
                         put("format", "jpg")
                         put("max_height", 720)
+                        put("quality", 60)
                     },
                     "png-720" to buildJsonObject {
                         put("format", "png")
@@ -56,6 +60,12 @@ class ScreenshotAcceptanceTest {
                     assertEquals(maxOf(1, (sourceWidth.toDouble() * height / sourceHeight).roundToInt()), width)
                     val format = arguments["format"]?.jsonPrimitive?.content ?: "jpg"
                     assertEquals(format, metadata.getValue("format").jsonPrimitive.content)
+                    if (format == "jpg") {
+                        assertEquals(arguments["quality"]?.jsonPrimitive?.int ?: 85,
+                            metadata.getValue("quality").jsonPrimitive.int)
+                    } else {
+                        assertFalse("quality" in metadata)
+                    }
                     val content = response.getValue("content").jsonArray.single {
                         it.jsonObject["type"]?.jsonPrimitive?.content == "image"
                     }.jsonObject
@@ -67,6 +77,20 @@ class ScreenshotAcceptanceTest {
                     assertEquals(height, decoded.height)
                     SystemFileSystem.sink(Path("$prefix-$name.$format")).buffered().use { it.write(bytes) }
                     println("Screenshot $name: ${width}x$height from ${sourceWidth}x$sourceHeight, ${bytes.size} bytes; metadata=$metadata")
+                }
+                for (arguments in listOf(
+                    buildJsonObject { put("quality", 0) },
+                    buildJsonObject { put("quality", 101) },
+                    buildJsonObject {
+                        put("format", "png")
+                        put("quality", 85)
+                    },
+                    buildJsonObject {
+                        put("action", "cancel")
+                        put("quality", 85)
+                    },
+                )) {
+                    assertTrue(client.tool("screenshot", arguments).getValue("isError").jsonPrimitive.boolean)
                 }
                 client.tool("detach").toolValue()
             }

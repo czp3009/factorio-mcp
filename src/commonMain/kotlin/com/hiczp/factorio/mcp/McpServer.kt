@@ -277,7 +277,14 @@ internal fun createServer(game: GameSession): Server {
                     add("png")
                 }
                 put("default", "jpg")
-                put("description", "JPG uses fixed quality 85; PNG is lossless.")
+                put("description", "JPG uses lossy encoding; PNG is lossless.")
+            }
+            putJsonObject("quality") {
+                put("type", "integer")
+                put("minimum", 1)
+                put("maximum", 100)
+                put("default", ImageEncoder.DEFAULT_JPEG_QUALITY)
+                put("description", "JPG capture only. Higher values retain more detail and generally produce larger images. Omit to use the default.")
             }
             putJsonObject("max_height") {
                 put("type", "integer")
@@ -291,14 +298,15 @@ internal fun createServer(game: GameSession): Server {
         require(action == "capture" || action == "cancel") { "action must be capture or cancel" }
         val format = ImageFormat.parse(args["format"]?.stringArgument() ?: "jpg")
         val maxHeight = args["max_height"]?.intArgument()
+        val quality = args["quality"]?.intArgument()
         require(maxHeight == null || maxHeight > 0) { "max_height must be positive" }
         if (action == "cancel") {
-            require(args.keys.none { it == "format" || it == "max_height" }) {
-                "format and max_height apply only to capture"
+            require(args.keys.none { it == "format" || it == "max_height" || it == "quality" }) {
+                "format, max_height and quality apply only to capture"
             }
             return@register toolResult(game.cancelScreenshot())
         }
-        val (snapshot, image) = game.screenshot(format, maxHeight)
+        val (snapshot, image) = game.screenshot(format, maxHeight, quality)
         val metadata = buildJsonObject {
             put("source", "factorio_rendered_frame")
             put("scope", "game_and_ui")
@@ -309,6 +317,7 @@ internal fun createServer(game: GameSession): Server {
             put("width", image.width)
             put("height", image.height)
             put("format", image.format.argument)
+            image.quality?.let { put("quality", it) }
         }
         CallToolResult(
             structuredContent = metadata,

@@ -56,8 +56,10 @@
   duplicate them in tracked documentation. Keep agent-facing `tools/list` descriptions aligned with the implemented
   contract as well. Preserve historical evidence with its original scope; use an explicit current index instead of
   rewriting old results as if they came from the latest code. Describe the final product contract in project
-  documentation; omit per-change implementation progress and platform verification status. Keep test-run outcomes
-  and verification gaps under ignored `temp/`, while retaining build/test procedures in `development.md` and practical
+  documentation; omit per-change implementation progress and platform verification status. Present implemented
+  platforms as peers in public documentation, without reference-platform or porting-progress framing. Explain
+  platform differences where they affect setup, usage or build/test procedures. Keep test-run outcomes and
+  verification gaps under ignored `temp/`, while retaining build/test procedures in `development.md` and practical
   product limitations in user guides.
 - Keep README instructions focused on user actions and configuration. Omit automatic package/platform selection,
   client-managed MCP startup and other mechanisms that require no user action. Keep agent operating guidance in

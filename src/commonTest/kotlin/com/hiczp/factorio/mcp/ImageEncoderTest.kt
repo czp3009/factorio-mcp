@@ -94,6 +94,35 @@ class ImageEncoderTest {
     }
 
     @Test
+    fun jpegQualityControlsCompressionAndRetainsTheDefault() {
+        val samples = Random(8531).nextBytes(127 * 65)
+        val source = RgbImage(127, 65, ByteArray(samples.size * 3) { samples[it / 3] })
+        val default = ImageEncoder.encode(source, ImageFormat.JPG)
+        val explicitDefault = ImageEncoder.encode(source, ImageFormat.JPG, 85)
+        assertEquals(85, default.quality)
+        assertContentEquals(default.bytes, explicitDefault.bytes)
+        val low = ImageEncoder.encode(source, ImageFormat.JPG, 1)
+        val high = ImageEncoder.encode(source, ImageFormat.JPG, 100)
+        assertEquals(1, low.quality)
+        assertEquals(100, high.quality)
+        assertTrue(low.bytes.size < high.bytes.size)
+        fun error(image: EncodedImage): Long {
+            val decoded = decodeImage(image.bytes)
+            assertEquals(source.width, decoded.width)
+            assertEquals(source.height, decoded.height)
+            return source.pixels.indices.sumOf { i ->
+                abs((source.pixels[i].toInt() and 255) - (decoded.pixels[i].toInt() and 255)).toLong()
+            }
+        }
+        assertTrue(error(high) < error(low))
+        assertNull(ImageEncoder.encode(source, ImageFormat.PNG).quality)
+        for (quality in listOf(Int.MIN_VALUE, -1, 0, 101, Int.MAX_VALUE)) {
+            assertFailsWith<IllegalArgumentException> { ImageEncoder.encode(source, ImageFormat.JPG, quality) }
+        }
+        assertFailsWith<IllegalArgumentException> { ImageEncoder.encode(source, ImageFormat.PNG, 85) }
+    }
+
+    @Test
     fun downsamplesWholeImageWithAreaAveragesAndEncodesBothFormats() = runBlocking<Unit> {
         val source = RgbImage(4, 4, ByteArray(48) { i ->
             val pixel = i / 3

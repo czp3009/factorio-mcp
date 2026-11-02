@@ -30,6 +30,7 @@ internal data class EncodedImage(
     val width: Int,
     val height: Int,
     val format: ImageFormat,
+    val quality: Int?,
     val bytes: ByteArray,
 )
 
@@ -38,7 +39,12 @@ internal data class ScreenshotResult(val snapshot: GameSnapshot, val image: Enco
 /** Portable resizing and platform encoding outside the game's rendering callback. */
 internal object ImageEncoder {
     const val MAX_BYTES = 16 * 1024 * 1024
-    const val JPEG_QUALITY = 85
+    const val DEFAULT_JPEG_QUALITY = 85
+
+    fun validateQuality(format: ImageFormat, quality: Int?) {
+        require(quality == null || quality in 1..100) { "quality must be an integer from 1 to 100" }
+        require(quality == null || format == ImageFormat.JPG) { "quality applies only to jpg" }
+    }
 
     fun rgbSize(width: Int, height: Int): Int {
         require(width in 1..8192 && height in 1..8192 && width.toLong() * height <= 16_777_216) {
@@ -47,15 +53,19 @@ internal object ImageEncoder {
         return width * height * 3
     }
 
-    fun encode(image: RgbImage, format: ImageFormat): EncodedImage =
-        EncodedImage(
+    fun encode(image: RgbImage, format: ImageFormat, quality: Int? = null): EncodedImage {
+        validateQuality(format, quality)
+        val jpegQuality = quality ?: DEFAULT_JPEG_QUALITY
+        return EncodedImage(
             image.width,
             image.height,
             format,
-            PlatformImageEncoder.encode(image, format).also {
+            jpegQuality.takeIf { format == ImageFormat.JPG },
+            PlatformImageEncoder.encode(image, format, jpegQuality).also {
                 check(it.size in 1..MAX_BYTES) { "Encoded image exceeds output bound" }
             },
         )
+    }
 
     suspend fun resize(image: RgbImage, maxHeight: Int?): RgbImage {
         require(maxHeight == null || maxHeight > 0) { "max_height must be positive" }
@@ -99,5 +109,5 @@ internal object ImageEncoder {
 }
 
 internal expect object PlatformImageEncoder {
-    fun encode(image: RgbImage, format: ImageFormat): ByteArray
+    fun encode(image: RgbImage, format: ImageFormat, quality: Int): ByteArray
 }

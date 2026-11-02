@@ -51,7 +51,7 @@ Keep each executable with its adjacent library. To build one variant, use `linkR
 | `./gradlew build`            | Build product binaries and run all local automated tests.              |
 | `./gradlew check`            | Run all local automated tests, building their dependencies.            |
 | `./gradlew linuxX64Test`     | Run common and Linux Kotlin tests with automatically built fixtures.   |
-| `.\gradlew.bat mingwX64Test` | Run common and Windows Kotlin tests, including stdio and Lua fixtures. |
+| `.\gradlew.bat mingwX64Test` | Run common and Windows Kotlin tests with automatically built fixtures. |
 | `./gradlew clean build`      | Rebuild and test from a clean output directory.                        |
 
 Stop MCP before rebuilding its executable. Close any game that has loaded a resident library you intend to replace, and
@@ -69,20 +69,19 @@ Use a fresh native build directory when changing the compiler or SDK installatio
 The shared native input timeline and its fixtures live in `src/nativeMain/native/` and `src/nativeTest/native/`.
 Both platform CTest suites exercise inclusive tick progression, overlapping holds, repeated callbacks, mouse motion,
 point dwell, world projection, cancellation and retained release ownership after dispatch failures without a game.
-These fixtures do not establish platform event routing
-or real-game effects; those require explicit acceptance tests.
+Run real-game acceptance separately to check event routing and game effects.
 
 ### Platform boundaries
 
-The intended targets are Windows x64 (`mingwX64`), Linux x64 (`linuxX64`) and macOS ARM64 (`macosArm64`).
+The supported targets are Linux x64 (`linuxX64`) and Windows x64 (`mingwX64`).
 Implemented targets remain registered on every host. Compilation keeps its normal dependencies, but final linking
 runs only when the target OS and architecture match the host; foreign link tasks are skipped. KMP retains its default
 host checks for test execution. `linuxX64` and `mingwX64` use standard named target blocks and the default hierarchy.
 Their cinterop definitions live beside the corresponding platform sources and are selected
-explicitly. Both implement the portable tool contract. A build target alone does not establish real-game acceptance
-or coverage of every native widget/property; run the platform checks before declaring a new port supported.
+explicitly. Both implement the same portable tool contract. Run native widget/property acceptance after changing
+their accessors or dispatch paths.
 Keep current research and acceptance evidence under ignored `temp/`.
-The fixed world-query Lua scripts, argument validation, results and session lifecycle already live in `commonMain`;
+The fixed world-query Lua scripts, argument validation, results and session lifecycle live in `commonMain`;
 both platform adapters reuse those scripts.
 HTTP servers and the
 HTTP-only acceptance clients use CIO through common source sets. HTTP clients are test dependencies only. Host-only
@@ -93,12 +92,6 @@ acquire these task dependencies merely by configuring the project. `WindowsNativ
 the `windows.native.*` settings are specifically for this Windows adapter.
 Build complete packages on their target OS: each executable requires its platform's resident library.
 All target declarations remain available to the npm plugin, preserving the launcher's complete platform list.
-
-When implementing `macosArm64`, keep the standard KMP source sets, add the target's own
-cinterop/toolchain/runtime
-handling, and connect only the tests supported on the current host to `check`. Keep shared dependencies portable;
-do not reuse Windows DLL names, SDK settings or architecture constants in shared configuration. No placeholder targets
-or platform implementations are needed before those ports exist.
 
 ## Publishing
 
@@ -135,9 +128,8 @@ only if it resolves to that same commit; existing releases are never replaced. A
 concurrency group. GitHub may replace an older
 pending run when another is queued; an in-progress run is not cancelled.
 
-`.github/release-platforms.json` controls the build matrix. Windows x64 and Linux x64 are enabled; macOS ARM64
-remains disabled. This configures builds and manually requested publications; release candidates also need explicit
-real-game acceptance. Local workflow and tarball checks do not establish an actual CI run or publication.
+`.github/release-platforms.json` configures the Linux x64 and Windows x64 build matrix and manually requested
+publications. Run explicit real-game acceptance for release candidates.
 Each enabled runner executes the standard `gradlew build`, including local automated tests, and stages files from
 `build/bin/<target>/releaseExecutable/`. The Windows runner initializes its installed MSVC/Windows SDK environment;
 compilation still uses Kotlin/Native's toolchain. No Factorio installation or manual acceptance environment is needed.
@@ -224,8 +216,8 @@ resident libraries are not built on this host.
 | Tool contract    | `McpServer.kt`, `UiSchema.kt`, `InputSchema.kt`, query parsers in `commonMain` | Keep advertised descriptions, validation and tools.md consistent; reject unsupported arguments.             |
 | Lifecycle        | `GameSession.kt`, `InputTaskOwner.kt`                                          | Cooperative cleanup, one terminal result, shared detach/process-exit cleanup, retryable resource ownership. |
 | Observation      | `UiSnapshot.kt`, common world readers                                          | Typed serialization, explicit missing/truncated data, raw native meaning, bounded work.                     |
-| Windows boundary | `ResidentConnection.kt`, debug metadata/layout adapters                        | Matching PE/PDB; dynamically resolved members and virtual methods; checked process/IPC ownership.           |
 | Linux boundary   | Linux `ResidentConnection.kt`, ELF/DWARF readers and instruction analyzers     | Matching executable, bounded dynamic layout/ABI proofs, checked process/IPC ownership.                      |
+| Windows boundary | `ResidentConnection.kt`, debug metadata/layout adapters                        | Matching PE/PDB; dynamically resolved members and virtual methods; checked process/IPC ownership.           |
 | Resident         | `src/linuxX64Main/native/`, `src/mingwX64Main/native/`                         | Necessary ABI adapters and safe-point hooks only; bounded commands and nonblocking notifications.           |
 | Tests            | `src/commonTest/`, `src/nativeTest/`, platform test source sets                | Portable unit tests, platform fixtures and explicitly enabled real-game acceptance remain distinct.         |
 
@@ -235,16 +227,9 @@ resident libraries are not built on this host.
 Gradle builds their dependencies automatically. Optimized native fixtures keep assertions enabled.
 These checks do not require Factorio, an HTTP endpoint or scenario preparation.
 
-Linux input fixtures cover resident-created sealed storage, transfer of its original owner handle, rejected admission,
-owner exit and cleanup before admission. A separate-process fixture denies the resident access to the owner's proc
-descriptors while verifying that the owner can still exchange input state through resident-created storage.
-Linux stack fixtures check active-frame unwinding across libc, PLT entries and the kernel vDSO, CFA row changes,
-bounded arithmetic CFA expressions and rejected malformed rules.
-
 Installed-file checks live in `com.hiczp.factorio.mcp.offline`; real-game acceptance lives in
 `com.hiczp.factorio.mcp.acceptance`. Gradle excludes both packages from its ordinary test run.
 Run external checks explicitly from the built test executable with the exact class filter and required environment.
-An enabled target or a passing unit suite alone does not establish game support or full widget/property coverage.
 Record the selected files, artifact scope, test output and failed runs under ignored `temp/`.
 
 ### HTTP acceptance
@@ -289,8 +274,8 @@ initialization, detached status, clean protocol output and EOF shutdown.
 
 Use one isolated local server and a disposable scenario alongside the graphical client. Never use a remote server
 or overwrite an ordinary user save. Enable the official DLC on both peers for the supplied fixture's quality and
-Space Age objects. Do not operate the client concurrently with tools. Some existing Windows fixtures require
-Simplified Chinese UI text and default keyboard/mouse bindings; these are test prerequisites, not product assumptions.
+Space Age objects. Do not operate the client concurrently with tools. Use each fixture's required UI language and
+keyboard/mouse bindings.
 `TrainUiAcceptanceTest` uses `FACTORIO_MCP_TEST_UI_LANGUAGE=en` for English or `zh-CN` for Simplified Chinese
 (the default). The test selects the fixture's original text; the product does not translate it.
 UI navigation uses live widget selectors. Mouse gesture tests obtain bounds from the selected widgets and choose
@@ -342,12 +327,11 @@ rerun of tests that leave new objects or cursor state.
 
 The CIO test client permits up to four connection attempts for the native TCP-connect diagnostic with socket error
 zero, before HTTP submission. Other connection errors, response failures and cancellation remain terminal;
-submitted tool requests are never replayed. This test-only workaround does not establish the upstream error's cause.
+submitted tool requests are never replayed.
 
 | Acceptance class | Scope |
 |------------------|-------|
 | `UiActionAcceptanceTest` | Generic native widget gestures, restricted text, modifiers, offscreen options and recreation. |
-| `UiFlowAcceptanceTest` | Windows-specific native cleanup checks and broader UI property/inventory interaction coverage. |
 | `UiIconAcceptanceTest`, `UiNumberAcceptanceTest`, `UiIdentityAcceptanceTest` | Structured image references, original script GUI icon names, numbers and native item/quality values in the `ui-actions` scenario. |
 | `UiResourceAcceptanceTest` | Registered HUD icon names, stored tooltip text, lower HUD properties and native Tips and tricks navigation. Uses the `ui-actions` scenario and live widget selectors without hovering. |
 | `WorldQueryAcceptanceTest`, `RelatedWorldQueryAcceptanceTest`, `ExpandedQueryAcceptanceTest` | Direct world and related-object reads, inventories, filters, catalogs, metadata and query recovery. |
@@ -396,8 +380,9 @@ completion, and restore any test configuration afterward.
 
 `ScreenshotAcceptanceTest` is shared by both platforms. Run
 `capturesConsecutivePngFramesAndDetaches` with `FACTORIO_MCP_TEST_SCREENSHOT_PREFIX` selecting the PNG output path.
-Run `capturesJpgAndHeightLimitedFrames` with the same output prefix to verify default JPG, both resized formats,
-original dimensions and no enlargement. Run `suspendedRenderingRejectsRepeatedCapturesAndAllowsObservations` while the operator keeps rendering suspended;
+Run `capturesJpgWithQualityAndHeightLimitedFrames` with the same output prefix to verify default and explicit JPEG
+quality, both resized formats, original dimensions, no enlargement and invalid capture options.
+Run `suspendedRenderingRejectsRepeatedCapturesAndAllowsObservations` while the operator keeps rendering suspended;
 set `FACTORIO_MCP_TEST_SCREENSHOT_WORLD=1` to include a tile query in a loaded world. Both require the explicit HTTP
 endpoint and PID above. Repeat capture checks in menus, rendered paused worlds, after restoration, and with minimized
 rendering permitted by the graphics setting. Window-state control and configuration restoration belong to the test

@@ -8,7 +8,7 @@ import platform.windows.*
 import platform.posix.memset
 
 internal actual object PlatformImageEncoder {
-    actual fun encode(image: RgbImage, format: ImageFormat): ByteArray = memScoped {
+    actual fun encode(image: RgbImage, format: ImageFormat, quality: Int): ByteArray = memScoped {
         val (width, height, rgb) = image
         fun checked(status: Int, message: String) {
             check(status >= 0) { "$message (HRESULT $status)" }
@@ -74,7 +74,7 @@ internal actual object PlatformImageEncoder {
                 val value = alloc<VARIANT>()
                 VariantInit(value.ptr)
                 value.vt = VT_R4.toUShort()
-                value.fltVal = ImageEncoder.JPEG_QUALITY / 100f
+                value.fltVal = quality / 100f
                 checked(properties.pointed.lpVtbl!!.pointed.Write!!(properties, 1u, property.ptr, value.ptr),
                     "Cannot set JPEG quality")
             }

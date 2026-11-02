@@ -8,13 +8,13 @@ import kotlinx.cinterop.*
 import platform.posix.memset
 
 internal actual object PlatformImageEncoder {
-    actual fun encode(image: RgbImage, format: ImageFormat): ByteArray =
+    actual fun encode(image: RgbImage, format: ImageFormat, quality: Int): ByteArray =
         when (format) {
             ImageFormat.PNG -> encodePng(image)
-            ImageFormat.JPG -> encodeJpeg(image)
+            ImageFormat.JPG -> encodeJpeg(image, quality)
         }
 
-    private fun encodeJpeg(image: RgbImage): ByteArray = memScoped {
+    private fun encodeJpeg(image: RgbImage, quality: Int): ByteArray = memScoped {
         val encoder = checkNotNull(tjInitCompress()) { "Cannot initialize JPEG encoder" }
         val buffer = alloc<CPointerVar<UByteVar>>()
         buffer.value = null
@@ -33,7 +33,7 @@ internal actual object PlatformImageEncoder {
                         buffer.ptr,
                         size.ptr,
                         TJSAMP_420.toInt(),
-                        ImageEncoder.JPEG_QUALITY,
+                        quality,
                         0,
                     ) == 0
                 ) { "JPEG encoding failed: ${tjGetErrorStr2(encoder)?.toKString()}" }

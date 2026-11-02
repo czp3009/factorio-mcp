@@ -18,7 +18,7 @@ factorio-mcp 是一个 MCP 服务, 让 AI agent 读取 Factorio 世界数据, �
 ## 安装
 
 Linux 需要 libpng (`libpng16.so.16`) 和 libjpeg-turbo (`libturbojpeg.so.0`) 运行库. Debian/Ubuntu 可运行
-`sudo apt install libpng16-16t64 libturbojpeg0` 安装 (较早发行版的 PNG 包名为 `libpng16-16`).
+`sudo apt install libpng16-16t64 libturbojpeg0` 安装 (较早发行版的包名可能为 `libpng16-16` 和 `libturbojpeg`).
 
 先选择 **stdio** 或 **Streamable HTTP** 连接方式, 再按下方说明配置.
 两种方式均可使用 GitHub Releases 中的下载包, 或通过 npm (npx) 运行.
@@ -144,7 +144,7 @@ Windows 上应将与 `factorio.exe` 匹配的 `factorio.pdb` 保留在同一目�
 | `detach` | 断开连接并取消尚未完成的工具调用, 不关闭游戏. |
 | `ui_read` | 读取 UI 结构, 文本, 标志和受支持的控件属性值. |
 | `ui_action` | 点击控件, 替换文本或向控件发送按键. |
-| `screenshot` | 获取包含游戏画面和 UI 的 JPG 或 PNG 截图, 可限制输出高度. |
+| `screenshot` | 获取包含游戏画面和 UI 的 JPG 或 PNG 截图, 可限制输出高度并设置 JPEG 质量. |
 | `set_rendering` | 单次停止或恢复绘制; 后续窗口或系统事件可能再次改变绘制状态. |
 | `input_bindings` | 查询游戏本体及模组的 control ID 对应的当前键鼠绑定. |
 | `input` | 执行并行的键鼠时间线, 支持视口像素和世界坐标路径. |

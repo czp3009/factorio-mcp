@@ -214,14 +214,16 @@ internal class GameSession(private val open: (Int) -> GameConnection = ::GamePro
     suspend fun screenshot(
         format: ImageFormat = ImageFormat.JPG,
         maxHeight: Int? = null,
+        quality: Int? = null,
     ): ScreenshotResult = supervisorScope {
         require(maxHeight == null || maxHeight > 0) { "max_height must be positive" }
+        ImageEncoder.validateQuality(format, quality)
         val task = async(start = CoroutineStart.LAZY) {
             observe {
                 val target = attachment ?: error("Call attach before screenshot")
                 val snapshot = useConnection(target) { it.execute(6) }
                 val image = checkNotNull(snapshot.image) { "Native screenshot has no pixels" }
-                ScreenshotResult(snapshot, ImageEncoder.encode(ImageEncoder.resize(image, maxHeight), format))
+                ScreenshotResult(snapshot, ImageEncoder.encode(ImageEncoder.resize(image, maxHeight), format, quality))
             }
         }
         try {

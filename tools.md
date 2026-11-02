@@ -1265,10 +1265,13 @@ not cancel a pending screenshot; use `screenshot` with `action:"cancel"` if need
 ## Screenshots
 
 `screenshot` accepts `action: "capture"` (default) or `action: "cancel"`. Capture returns standard MCP Base64 image
-content plus the format, output `width`/`height`, original `source_width`/`source_height`, UI frame and observed game
-state. Only one capture can be pending; another capture returns a busy error.
+content plus the format, effective JPEG `quality` (JPG only), output `width`/`height`, original
+`source_width`/`source_height`, UI frame and observed game state. Only one capture can be pending; another capture
+returns a busy error.
 
-- `format`: `"jpg"` (default, JPEG quality 85) or `"png"` (lossless encoding).
+- `format`: `"jpg"` (default) or `"png"` (lossless encoding).
+- `quality`: optional integer from 1 to 100, default 85. Applies only to JPG capture; specifying it with PNG is an
+  error. Higher values retain more detail and generally produce larger images. A value of 100 is still lossy.
 - `max_height`: optional positive 32-bit integer in pixels. Taller frames are reduced proportionally using area
   resampling; width is rounded to the nearest integer, with a minimum of one pixel. Smaller frames are never enlarged.
   Omit to retain original dimensions. The full frame is preserved, without cropping, stretching or changing the game
@@ -1276,15 +1279,16 @@ state. Only one capture can be pending; another capture returns a busy error.
 
 For ordinary visual inspection, start with `{"format":"jpg","max_height":720}`. Request `{"format":"png"}` for a
 lossless original-size image. The image MIME type is `image/jpeg` or `image/png`, matching the encoded bytes.
+For example, `{"format":"jpg","max_height":720,"quality":60}` requests a smaller JPEG with more compression.
 Output pixel coordinates must be scaled by `source_width/width` and `source_height/height` to map to the original
 frame. Capture options are rejected with `action:"cancel"`.
 
 Cancel stops the active capture, waits for cooperative cleanup and returns `{"dispatch":"completed","cancelled":true}`.
 It starts no new capture and returns `cancelled:false` when no capture is pending. Explicit MCP request cancellation
 also cancels capture. After cancellation finishes, a new capture can be submitted.
-It captures Factorio's DirectX output on Windows or OpenGL output in the Linux adapter, including UI and world,
-without activating the window. It excludes desktop and Steam overlays. The source field is `factorio_rendered_frame` on
-both platforms. If the game's native condition suppresses rendering at frontend admission, capture returns
+It captures the rendered game and UI using OpenGL on Linux or DirectX on Windows, without activating the window.
+It excludes desktop and Steam overlays. The source field is `factorio_rendered_frame`.
+If the game's native condition suppresses rendering at frontend admission, capture returns
 `Screenshot unavailable while rendering is suspended.` and releases its queue reservation. Minimization alone does
 not reject capture: drawing may continue when `halt-rendering-when-minimized` is disabled. Paused worlds can be
 captured while rendering continues. A stalled frontend or graphics backend can still leave capture pending; this
