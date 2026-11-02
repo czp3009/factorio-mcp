@@ -290,9 +290,6 @@
   explicit real-game acceptance, documentation matching the implemented contracts, and local npm package contents
   and installed execution. Maintain GitHub Actions for building, testing and publishing npm packages and GitHub
   Releases on every supported platform. Distinguish local workflow validation from an actual CI run.
-- Do not trigger CI, create git commits or execute npm publication during this task, including publication to a local
-  registry. Verify package contents, installation and execution using local tarballs; validate GitHub Actions locally
-  without dispatching workflows. Report publication itself as unverified.
 - Keep automatic tests in Kotlin/Gradle and native CMake/CTest fixtures. Do not restore an external Python test runner.
   Keep native fixture assertions enabled in optimized builds as well; a successful process exit is not evidence
   for checks or test operations compiled out by `NDEBUG`.
