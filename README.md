@@ -131,8 +131,6 @@ Steam-launched client, `sudo sysctl kernel.yama.ptrace_scope=0` allows same-user
 the system-wide ptrace policy; restore its previous value when finished. See the
 [Linux kernel's Yama documentation](https://docs.kernel.org/admin-guide/LSM/Yama.html).
 
-Keep the game's debug information: the original unstripped executable on Linux, and the matching `factorio.pdb`
-beside `factorio.exe` on Windows.
 
 After updating factorio-mcp or moving its files, **restart Factorio before using MCP again**.
 
@@ -146,13 +144,13 @@ See [development instructions](https://github.com/czp3009/factorio-mcp/blob/mast
 | `status`         | Check attachment, game state and pause status.                                  |
 | `attach`         | Connect to an existing client by PID or process name.                            |
 | `detach`         | Disconnect and cancel pending tools without closing the game.                    |
-| `ui_read`        | Read UI structure, text, flags and supported control values.                     |
+| `ui_read`        | Read live UI subtrees by selector and relative depth, with native and script properties. |
 | `ui_action`      | Click a widget, replace text or press a key.                                     |
 | `screenshot`     | Get a JPG or PNG of the game and UI, with height and JPEG quality options.        |
 | `set_rendering` | Suppress or restore drawing once; window/system events may change it again. |
 | `input_bindings` | Map native/mod control IDs to current keyboard/mouse bindings.                   |
-| `input`          | Execute concurrent keyboard/mouse timelines with viewport or world motion.         |
-| `world_query`    | Inspect world objects and related properties, players, inventories and catalogs. |
+| `input`          | Combine keyboard/mouse chords and action sequences, including continuous drags with turns. |
+| `world_query`    | Read native objects, inventories and catalogs, with batched relative paths and member discovery. |
 | `world_overview` | Summarize an area by native properties or read filtered entities with selected details. |
 | `chat_read`      | Read retained local chat and notifications, with offsets and optional waiting.   |
 | `chat_send`      | Submit a plain chat message as the local player.                                 |
@@ -167,15 +165,21 @@ See [tools.md](tools.md) for arguments, examples, output semantics and cancellat
 - Action completion reports client execution, including chat submission. It does not confirm server acceptance or
   gameplay success; network latency and prediction rollback can delay or undo effects. Observe the result before
   a dependent action.
-- Query limits can be increased for bulk reads; defaults keep ordinary requests small. Incomplete data is reported;
-  see [tools.md](tools.md#query-sizes).
+- Input bindings, players, inventory kinds/slots, object member catalogs and explicit name/field selections return
+  all matches by default. Collections support caller-selected pages; spatial queries use bounded independent areas,
+  and tree values use depth limits. Incomplete data is reported, and long text supports slices. Selection and
+  truncation happen before observations leave the game process. MCP requests are limited to 16 MiB; clients may also
+  limit response sizes. See [tools.md](tools.md#query-sizes).
 - UI properties are supported selectively; custom-painted
   pixels are not reconstructed as structured controls. World reads can include hidden objects and do not reproduce
   remembered map contents. Visibility flags do not account for UI occlusion.
-- UI reads include image references, available registered icon names and already stored plain tooltip text on a
-  best-effort basis. Image contents, render layers and dynamically generated tooltips are not reconstructed.
-  Script GUI icon paths and tooltip expressions can also be read with `world_query` object inspection.
-- `input` requires a running world. Use `ui_action` for menus and paused UI. Direct widget dragging/scrolling and
+- UI reads include native image references, available icon registration names, and existing script UI attributes such
+  as SpritePaths, tags and tooltip expressions. Image widgets expose their existing image type and static sprite identity
+  when available. Original text and rich-text markers are preserved. Animation frames, simulation scripts, image layers
+  and dynamically generated tooltips are not returned; reads do not hover or invoke tooltip callbacks.
+  Native graph components expose stored series labels and samples, and achievement cards expose their retained
+  prototype and raw state. Formatted axis labels, achievement descriptions and progress remain in the UI tree.
+- Nonempty `input` timelines require a running world. Use `ui_action` for menus and paused UI. Direct widget dragging/scrolling and
   controller input are unsupported; offscreen options can be selected directly, and running-world mouse input provides
   a dragging fallback. Wheel input over UI can be unreliable.
 - Screenshots require OpenGL on Linux or DirectX on Windows and exclude desktop/Steam overlays. When the game suspends
@@ -187,3 +191,5 @@ See [tools.md](tools.md) for arguments, examples, output semantics and cancellat
   require an MCP update.
 - Chat reads cover messages retained by the local client, not a complete server log. Object inspection exposes
   supported readable properties and passive methods; it does not expose arbitrary Lua or all mod-private state.
+  Queries that can create game state, including force statistics getters and `LuaFlowStatistics` count attributes/methods,
+  are unavailable.

@@ -3,6 +3,7 @@
 package com.hiczp.factorio.mcp
 
 import com.hiczp.factorio.mcp.linuxbridge.FmLinuxObservationBuffer
+import com.hiczp.factorio.mcp.linuxbridge.FmUiMediaBuffer
 import kotlinx.cinterop.*
 
 private const val observationTransferBytes = 1024 * 1024
@@ -52,4 +53,11 @@ internal fun FmLinuxObservationBuffer.readObservationBytes(readMemory: (Long, In
         offset += length
     }
     return output
+}
+
+internal fun FmUiMediaBuffer.readObservationText(readMemory: (Long, Int) -> ByteArray): String = memScoped {
+    val buffer = alloc<FmLinuxObservationBuffer>()
+    buffer.address = address
+    buffer.size = size
+    buffer.readObservationBytes(readMemory).decodeToString()
 }

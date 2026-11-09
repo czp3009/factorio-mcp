@@ -3,6 +3,7 @@
 package com.hiczp.factorio.mcp.acceptance
 
 import com.hiczp.factorio.mcp.PeImage
+import com.hiczp.factorio.mcp.nativebridge.FmRenderingState
 import com.hiczp.factorio.mcp.nativebridge.TimedInputLayout
 import com.hiczp.factorio.mcp.processModule
 import com.hiczp.factorio.mcp.readPdbVirtualMethods
@@ -13,13 +14,19 @@ import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 import kotlin.time.TimeSource
 import kotlinx.cinterop.alloc
+import kotlinx.cinterop.ByteVar
+import kotlinx.cinterop.ULongVar
 import kotlinx.cinterop.memScoped
+import kotlinx.cinterop.ptr
+import kotlinx.cinterop.toCPointer
 import kotlinx.cinterop.toKString
+import kotlinx.cinterop.value
 import platform.posix.getenv
 import platform.windows.CloseHandle
 import platform.windows.OpenProcess
 import platform.windows.PROCESS_QUERY_INFORMATION
 import platform.windows.PROCESS_VM_READ
+import platform.windows.ReadProcessMemory
 
 /** Read-only acceptance for optional adapters against an explicitly selected local client. */
 class DebugMetadataAcceptanceTest {
@@ -103,6 +110,8 @@ class DebugMetadataAcceptanceTest {
                 "conditions" to symbols.conditions,
                 "switches" to symbols.switches,
                 "chat" to symbols.chat,
+                "rendering" to symbols.rendering,
+                "rendering_control" to symbols.renderingControl,
             )
             adapters.forEach { (name, result) ->
                 println("factorio-mcp: metadata $name: ${result.exceptionOrNull()?.message ?: "OK"}")
@@ -120,6 +129,26 @@ class DebugMetadataAcceptanceTest {
             symbols.conditions.getOrThrow()
             symbols.switches.getOrThrow()
             memScoped {
+                fun readUnsigned(address: ULong, size: ULong): ULong {
+                    val value = alloc<ULongVar>()
+                    value.value = 0u
+                    val count = alloc<ULongVar>()
+                    check(
+                        ReadProcessMemory(
+                            process, address.toLong().toCPointer<ByteVar>(), value.ptr, size, count.ptr,
+                        ) != 0 && count.value == size
+                    )
+                    return value.value
+                }
+                val presentation = alloc<FmRenderingState>()
+                symbols.rendering.getOrThrow().write(presentation)
+                val global = readUnsigned(presentation.global, 8u)
+                val minimized = readUnsigned(global + presentation.minimized, 1u)
+                val suppressed = readUnsigned(global + presentation.suppressed, 1u)
+                val settings = readUnsigned(global + presentation.settings, 8u)
+                val halt = if (settings == 0uL) null else readUnsigned(settings + presentation.halt, 1u)
+                assertTrue(minimized <= 1uL && suppressed <= 1uL && (halt == null || halt <= 1uL))
+                println("factorio-mcp presentation flags: minimized=$minimized suppressed=$suppressed halt_when_minimized=$halt")
                 val layout = alloc<TimedInputLayout>()
                 symbols.timedInput.getOrThrow().write(layout)
                 assertEquals(1u, layout.supported)

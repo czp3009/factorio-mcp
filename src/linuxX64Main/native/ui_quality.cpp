@@ -76,7 +76,8 @@ int collectQuality(uintptr_t widget, const FmLinuxQualityLayout &layout, const F
         if (!prototype)
             return 0;
         FmLinuxPrototypeValue name;
-        if (const int error = readPrototypeIdentity(prototype, true, identity, name))
+        ObservationStrings strings;
+        if (const int error = readPrototypeIdentity(prototype, true, identity, name, strings))
             return error;
         output.lookup = 1;
         output.truncated = (name.flags & 2) != 0;

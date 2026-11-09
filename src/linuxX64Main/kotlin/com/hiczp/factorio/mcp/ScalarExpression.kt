@@ -358,6 +358,7 @@ internal class ScalarExpression(
                     Operation.VECTOR_AND_NOT,
                     Operation.VECTOR_OR,
                     Operation.VECTOR_ADD_DWORDS,
+                    Operation.VECTOR_ADD_QWORDS,
                     Operation.VECTOR_EQUAL_DWORDS,
                     Operation.VECTOR_EQUAL_BYTES,
                     Operation.VECTOR_EQUAL_WORDS,

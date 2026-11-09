@@ -36,7 +36,7 @@ class ChatSnapshotTest {
     fun rejectsOversizedNativeTextBeforeReadingIt() = memScoped<Unit> {
         val text = alloc<FmObservationBuffer>()
         text.address = 1u
-        text.size = FM_OBSERVATION_TEXT_BYTES.toULong() + 1u
+        text.size = Int.MAX_VALUE.toULong() + 1uL
         assertFails { text.readObservationText { _, _ -> error("Must validate before reading") } }
     }
 }

@@ -6,7 +6,6 @@ import io.ktor.server.engine.*
 import io.ktor.util.logging.*
 import io.modelcontextprotocol.kotlin.sdk.server.Server
 import io.modelcontextprotocol.kotlin.sdk.server.StdioServerTransport
-import io.modelcontextprotocol.kotlin.sdk.server.mcpStreamableHttp
 import kotlinx.coroutines.*
 
 internal data class McpOptions(
@@ -59,7 +58,7 @@ internal suspend fun serveTransports(server: Server, options: McpOptions) = coro
                 rootConfig =
                     serverConfig(applicationEnvironment { log = HttpLogger }) {
                         parentCoroutineContext = parent
-                        module { mcpStreamableHttp { server } }
+                        module { mcpHttp(server) }
                     },
                 configure = {
                     reuseAddress = true

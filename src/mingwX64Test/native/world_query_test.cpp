@@ -135,10 +135,8 @@ int main() {
     auto queryStorage = std::make_unique<FmWorldQuery>();
     auto &query = *queryStorage;
     ObservationStorage storage;
-    strcpy_s(query.source, "return ...");
-    query.sourceSize = 10;
-    strcpy_s(query.arguments, "{}");
-    query.argumentsSize = 2;
+    query.source = {reinterpret_cast<uintptr_t>("return ..."), 10};
+    query.arguments = {reinterpret_cast<uintptr_t>("{}"), 2};
     auto result = std::make_unique<FmResult>();
     queryWorld(symbols, &game, query, *result, storage);
     assert(state.top == 0 && result->worldSize == strlen(output) &&
@@ -151,7 +149,7 @@ int main() {
         try {
             queryWorld(symbols, &game, query, *result, storage);
             return false;
-        } catch (const std::runtime_error &) {
+        } catch (const std::exception &) {
             return true;
         }
     };
@@ -184,7 +182,7 @@ int main() {
     allowStack = false;
     assert(rejected() && state.top == 0);
     allowStack = true;
-    query.sourceSize = FM_MAX_LUA_SOURCE;
+    query.source.size = uint64_t(INT32_MAX) + 1;
     assert(rejected());
     return 0;
 }

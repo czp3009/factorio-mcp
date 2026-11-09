@@ -7,4 +7,8 @@ std::vector<int> selectWidgets(FmResult &result, ObservationStorage &storage, co
                                const volatile LONG *cancel = nullptr);
 
 // Expands explicit matches to their subtrees without interpreting widget properties.
-std::vector<int> observationWidgets(const FmResult &result, const ObservationStorage &storage, bool filtered);
+std::vector<int> observationWidgets(const FmResult &result, const ObservationStorage &storage, bool filtered,
+                                    bool collection = false, int maxDepth = INT32_MAX);
+
+void retainObservedWidgets(FmResult &result, ObservationStorage &storage, const std::vector<int> &observed,
+                          uint32_t fields);

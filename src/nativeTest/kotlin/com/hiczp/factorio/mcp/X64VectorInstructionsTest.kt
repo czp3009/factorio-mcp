@@ -13,6 +13,19 @@ class X64VectorInstructionsTest {
     ).all().single()
 
     @Test
+    fun decodesPackedQuadwordAdditionWithoutInventingScalarEffects() {
+        val registers = decode("66 45 0f d4 c1")
+        assertEquals(Operation.VECTOR_ADD_QWORDS, registers.operation)
+        assertEquals(Register(24, 16), registers.destination)
+        assertEquals(Register(25, 16), registers.source)
+        val memory = decode("66 0f d4 05 20 00 00 00")
+        assertEquals(Memory(null, null, 1, 32, 16, true), memory.source)
+        assertEquals(8, memory.size)
+        for (bytes in listOf("0f d4 c1", "f3 0f d4 c1", "66 48 0f d4 c1", "66 0f d4"))
+            assertFails(bytes) { decode(bytes) }
+    }
+
+    @Test
     fun decodesEquivalentIntegerAndDoubleHighQuadwordInterleaving() {
         for (operands in listOf("c1", "47 20", "84 ca 80 00 00 00")) {
             val integer = decode("66 0f 6d $operands")

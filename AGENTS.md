@@ -63,7 +63,9 @@
   product limitations in user guides.
 - Keep README instructions focused on user actions and configuration. Omit automatic package/platform selection,
   client-managed MCP startup and other mechanisms that require no user action. Keep agent operating guidance in
-  server instructions and tool documentation rather than repeating it in installation instructions.
+  server instructions and tool documentation rather than repeating it in installation instructions. Do not ask users
+  to preserve or prepare files that already ship with an unmodified game client, including debug information and
+  bundled API documentation; report missing or incompatible files through runtime diagnostics.
 - For platform-specific user-facing configuration and command examples, show Linux paths and shell syntax first,
   followed by Windows/PowerShell differences. Do not label or duplicate platform-independent examples by operating
   system. This example ordering does not imply support for unimplemented platforms.
@@ -134,14 +136,36 @@
   and release behavior is verified. Reacquire their current targets at each safe point and validate the current root
   and tree; an address reused by a new widget must not revive a destroyed target. Retain these records on cleanup
   failure and release them before successful detach.
-- Let callers choose query result counts through positive `limit`/`max_nodes` values, with modest defaults and
-  recommendations rather than fixed business-level maxima. Do not retain hidden scan or projection budgets that
+- Prefer complete default reads for small loaded registries and member catalogs, retaining optional filters and
+  pages when useful. A finite type does not by itself establish a small practical collection. Let callers choose
+  larger query result counts through positive `limit` values, with modest defaults for potentially large
+  collections and recommendations rather than fixed business-level maxima. Use pages or bounded UI subtrees where
+  their source structure supports continuation. Do not retain hidden scan or projection budgets that
   defeat a larger requested result. Preserve integer, memory, identity and lifetime validation. Prefer chunked
   transfer of owned observation copies; where fixed storage remains necessary, use a practical larger capacity and
   report exhaustion explicitly. Keep each observation in its existing safe point, without cross-tick collection.
   Use pagination only where native indices, ordering or existing continuation positions support it.
-- Bound snapshots by the request and report truncation. IDs are snapshot-local. Preserve unknown types and unsupported
+- Keep world spatial selections as independent count-bounded observations, without result cursors. Exact single
+  objects and inspect values do not accept collection counts or offsets. Return explicit field/name selections in
+  full by default; reserve paging for actual collections, member catalogs and string slices. Resolve paths before
+  depth-limited value projection. Apply one plain-table depth/cycle policy, preserve shared branches and empty
+  boundary leaves, and distinguish native references from omitted children. Report spatial selection completeness
+  independently of nested omission and collection continuation. Observe ordinary tables through stored keys/values;
+  do not classify them by an `object_name` data field or invoke their indexing, iteration or length metamethods.
+- Bound snapshots by the request and report truncation. Generated UI node IDs and opaque image references are
+  snapshot-local; native game identifiers retain their original scopes. Preserve unknown types and unsupported
   properties instead of inventing semantic state, visibility or action capabilities.
+- Apply observation selection and truncation inside the resident game process, before IPC transfer to MCP. Do not
+  transfer complete observations merely to apply count, depth, field or text-slice limits in the MCP process.
+  MCP-side selection is permitted when required by stateful semantics or another concrete constraint; document
+  that reason and keep the transferred observation as narrow as those semantics allow.
+- Keep UI reads stateless: resolve selectors against the current root on every call, without reusable snapshot
+  handles or generated cross-call locators. Return independent parent-first subtrees with each selected root at
+  depth 0; no selector means the actual UI root. Bound tree expansion by relative depth rather than a node-list
+  prefix. Mark omitted children only when real children exist at the boundary; an actual leaf has no truncation
+  marker. Keep field projection optional. Detect cycles through identities on the active ancestry path, without
+  deduplicating shared branches. Use iterative native traversal and a high hard depth fallback; reaching that
+  fallback behaves like an explicit depth request and does not cause a depth-exceeded error.
 - Preserve human-readable game text in its original language and form. Do not translate, interpret or rewrite it
   for the agent; preserve opaque values when reading and passing them back. Format encoding, bounded reads and
   reported truncation remain necessary. Use stable IDs and structured values for programmatic behavior rather than
@@ -163,10 +187,19 @@
   deriving gameplay conclusions or replacing native values with inferred defaults. Expose each widget's own flags
   without propagating ancestor state, computing effective visibility,
   inventing semantic roles or dropping containers by type. Agents interpret the returned data and parent relationships.
+- Develop observation coverage through API-metadata-driven reads plus generic native data inspection. Prefer shared
+  readers for documented Lua objects and ordinary stored native values, containers and references over growing
+  catalogs of gameplay or widget-specific interpretations. Native inspection still requires validated layouts,
+  ownership and safe-point execution; it must not invoke arbitrary getters, formatters or callbacks. Where the API
+  omits useful retained UI data, small component adapters may expose those original values through the shared
+  observation contract. Use their findings to improve reusable native codecs without promising unrestricted
+  reflection or treating every native field as safe or useful to expose.
 - Keep UI observations focused on structured contents, native state and game-provided image identifiers or references.
   Prefer logical icon identifiers such as `item/iron-plate` or `utility/close` when the game retains them; never infer
   them from filenames or pixels. Do not reconstruct rendering, expand image layers or process image contents for
-  ordinary tools. Use `screenshot` as an optional fallback for missing visual information. Reassess and simplify
+  ordinary tools. For animated or dynamic UI media, return directly retained identifying metadata only; do not
+  expand frames or return associated initialization/update scripts. Omit identities that require costly inference.
+  Use `screenshot` as an optional fallback for missing visual information. Reassess and simplify
   excessive existing Windows behavior together with the portable contract and other platforms. Delete obsolete
   functions, classes, tests and layers rather than preserving compatibility scaffolding or unused abstractions.
   Apply this principle to every tool: simplify MCP-owned processing and presentation, while preserving the game's
@@ -204,6 +237,9 @@
   widget. Widget-level mouse-up alone does not prove GUI bookkeeping was cleared. Revalidate lifetimes after callbacks.
   For selected observations, resolve the selector before collecting bounded optional properties so unrelated widgets
   cannot consume the selected subtree's resource budget. Keep both phases within the same safe point.
+  Apply UI field selection before optional native capture. Structure-only reads preserve identity, hierarchy and
+  own flags without collecting optional text, options, tooltips or script properties; selectors may still read
+  their required predicates. Keep field paths generic and aligned with the returned native/script structure.
 - Keep queues, lifecycle and cancellation policy in Kotlin. The resident stays small and nonblocking, with fixed
   command ownership and request-sized observation storage. Owned result copies may survive their safe point for
   chunked transfer; borrowed game objects may not. Retire these copies before the next command or successful detach.
@@ -293,6 +329,11 @@
 - Keep automatic tests in Kotlin/Gradle and native CMake/CTest fixtures. Do not restore an external Python test runner.
   Keep native fixture assertions enabled in optimized builds as well; a successful process exit is not evidence
   for checks or test operations compiled out by `NDEBUG`.
+- Unit and automated acceptance tests must not depend on third-party mods installed in the client. Use the
+  unmodified game with its DLC and isolated project-owned fixtures. Validate complex mod UI workflows, including
+  Factory Planner, separately through manual agent-operated acceptance; retain that evidence under ignored `temp/`.
+  Verify the active mod set in the client's main-menu Mods UI and retain startup logs. `mod-list.json` can lag
+  behind the running client until normal exit; its contents alone do not establish which mods are loaded.
 - Use standard Gradle/KMP tasks (`assemble`, `build`, `check`, `mingwX64Test`, `linuxX64Test`) for building and local
   automated testing,
   without manual fixture preparation or a running game. Build test dependencies automatically. Keep checks requiring
@@ -311,6 +352,8 @@
   World tests may create dedicated single-player saves directly in the game, including its normal save directory,
   or use the one isolated local server. Never overwrite or modify the user's existing saves for testing. Use new test
   saves or disposable copies; new in-game test saves do not need to be confined to `temp/`.
+  When sharing the user's write directory, back up configuration and disable client autosaves before launch,
+  or isolate that directory. Rotating autosave slots are existing saves too. Restore configuration after exit.
   For long-running world acceptance, prefer dedicated peaceful saves with enemy-base generation disabled when
   combat is not under test, so hostile attacks do not interrupt unrelated checks.
 - Separate native fixture, unit, real-game and multiplayer claims. Passing tool-count coverage does not establish full
@@ -331,4 +374,7 @@
   through normal game UI; extra launch options can cause Steam to require unattended user confirmation.
 - For writable paths, validate authoritative local-server effects and force a full CRC. Read-only-looking Lua APIs
   can still mutate serialized state; synthetic `LuaInventory.can_insert` and client-only translation requests previously
-  caused desynchronization and must not be reused as passive queries.
+  caused desynchronization and must not be reused as passive queries. Force statistics getters can lazily create
+  serialized statistics and are not passive merely because their names start with `get_`. Existing statistics
+  wrappers can also allocate serialized counters when their documented readable count attributes or methods are
+  accessed; observing a wrapper reference does not establish that its data reads are passive.

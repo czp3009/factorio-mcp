@@ -4,6 +4,7 @@ package com.hiczp.factorio.mcp.acceptance
 
 import com.hiczp.factorio.mcp.McpHttpClient
 import com.hiczp.factorio.mcp.toolValue
+import com.hiczp.factorio.mcp.uiSelector
 import kotlinx.cinterop.toKString
 import kotlinx.coroutines.*
 import kotlinx.io.buffered
@@ -34,6 +35,7 @@ class UiIdentityAcceptanceTest {
             suspend fun toggle() = client.tool("ui_action", buildJsonObject {
                 put("action", "press_key")
                 put("key", checkNotNull(key))
+                if (!opened) put("selector", uiSelector("MCP top tool", "agui::TextButton"))
             }).toolValue()
             try {
                 client.initialize()
@@ -44,8 +46,15 @@ class UiIdentityAcceptanceTest {
                 key = (control["effective_bindings"] ?: control.getValue("bindings")).jsonArray.map { it.jsonObject }
                     .first { it["type"]?.jsonPrimitive?.content == "Keyboard" && it.getValue("modifiers").jsonArray.isEmpty() }
                     .getValue("name").jsonPrimitive.content
+                client.tool("ui_action", buildJsonObject {
+                    put("action", "click")
+                    put("selector", uiSelector("MCP top tool", "agui::TextButton"))
+                }).toolValue()
                 toggle()
-                suspend fun slots() = client.tool("ui_read").toolValue().getValue("nodes").jsonArray.map { it.jsonObject }
+                opened = true
+                suspend fun slots() = client.tool("ui_read", buildJsonObject {
+                    put("selector", uiSelector(null, "InventoryGui"))
+                }).toolValue().getValue("nodes").jsonArray.map { it.jsonObject }
                     .filter { it["type"]?.jsonPrimitive?.content == "InventoryGuiSlot" }
                     .mapNotNull { it["properties"] as? JsonObject }
                 var properties = slots()
@@ -53,7 +62,6 @@ class UiIdentityAcceptanceTest {
                     delay(100)
                     properties = slots()
                 }
-                opened = true
                 fun matching(name: String) = properties.filter {
                     it["prototype"]?.jsonObject?.get("name")?.jsonPrimitive?.content == name
                 }
@@ -88,7 +96,15 @@ class UiIdentityAcceptanceTest {
                 assertFalse(read(clientLog).contains("desynchron", true))
             } finally {
                 withContext(NonCancellable) {
-                    try { if (opened) toggle() } finally { client.close() }
+                    try {
+                        if (opened) toggle()
+                    } finally {
+                        try {
+                            client.tool("detach").toolValue()
+                        } finally {
+                            client.close()
+                        }
+                    }
                 }
             }
         }

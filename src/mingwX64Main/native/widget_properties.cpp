@@ -81,39 +81,76 @@ void IconReferences::collect(void *widget, FmNode &node, ObservationStorage *sto
     node.iconNormal = observe(read<const void *>(receiver, layout.normal));
     node.iconHovered = observe(read<const void *>(receiver, layout.hovered));
     node.iconDisabled = observe(read<const void *>(receiver, layout.disabled));
-    const auto &nameLayout = symbols.iconNames;
-    if (!nameLayout.lookup || !storage)
-        return;
-    const auto *global = *reinterpret_cast<const void **>(symbols.address[Global]);
-    const auto *registry = global ? read<const void *>(global, nameLayout.registry) : nullptr;
-    if (!registry)
-        return;
     const uint32_t offsets[] = {layout.normal, layout.hovered, layout.disabled};
     for (size_t i = 0; i < 3; ++i) {
         const auto *sprite = read<const void *>(receiver, offsets[i]);
-        if (!sprite)
-            continue;
-        auto found = names.find(sprite);
-        if (found == names.end()) {
-            require(nameLayout.stringSize && nameLayout.stringSize <= 256, "Invalid sprite-name storage");
-            alignas(16) unsigned char result[256]{};
-            reinterpret_cast<void (*)(const void *, void *, const void *)>(nameLayout.lookup)(registry, result, sprite);
-            auto destroy = reinterpret_cast<void (*)(void *)>(symbols.address[StringDestroy]);
-            std::pair<FmObservationBuffer, bool> copied{};
-            try {
-                auto size = reinterpret_cast<size_t (*)(const void *)>(symbols.address[StringSize])(result);
-                auto *data = reinterpret_cast<const char *(*)(const void *)>(symbols.address[StringData])(result);
-                copied.first = storage->copyText(data, size, copied.second);
-            } catch (...) {
-                destroy(result);
-                throw;
-            }
-            destroy(result);
-            found = names.emplace(sprite, copied).first;
-        }
-        node.iconNames[i] = found->second.first;
-        if (found->second.second)
+        const auto copied = name(sprite, storage);
+        node.iconNames[i] = copied.first;
+        if (copied.second)
             node.iconNameTruncated |= 1u << i;
+    }
+}
+
+std::pair<FmObservationBuffer, bool> IconReferences::name(const void *sprite, ObservationStorage *storage) {
+    const auto &layout = symbols.iconNames;
+    if (!sprite || !layout.lookup || !storage)
+        return {};
+    if (const auto found = names.find(sprite); found != names.end())
+        return found->second;
+    const auto *global = *reinterpret_cast<const void **>(symbols.address[Global]);
+    const auto *registry = global ? read<const void *>(global, layout.registry) : nullptr;
+    if (!registry)
+        return {};
+    require(layout.stringSize && layout.stringSize <= 256, "Invalid sprite-name storage");
+    alignas(16) unsigned char result[256]{};
+    reinterpret_cast<void (*)(const void *, void *, const void *)>(layout.lookup)(registry, result, sprite);
+    auto destroy = reinterpret_cast<void (*)(void *)>(symbols.address[StringDestroy]);
+    std::pair<FmObservationBuffer, bool> copied{};
+    try {
+        auto size = reinterpret_cast<size_t (*)(const void *)>(symbols.address[StringSize])(result);
+        auto *data = reinterpret_cast<const char *(*)(const void *)>(symbols.address[StringData])(result);
+        copied.first = storage->copyText(data, size, copied.second);
+    } catch (...) {
+        destroy(result);
+        throw;
+    }
+    destroy(result);
+    names.emplace(sprite, copied);
+    return copied;
+}
+
+void IconReferences::collectImage(void *widget, FmNode &node, ObservationStorage &storage) {
+    const auto &layout = symbols.images;
+    require(validUiImageLayout(layout), "Invalid image metadata layout");
+    if (!layout.supported)
+        return;
+    auto cast = [&](void *object, uint64_t source, uint64_t target) {
+        return reinterpret_cast<void *(*)(void *, long, void *, void *, int)>(symbols.address[DynamicCast])(
+            object, 0, reinterpret_cast<void *>(source), reinterpret_cast<void *>(target), 0);
+    };
+    auto *receiver = cast(widget, symbols.address[WidgetType], layout.type);
+    if (!receiver)
+        return;
+    node.properties |= 32768;
+    auto &output = node.image;
+    output.status = 1;
+    auto *image = read<void *>(receiver, layout.image);
+    if (!image)
+        return;
+    output.status = 2;
+    const auto *type = reinterpret_cast<const void *(*)(const void *)>(symbols.address[TypeId])(image);
+    const auto *typeName = reinterpret_cast<const char *(*)(const void *)>(symbols.address[TypeName])(type);
+    bool truncated = false;
+    const auto copiedType = storage.copyText(typeName, strlen(typeName), truncated);
+    output.type = {copiedType.address, copiedType.size};
+    if (const auto *plain = cast(image, layout.imageType, layout.staticType)) {
+        // Observe the stored static sprite, never an animation's selected frame.
+        const auto *sprite = read<const void *>(plain, layout.sprite);
+        output.spriteObserved = 1;
+        output.reference = observe(sprite);
+        const auto copiedName = name(sprite, &storage);
+        output.name = {copiedName.first.address, copiedName.first.size};
+        output.nameTruncated = copiedName.second;
     }
 }
 
@@ -128,7 +165,7 @@ void collectVisibility(const Symbols &symbols, void *widget, FmNode &node) {
     node.hiddenBySearch = (flags & layout.hiddenBySearch) != 0;
 }
 
-void collectElement(const Symbols &symbols, void *widget, FmNode &node) {
+void collectElement(const Symbols &symbols, void *widget, FmNode &node, ObservationStorage &storage) {
     const auto &layout = symbols.elements;
     if (!layout.supported)
         return;
@@ -165,15 +202,8 @@ void collectElement(const Symbols &symbols, void *widget, FmNode &node) {
     node.itemHealth = read<float>(item, layout.health);
     const auto *type = reinterpret_cast<const void *(*)(const void *)>(symbols.address[TypeId])(item);
     const char *name = reinterpret_cast<const char *(*)(const void *)>(symbols.address[TypeName])(type);
-    size_t length = strlen(name);
-    size_t count = std::min(length, sizeof(node.itemType) - 1);
-    if (count < length) {
-        node.elementFlags |= 32;
-        while (count && (static_cast<unsigned char>(name[count]) & 0xc0) == 0x80)
-            --count;
-    }
-    memcpy(node.itemType, name, count);
-    node.itemType[count] = 0;
+    bool truncated = false;
+    node.itemType = storage.copyText(name, strlen(name), truncated);
     if (auto *tool = cast(item, layout.itemType, layout.toolType)) {
         node.elementFlags |= 8;
         node.durabilityLeft = read<double>(tool, layout.durability);
@@ -196,6 +226,44 @@ void collectProgress(const Symbols &symbols, void *widget, FmNode &node) {
     node.progressValue = read<double>(receiver, layout.value);
     node.progressDirection = read<uint8_t>(receiver, layout.direction);
     node.progressHasText = read<uint8_t>(receiver, layout.hasText);
+}
+
+void collectAchievement(const Symbols &symbols, void *widget, FmNode &node) {
+    const auto &layout = symbols.achievement;
+    require(fm::validAchievementLayout(layout), "Invalid achievement card layout");
+    if (!layout.supported) return;
+    auto *receiver = reinterpret_cast<void *(*)(void *, long, void *, void *, int)>(symbols.address[DynamicCast])(
+        widget, 0, reinterpret_cast<void *>(symbols.address[WidgetType]), reinterpret_cast<void *>(layout.type), 0);
+    if (!receiver) return;
+    node.achievement.available = 1;
+    node.achievement.state = read<int32_t>(receiver, layout.state);
+    node.achievement.shownState = read<int32_t>(receiver, layout.shownState);
+    node.achievement.inSidebar = read<uint8_t>(receiver, layout.inSidebar);
+    require(node.achievement.inSidebar <= 1, "Invalid achievement sidebar flag");
+}
+
+void collectGraph(const Symbols &symbols, void *widget, FmNode &node, ObservationStorage &storage,
+                  const FmUiGraphRequest &request, const volatile LONG *cancel) {
+    const auto &layout = symbols.graph;
+    require(fm::validGraphLayout(layout), "Invalid graph metadata layout");
+    if (!layout.supported)
+        return;
+    auto *receiver = reinterpret_cast<void *(*)(void *, long, void *, void *, int)>(symbols.address[DynamicCast])(
+        widget, 0, reinterpret_cast<void *>(symbols.address[WidgetType]), reinterpret_cast<void *>(layout.type), 0);
+    if (!receiver)
+        return;
+    auto string = [&](uintptr_t at) {
+        const auto *object = reinterpret_cast<const void *>(at);
+        const auto size = reinterpret_cast<size_t (*)(const void *)>(symbols.address[StringSize])(object);
+        require(size <= INT32_MAX, "Graph text exceeds byte-array representation");
+        const auto *data = reinterpret_cast<const char *(*)(const void *)>(symbols.address[StringData])(object);
+        return std::string(data, size);
+    };
+    node.graph = storage.graphs.emplace_back().collect(reinterpret_cast<uintptr_t>(receiver), layout, request,
+        [](uintptr_t at, void *out, size_t count) {
+            SIZE_T read = 0;
+            return ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void *>(at), out, count, &read) && read == count;
+        }, string, [&] { require(!cancel || !*cancel, "Tool cancelled during graph observation"); });
 }
 
 void collectNumber(const Symbols &symbols, void *widget, FmNode &node) {
@@ -292,9 +360,42 @@ void collectQualityCondition(const Symbols &symbols, void *widget, FmNode &node)
     node.properties |= 4096;
 }
 
-void collectSlotIdentity(const Symbols &symbols, void *widget, FmNode &node) {
+void collectSlotIdentity(const Symbols &symbols, void *widget, FmNode &node, ObservationStorage &storage,
+                         uint32_t fields) {
+    if (fields & FM_UI_PROTOTYPE) {
+        const FmUiStoredPrototypeLayout *layouts[] = {&symbols.connectionPrototype, &symbols.achievementPrototype};
+        for (const auto *stored : layouts) {
+            require(fm::validStoredPrototypeLayout(*stored), "Invalid stored UI prototype layout");
+            if (!stored->supported || (node.properties & 32u)) continue;
+            auto *receiver = reinterpret_cast<void *(*)(void *, long, void *, void *, int)>(symbols.address[DynamicCast])(
+                widget, 0, reinterpret_cast<void *>(symbols.address[WidgetType]), reinterpret_cast<void *>(stored->type), 0);
+            if (!receiver) continue;
+            const auto prototype = fm::storedPrototype(reinterpret_cast<uintptr_t>(receiver), *stored,
+                [](uintptr_t at, void *out, size_t size) {
+                    SIZE_T copied = 0;
+                    return ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void *>(at), out, size, &copied) && copied == size;
+                });
+            node.properties |= 32u;
+            if (!prototype) continue;
+            const auto *name = reinterpret_cast<const void *>(prototype + stored->name);
+            const auto size = reinterpret_cast<size_t (*)(const void *)>(symbols.address[StringSize])(name);
+            const auto *data = reinterpret_cast<const char *(*)(const void *)>(symbols.address[StringData])(name);
+            require(size <= 65536 && !memchr(data, 0, size), "Invalid stored UI prototype name");
+            size_t count = std::min(size, sizeof(node.prototypeName) - 1);
+            if (count < size) {
+                node.identityTruncated |= 1u;
+                while (count && (static_cast<unsigned char>(data[count]) & 0xc0) == 0x80) --count;
+            }
+            memcpy(node.prototypeName, data, count);
+            node.prototypeName[count] = 0;
+            const auto *type = reinterpret_cast<const void *(*)(const void *)>(symbols.address[TypeId])(reinterpret_cast<const void *>(prototype));
+            const auto *typeName = reinterpret_cast<const char *(*)(const void *)>(symbols.address[TypeName])(type);
+            bool truncated = false;
+            node.prototypeType = storage.copyText(typeName, strlen(typeName), truncated);
+        }
+    }
     const auto &layout = symbols.slots;
-    if (!layout.supported)
+    if (!layout.supported || !(fields & (FM_UI_PROTOTYPE | FM_UI_QUALITY)))
         return;
     auto *receiver = reinterpret_cast<void *(*)(void *, long, void *, void *, int)>(symbols.address[DynamicCast])(
         widget, 0, reinterpret_cast<void *>(symbols.address[WidgetType]), reinterpret_cast<void *>(layout.type), 0);
@@ -319,7 +420,7 @@ void collectSlotIdentity(const Symbols &symbols, void *widget, FmNode &node) {
         out[count] = 0;
     };
     auto observe = [&](const unsigned char *prototype, unsigned nameOffset, char *nameOut, size_t nameCapacity,
-                       char *typeOut, size_t typeCapacity, unsigned flag) {
+                       FmObservationBuffer &typeOut, unsigned flag) {
         if (!prototype)
             return;
         const void *name = prototype + nameOffset;
@@ -328,17 +429,21 @@ void collectSlotIdentity(const Symbols &symbols, void *widget, FmNode &node) {
         copy(data, size, nameOut, nameCapacity, flag);
         const void *type = reinterpret_cast<const void *(*)(const void *)>(symbols.address[TypeId])(prototype);
         const char *typeName = reinterpret_cast<const char *(*)(const void *)>(symbols.address[TypeName])(type);
-        copy(typeName, strlen(typeName), typeOut, typeCapacity, flag << 1);
+        bool truncated = false;
+        typeOut = storage.copyText(typeName, strlen(typeName), truncated);
     };
-    node.properties |= 32 | 512;
-    observe(get(layout.prototype), layout.name, node.prototypeName, sizeof(node.prototypeName), node.prototypeType,
-            sizeof(node.prototypeType), 1);
-    observe(get(layout.quality), layout.qualityName, node.qualityName, sizeof(node.qualityName), node.qualityType,
-            sizeof(node.qualityType), 4);
+    if ((fields & FM_UI_PROTOTYPE) && !(node.properties & 32)) {
+        node.properties |= 32;
+        observe(get(layout.prototype), layout.name, node.prototypeName, sizeof(node.prototypeName), node.prototypeType, 1);
+    }
+    if ((fields & FM_UI_QUALITY) && !(node.properties & 512)) {
+        node.properties |= 512;
+        observe(get(layout.quality), layout.qualityName, node.qualityName, sizeof(node.qualityName), node.qualityType, 4);
+    }
 }
 
 void collectWidgetProperties(const Symbols &symbols, void *widget, FmNode &node, FmResult *result,
-                             ObservationStorage *storage, const volatile LONG *cancel) {
+                             ObservationStorage *storage, const volatile LONG *cancel, uint32_t fields) {
     const auto &layout = symbols.properties;
     if (!layout.supported)
         return;
@@ -347,18 +452,21 @@ void collectWidgetProperties(const Symbols &symbols, void *widget, FmNode &node,
             widget, 0, reinterpret_cast<void *>(symbols.address[WidgetType]),
             reinterpret_cast<void *>(symbols.address[type]), 0);
     };
-    if (auto *value = cast(ToggleButtonType)) {
+    if (auto *value = fields & FM_UI_CHECK_STATE ? cast(ToggleButtonType) : nullptr) {
         node.properties |= 1;
         node.checkState = read<int32_t>(value, layout.checkState);
     }
-    if (auto *value = cast(ButtonType); value && read<bool>(value, layout.toggleMode)) {
+    if (auto *value = fields & (FM_UI_TOGGLED | FM_UI_TOGGLE_MODE) ? cast(ButtonType) : nullptr) {
         node.properties |= 2;
+        node.toggleMode = read<bool>(value, layout.toggleMode);
         node.toggled = read<bool>(value, layout.toggled);
     }
-    if (auto *value = cast(DropDownType)) {
-        node.properties |= 4;
-        node.selectedIndex = read<int32_t>(value, layout.selectedIndex);
-        if (layout.optionsSupported && result) {
+    if (auto *value = fields & (FM_UI_SELECTED_INDEX | FM_UI_OPTIONS) ? cast(DropDownType) : nullptr) {
+        if (fields & FM_UI_SELECTED_INDEX) {
+            node.properties |= 4;
+            node.selectedIndex = read<int32_t>(value, layout.selectedIndex);
+        }
+        if ((fields & FM_UI_OPTIONS) && layout.optionsSupported && result) {
             require(storage, "Option observation storage is absent");
             const auto first = read<uintptr_t>(value, layout.optionFirst);
             const auto last = read<uintptr_t>(value, layout.optionLast);
@@ -370,12 +478,13 @@ void collectWidgetProperties(const Symbols &symbols, void *widget, FmNode &node,
             node.properties |= 16;
             node.optionTotal = static_cast<uint32_t>((last - first) / layout.optionStride);
             node.optionFirst = result->optionCount;
-            require(node.optionTotal <= uint32_t(std::numeric_limits<int>::max()) - result->optionCount,
+            node.optionOffset = storage->optionOffset;
+            node.optionCount = std::min(storage->optionLimit, node.optionTotal - std::min(node.optionTotal, node.optionOffset));
+            require(node.optionCount <= uint32_t(std::numeric_limits<int>::max()) - result->optionCount,
                     "Option observations exceed integer representation");
-            node.optionCount = node.optionTotal;
             for (uint32_t i = 0; i < node.optionCount; ++i) {
                 require(!cancel || !*cancel, "UI option query cancelled");
-                const auto *entry = reinterpret_cast<const void *>(first + size_t(i) * layout.optionStride);
+                const auto *entry = reinterpret_cast<const void *>(first + size_t(i + node.optionOffset) * layout.optionStride);
                 const auto *button = read<const unsigned char *>(entry, layout.optionButton);
                 require(button, "Dropdown option has no text button");
                 const void *text = button + layout.optionText;
@@ -389,7 +498,7 @@ void collectWidgetProperties(const Symbols &symbols, void *widget, FmNode &node,
             }
         }
     }
-    if (auto *value = cast(SliderType)) {
+    if (auto *value = fields & FM_UI_SLIDER ? cast(SliderType) : nullptr) {
         node.properties |= 8;
         node.value = read<double>(value, layout.value);
         node.minimum = read<double>(value, layout.minimum);

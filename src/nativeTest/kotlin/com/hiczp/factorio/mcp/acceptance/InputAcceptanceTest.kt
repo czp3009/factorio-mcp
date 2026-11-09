@@ -2,6 +2,8 @@
 
 package com.hiczp.factorio.mcp.acceptance
 
+import com.hiczp.factorio.mcp.worldQuery
+
 import com.hiczp.factorio.mcp.McpHttpClient
 import com.hiczp.factorio.mcp.toolValue
 import com.hiczp.factorio.mcp.uiSelector
@@ -211,9 +213,7 @@ class InputAcceptanceTest {
                 assertFalse(hold.isCompleted)
                 other.tool("ui_read").toolValue()
                 other
-                    .tool(
-                        "world_query",
-                        buildJsonObject { putJsonObject("selection") { put("kind", "player") } },
+                    .worldQuery(buildJsonObject { putJsonObject("selection") { put("kind", "player") } },
                     )
                     .toolValue()
                 assertTrue(
@@ -333,9 +333,7 @@ class InputAcceptanceTest {
                     while (true) {
                         val position =
                             other
-                                .tool(
-                                    "world_query",
-                                    buildJsonObject {
+                                .worldQuery(buildJsonObject {
                                         putJsonObject("selection") { put("kind", "player") }
                                         putJsonArray("fields") { add("position") }
                                     },
@@ -355,9 +353,7 @@ class InputAcceptanceTest {
                 other.setFixtureVisible(false)
                 val targetPosition =
                     other
-                        .tool(
-                            "world_query",
-                            buildJsonObject {
+                        .worldQuery(buildJsonObject {
                                 putJsonObject("selection") {
                                     put("kind", "entities")
                                     put("name", "steel-chest")
@@ -400,9 +396,7 @@ class InputAcceptanceTest {
                 while (true) {
                     val player =
                         other
-                            .tool(
-                                "world_query",
-                                buildJsonObject {
+                            .worldQuery(buildJsonObject {
                                     putJsonObject("selection") { put("kind", "player") }
                                     putJsonArray("fields") { add("selected") }
                                 },

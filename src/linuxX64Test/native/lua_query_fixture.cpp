@@ -124,12 +124,10 @@ int main() {
     uint32_t cancel = 0;
     activeCancel = &cancel;
     auto source = [&](const char *value) {
-        query->sourceSize = std::strlen(value);
-        std::memcpy(query->source, value, query->sourceSize);
+        query->source = {reinterpret_cast<uintptr_t>(value), std::strlen(value)};
     };
     const char arguments[] = {'{', '}', 0, 'x'};
-    query->argumentsSize = sizeof(arguments);
-    std::memcpy(query->arguments, arguments, sizeof(arguments));
+    query->arguments = {reinterpret_cast<uintptr_t>(arguments), sizeof(arguments)};
     QueryViewport viewport{};
     auto run = [&] {
         const int status = queryLua(state, api, layout, *query, 7, viewport, &cancel, *result);
@@ -216,7 +214,7 @@ int main() {
     api.protectedCallArguments = 5;
     testWorldQuery(state, api, layout);
     require(lua_gettop(state) == 0, "composed world query retained Lua stack entries");
-    query->sourceSize = FM_LINUX_LUA_SOURCE;
+    query->source.size = uint64_t(INT32_MAX) + 1;
     require(run() == EINVAL, "oversized source was accepted");
     lua_close(state);
     std::puts("factorio-mcp Lua query fixture: passed");

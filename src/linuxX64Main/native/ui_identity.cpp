@@ -24,7 +24,7 @@ bool validIdentityLayout(const FmLinuxIdentityLayout &layout) {
 }
 
 int readPrototypeIdentity(uintptr_t object, bool quality, const FmLinuxIdentityLayout &layout,
-                          FmLinuxPrototypeValue &output) {
+                          FmLinuxPrototypeValue &output, ObservationStrings &strings) {
     output = {};
     if (!object)
         return 0;
@@ -35,7 +35,7 @@ int readPrototypeIdentity(uintptr_t object, bool quality, const FmLinuxIdentityL
         return EFAULT;
     output.flags = 1;
     bool typeTruncated;
-    if (const int error = fm::readTypeName(object, output.type, output.typeSize, typeTruncated))
+    if (const int error = fm::readTypeName(object, output.type, output.typeSize, typeTruncated, strings))
         return error;
     if (typeTruncated)
         output.flags |= 4;
@@ -64,7 +64,8 @@ int readPrototypeIdentity(uintptr_t object, bool quality, const FmLinuxIdentityL
     return 0;
 }
 
-int collectIdentity(uintptr_t widget, const FmLinuxIdentityLayout &layout, FmLinuxUiIdentity &output) {
+int collectIdentity(uintptr_t widget, const FmLinuxIdentityLayout &layout, FmLinuxUiIdentity &output,
+                    ObservationStrings &strings, uint32_t fields) {
     output = {};
     if (!validIdentityLayout(layout))
         return EINVAL;
@@ -88,12 +89,16 @@ int collectIdentity(uintptr_t widget, const FmLinuxIdentityLayout &layout, FmLin
                 !fm::read(table + slot * sizeof(uintptr_t), entry) || !entry)
                 return EFAULT;
             const auto object = reinterpret_cast<uintptr_t (*)(const void *)>(entry)(receiver);
-            return readPrototypeIdentity(object, quality, layout, value);
+            return readPrototypeIdentity(object, quality, layout, value, strings);
         };
-        if (const int error = read(layout.prototypeSlot, false, output.prototype))
-            return error;
-        if (const int error = read(layout.qualitySlot, true, output.quality))
-            return error;
+        if (fields & FM_UI_PROTOTYPE) {
+            if (const int error = read(layout.prototypeSlot, false, output.prototype))
+                return error;
+        }
+        if (fields & FM_UI_QUALITY) {
+            if (const int error = read(layout.qualitySlot, true, output.quality))
+                return error;
+        }
         output.available = 1;
         return 0;
     } catch (...) {

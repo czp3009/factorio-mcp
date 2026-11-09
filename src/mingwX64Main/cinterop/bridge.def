@@ -1,4 +1,4 @@
 headers = bridge.h
-headerFilter = bridge.h dbghelp.h psdk_inc/_dbg* tlhelp32.h
+headerFilter = bridge.h dbghelp.h psdk_inc/_dbg* tlhelp32.h **/ui_graph.h **/ui_stored_identity.h
 package = com.hiczp.factorio.mcp.nativebridge
 linkerOpts = -ldbghelp

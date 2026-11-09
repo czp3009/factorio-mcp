@@ -6,6 +6,11 @@ import com.hiczp.factorio.mcp.X64Instructions.*
 internal object WidgetChildren {
     data class Range(val begin: Long, val end: Long)
 
+    enum class Abi(val receiver: Int, val visitor: Int, val preserved: Set<Int>) {
+        SYSTEM_V(7, 6, setOf(3, 5, 12, 13, 14, 15)),
+        MICROSOFT(1, 2, setOf(3, 5, 6, 7, 12, 13, 14, 15)),
+    }
+
     private sealed interface Value
     private data object Receiver : Value
     private data object Visitor : Value
@@ -14,27 +19,26 @@ internal object WidgetChildren {
     private data class Field(val offset: Long, val advance: Long = 0) : Value
     private data class Child(val begin: Long) : Value
     private data class VisitorMember(val offset: Long) : Value
+    private data class VisitorTable(val owner: VisitorMember) : Value
+    private data class VisitorMethod(val owner: VisitorMember) : Value
     private data class Constant(val value: Long) : Value
     private data object Unknown : Value
 
     private data class Loop(val start: Long, val exit: Long, val fields: Set<Long>, var begin: Long? = null)
 
-    fun resolve(image: ElfImage, symbol: String, objectSize: Long): List<Range> {
-        val function = image.symbol(symbol)
-        require(function.size in 1..4096) { "Recursive widget visitor exceeds analysis bound" }
-        EhFrames(image).function(function)
-        val badVisitor = image.symbol("_ZSt25__throw_bad_function_callv")
-        image.functionBytes(badVisitor, 1)
-        return analyze(image.functionBytes(function, 4096), function.address, badVisitor.address, objectSize)
-    }
-
-    fun analyze(bytes: BinaryView, address: Long, badVisitor: Long, objectSize: Long): List<Range> {
+    fun analyze(
+        bytes: BinaryView,
+        address: Long,
+        badVisitor: Long,
+        objectSize: Long,
+        abi: Abi = Abi.SYSTEM_V,
+    ): List<Range> {
         require(bytes.size in 1..4096 && objectSize >= 8 && address >= 0 && address <= Long.MAX_VALUE - bytes.size)
         val code = X64Instructions(bytes).all(512).filter { it.operation !in setOf(Operation.NOP, Operation.ENDBR) }
         val indices = code.mapIndexed { index, instruction -> instruction.offset to index }.toMap()
         val values = (0..15).associateWith<Int, Value> { Original(it) }.toMutableMap()
-        values[7] = Receiver
-        values[6] = Visitor
+        values[abi.receiver] = Receiver
+        values[abi.visitor] = Visitor
         values[4] = Stack(0)
         val stack = mutableMapOf<Long, Value>()
         val ranges = mutableListOf<Range>()
@@ -42,8 +46,9 @@ internal object WidgetChildren {
         var comparison: Pair<Value, Value>? = null
         var visitorGuard: Long? = null
         var visitorCalled = false
-        val preserved = setOf(3, 5, 12, 13, 14, 15)
-        val volatile = setOf(0, 1, 2, 6, 7, 8, 9, 10, 11)
+        var visitorOwner: VisitorMember? = null
+        val volatile = (0..15).toSet() - abi.preserved - 4
+        val frameEnd = if (abi == Abi.MICROSOFT) 40 else 0
         fun top() = (values[4] as? Stack)?.offset ?: error("Unproven visitor stack")
         fun moveStack(offset: Long) {
             require(offset in -4096..0 && offset % 8 == 0L)
@@ -68,12 +73,24 @@ internal object WidgetChildren {
                 }
 
                 is Stack -> Stack(base.offset + memory.displacement).also {
-                    require(it.offset >= top() && it.offset + 8 <= 0) { "Visitor accesses outside its reserved frame" }
+                    require(it.offset >= top() && it.offset + 8 <= frameEnd && it.offset != 0L) {
+                        "Visitor accesses outside its reserved frame or overwrites its return address"
+                    }
                 }
 
                 is Field -> {
                     require(loop != null && base.advance == 0L && memory.displacement == 0L)
                     Child(base.offset)
+                }
+
+                is VisitorMember -> {
+                    require(abi == Abi.MICROSOFT && base == visitorOwner && memory.displacement == 0L)
+                    VisitorTable(base)
+                }
+
+                is VisitorTable -> {
+                    require(abi == Abi.MICROSOFT && memory.displacement in 0..256 && memory.displacement % 8 == 0L)
+                    VisitorMethod(base.owner)
                 }
 
                 else -> error("Visitor reads through an unproven pointer")
@@ -88,7 +105,10 @@ internal object WidgetChildren {
         }
 
         fun call() {
-            require((8 + top()) % 16 == 0L) { "Visitor call has an unverified System V frame" }
+            require((8 + top()) % 16 == 0L && (abi != Abi.MICROSOFT || top() <= -32)) {
+                "Visitor call has an unverified ABI frame"
+            }
+            if (abi == Abi.MICROSOFT) stack.keys.removeAll { it in top() until top() + 32 }
             volatile.forEach { values[it] = Unknown }
             comparison = null
         }
@@ -152,6 +172,11 @@ internal object WidgetChildren {
                 }
 
                 Operation.CMP -> comparison = read(instruction.destination) to read(instruction.source)
+                Operation.TEST -> {
+                    val first = read(instruction.destination)
+                    require(first == read(instruction.source)) { "Unsupported visitor bit test" }
+                    comparison = first to Constant(0)
+                }
                 Operation.JCC -> {
                     val branch = target(instruction.destination)
                     val pair = checkNotNull(comparison) { "Visitor branch has no proven comparison" }
@@ -167,6 +192,7 @@ internal object WidgetChildren {
                                 "Visitor skips a subtree for an unsupported condition"
                             }
                             visitorGuard = branch
+                            visitorOwner = first
                         }
                     } else {
                         val active = checkNotNull(loop) { "Unrecognized visitor cycle" }
@@ -193,18 +219,21 @@ internal object WidgetChildren {
                             require(destination.value == 0L) { "Recursive visitor calls another function" }
                             val active = checkNotNull(loop) { "Recursive call is not bounded by a child range" }
                             val child =
-                                values[7] as? Child ?: error("Recursive receiver is not loaded from a child iterator")
-                            require(active.begin == null && child.begin in active.fields && values[6] == Visitor)
+                                values[abi.receiver] as? Child ?: error("Recursive receiver is not loaded from a child iterator")
+                            require(active.begin == null && child.begin in active.fields && values[abi.visitor] == Visitor)
                             active.begin = child.begin
                         }
 
                         is Memory -> {
+                            val method = memoryAddress(destination)
                             require(
                                 loop == null && visitorGuard != null && !visitorCalled &&
-                                        memoryAddress(destination) is VisitorMember && values[7] == Visitor
+                                        (if (abi == Abi.SYSTEM_V) method is VisitorMember && values[abi.receiver] == Visitor
+                                        else method is VisitorMethod && method.owner == visitorOwner &&
+                                            values[abi.receiver] == visitorOwner)
                             )
                             val argument =
-                                values[6] as? Stack ?: error("Visitor callback has no native receiver reference")
+                                values[abi.visitor] as? Stack ?: error("Visitor callback has no native receiver reference")
                             require(stack[argument.offset] == Receiver) { "Visitor callback does not receive its original object" }
                             visitorCalled = true
                         }
@@ -217,14 +246,15 @@ internal object WidgetChildren {
                 Operation.RET -> {
                     require(
                         loop == null && visitorCalled && ranges.isNotEmpty() && ranges.distinct().size == ranges.size &&
-                                top() == 0L && preserved.all { values[it] == Original(it) }) {
+                                top() == 0L && abi.preserved.all { values[it] == Original(it) }) {
                         "Visitor does not restore its frame or has incomplete child ranges"
                     }
                     val guard = checkNotNull(visitorGuard)
                     val tail = code.drop(index + 1)
                     require(
-                        tail.size == 1 && tail.single().offset == guard && tail.single().operation == Operation.CALL &&
-                                (tail.single().destination as? Immediate)?.value == badVisitor - address
+                        tail.isNotEmpty() && tail.first().offset == guard && tail.first().operation == Operation.CALL &&
+                                (tail.first().destination as? Immediate)?.value == badVisitor - address &&
+                                tail.drop(1).all { it.operation == Operation.TRAP }
                     ) {
                         "Visitor's empty-callback path is not the standard failure call"
                     }

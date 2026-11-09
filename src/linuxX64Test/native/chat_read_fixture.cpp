@@ -148,12 +148,12 @@ int main() {
     }
     {
         Fixture f;
-        std::string value(FM_LINUX_CHAT_RECORD_BYTES - 1, 'x');
+        std::string value((16 * 1024 * 1024) - 1, 'x');
         value += "Ω";
         f.nodes[0].item.text = {{value.data(), value.size(), {}}, "a\0b", 3};
         ChatReadCommand command;
         assert(f.start(command) == 0);
-        assert(result.records[0].textSize == FM_LINUX_CHAT_RECORD_BYTES - 1 && result.records[0].truncated == 1);
+        assert(result.records[0].textSize == value.size() && result.records[0].truncated == 0);
         assert(result.records[0].rawSize == 3 && std::memcmp(reinterpret_cast<const void *>(result.records[0].raw.address), "a\0b", 3) == 0);
     }
     {
@@ -245,12 +245,12 @@ int main() {
     }
     {
         Fixture f;
-        std::string name(FM_LINUX_CHAT_RECORD_BYTES - 1, 'x');
+        std::string name((16 * 1024 * 1024) - 1, 'x');
         name += "\xce\xa9";
         f.nodes[0].item.playerName = {name.data(), name.size(), {}};
         ChatReadCommand command;
-        assert(f.start(command) == 0 && result.records[0].truncated == 4);
-        assert(result.records[0].playerNameSize == FM_LINUX_CHAT_RECORD_BYTES - 1);
+        assert(f.start(command) == 0 && result.records[0].truncated == 0);
+        assert(result.records[0].playerNameSize == name.size());
     }
     {
         Fixture f;

@@ -1,33 +1,30 @@
 #pragma once
+#include "../../nativeMain/native/ui_media.h"
+#include "../../nativeMain/native/ui_graph.h"
+#include "../../nativeMain/native/ui_stored_identity.h"
 #include "ui_elements.h"
 #include "ui_identity.h"
 #include "ui_quality.h"
 #include <stdint.h>
 #include "observation_buffer.h"
+#include "world_query.h"
+#include "../../nativeMain/native/gui_observation.h"
+#include "ui_toggle.h"
+#include "../../nativeMain/native/text_slice.h"
 
 #define FM_LINUX_MAX_CHILD_RANGES 8
-#define FM_LINUX_TYPE_NAME 256
-#define FM_LINUX_TEXT_SIZE (16 * 1024 * 1024)
 #define FM_LINUX_TEXT_GETTERS 64
-#define FM_LINUX_UI_PATH 16
-#define FM_LINUX_OPTION_TEXT (16 * 1024 * 1024)
-
-typedef struct FmLinuxUiStep {
-    int32_t child;
-    int32_t position;
-    int32_t enabled;
-    uint32_t hasText;
-    uint32_t hasVisible;
-    uint32_t visible;
-    char type[160];
-    char text[1024];
-    char prototypeName[256];
-    char prototypeType[160];
-} FmLinuxUiStep;
 
 typedef struct FmLinuxUiSelector {
     uint32_t count;
-    FmLinuxUiStep path[FM_LINUX_UI_PATH];
+    FmRequestBuffer path;
+    uint32_t collection;
+    uint32_t optionOffset;
+    uint32_t optionLimit;
+    uint32_t maxDepth;
+    uint32_t fields;
+    FmTextSliceRequest textSlice;
+    FmUiGraphRequest graph;
 } FmLinuxUiSelector;
 
 typedef struct FmLinuxTextGetter {
@@ -67,16 +64,6 @@ typedef struct FmLinuxRectangleLayout {
     uint64_t function;
     uint32_t parent;
 } FmLinuxRectangleLayout;
-
-typedef struct FmLinuxToggleLayout {
-    uint64_t function;
-    uint32_t slot;
-    uint32_t offset;
-    uint32_t objectSize;
-    uint32_t tableCount;
-    uint64_t tables[1024];
-    uint32_t modeOffset;
-} FmLinuxToggleLayout;
 
 typedef struct FmLinuxCheckLayout {
     uint64_t table;
@@ -182,11 +169,16 @@ typedef struct FmLinuxUiLayout {
     FmLinuxIconLayout icons;
     FmLinuxIconNamesLayout iconNames;
     FmLinuxTooltipLayout tooltips;
+    FmUiImageLayout images;
+    FmUiGraphLayout graph;
+    FmUiStoredPrototypeLayout connectionPrototype, achievementPrototype;
+    FmUiAchievementLayout achievement;
 } FmLinuxUiLayout;
 
 typedef struct FmLinuxUiNode {
     int32_t parent;
     uint32_t depth;
+    uint32_t siblingIndex, childrenTruncated;
     uint32_t enabled;
     uint32_t destroying;
     uint32_t visible;
@@ -195,7 +187,7 @@ typedef struct FmLinuxUiNode {
     uint32_t selected;
     uint32_t truncated;
     uint32_t typeTruncated;
-    char type[FM_LINUX_TYPE_NAME];
+    FmLinuxObservationBuffer type;
     uint32_t textAvailable;
     uint32_t textTruncated;
     uint32_t textSize;
@@ -204,6 +196,8 @@ typedef struct FmLinuxUiNode {
     FmLinuxRectangle bounds;
     uint32_t toggledAvailable;
     uint32_t toggled;
+    uint32_t toggleMode;
+    int64_t guiIndex;
     uint32_t checkAvailable;
     int32_t checkState;
     uint32_t sliderAvailable;
@@ -218,6 +212,7 @@ typedef struct FmLinuxUiNode {
     uint32_t optionFirst;
     uint32_t optionCount;
     uint32_t optionTotal;
+    uint32_t optionOffset;
     uint32_t switchAvailable;
     uint8_t switchState;
     uint8_t switchAllowNone;
@@ -233,6 +228,9 @@ typedef struct FmLinuxUiNode {
     uint32_t iconNameTruncated;
     uint32_t tooltipStatus, tooltipTruncated;
     FmLinuxObservationBuffer tooltipTitle, tooltipText;
+    FmUiImage image;
+    FmUiGraph graph;
+    FmUiAchievement achievement;
 } FmLinuxUiNode;
 
 typedef struct FmLinuxUiSnapshot {
@@ -242,6 +240,10 @@ typedef struct FmLinuxUiSnapshot {
     FmLinuxObservationBuffer nodes;
     uint32_t optionCount;
     FmLinuxObservationBuffer options;
+    uint32_t guiStatus, guiSize;
+    FmLinuxObservationBuffer guiJson;
+    char guiMessage[512];
+    FmTextRange textRange;
 } FmLinuxUiSnapshot;
 
 #ifdef __cplusplus
@@ -249,11 +251,33 @@ struct UiSnapshot {
     uint32_t count = 0, truncated = 0, treeTruncated = 0, optionCount = 0;
     std::vector<FmLinuxUiNode> nodes;
     std::vector<FmLinuxUiOption> options;
+    std::vector<fm::GraphStorage> graphs;
     // Moving an inner vector preserves its owned byte allocation and published address.
     std::vector<std::vector<char>> strings;
+    // Command-owned configuration only, never game objects. Rebound before each admitted UI command.
+    const FmLinuxWorldQueryConfig *guiWorld = nullptr;
+    const FmLinuxLuaQuery *guiQuery = nullptr;
+    const FmGuiRegistryLayout *guiRegistry = nullptr;
+    uint32_t guiStatus = 0;
+    LuaResult guiResult;
+    std::vector<char> guiMatches;
+    char guiMessage[512]{};
+    FmTextRange textRange{};
 
     FmLinuxUiSnapshot wire() const {
-        return {count, truncated, treeTruncated, observationBuffer(nodes), optionCount, observationBuffer(options)};
+        FmLinuxUiSnapshot result{};
+        result.count = count;
+        result.truncated = truncated;
+        result.treeTruncated = treeTruncated;
+        result.nodes = observationBuffer(nodes);
+        result.optionCount = optionCount;
+        result.options = observationBuffer(options);
+        result.guiStatus = guiStatus;
+        result.guiSize = guiResult.size;
+        result.guiJson = observationBuffer(guiResult.text);
+        result.textRange = textRange;
+        std::copy(std::begin(guiMessage), std::end(guiMessage), result.guiMessage);
+        return result;
     }
 };
 

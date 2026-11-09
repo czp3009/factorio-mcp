@@ -63,9 +63,9 @@ class WorldOverviewTest {
             """{"detail":"entities","group_by":[]}""",
             """{"detail":"entities","aggregates":[]}""",
             """{"group_by":["name","name"]}""",
-            """{"group_by":["unobserved"]}""",
+            """{"group_by":["unobserved()"]}""",
             """{"aggregates":[{"operation":"count","field":"amount"}]}""",
-            """{"aggregates":[{"operation":"sum","field":"unobserved"}]}""",
+            """{"aggregates":[{"operation":"sum","field":"unobserved()"}]}""",
             """{"aggregates":[{"operation":"sum","field":"amount","extra":true}]}""",
         )) assertFailsWith<IllegalArgumentException>(text) { parse(text) }
         val groups = decodeWorldQuery("""{"objects":[{"entity_groups":[{"attributes":{},"read_status":{},"count":1,"aggregates":{}}]}]}""")

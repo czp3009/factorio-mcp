@@ -1,7 +1,8 @@
 # Tool reference
 
 Reference for the implemented tools. For installation and connection setup, see [README](README.md).
-The schemas advertised by `tools/list` describe arguments and supported property names. This reference also explains
+The schemas advertised by `tools/list` describe argument syntax and selection constraints. Discover native properties
+and admitted methods with inspection `members`. This reference also explains
 the per-selection restrictions checked at runtime; unsupported combinations and unknown arguments fail.
 
 ## Choosing tools
@@ -12,14 +13,16 @@ structured data cannot answer the question, visual verification is needed, or an
 after every action. Unsupported custom-painted content may require an image.
 
 Prefer `ui_action` for widgets, including existing offscreen controls; use `set_text` on an available text field before
-resorting to slider dragging. Use `input` for world controls and held mouse gestures. Discover current bindings with
+resorting to slider dragging. Use `input` to combine key chords, mouse holds and timed action sequences in one call,
+including continuous drags with multiple path segments and turns. Discover current bindings with
 `input_bindings`, including modifiers, instead of assuming default keys or mouse meanings. Control IDs name bindings;
 they are not directly accepted by `input` or `ui_action`.
 
 Every action reports client dispatch/execution and cleanup. Completion does not confirm server acceptance, delivery
 or a gameplay outcome. Network latency and client prediction rollback can delay, change or undo visible effects;
 observations describe the state available at the time of the read. Actions do not wait for an outcome or retry to
-achieve one. Observe effects before dependent actions, preferably with a focused structured query. Do not blindly
+achieve one. Plan known input sequences together; read results before making decisions that depend on them,
+preferably with a focused structured query. Do not blindly
 replay a mutation with an uncertain or lost result.
 All tools assume the player is not operating the game concurrently. Concurrent player actions can cause errors,
 failures or unexpected results; tools do not detect or compensate for that interference.
@@ -29,18 +32,35 @@ structured values for programmatic operations, and preserve opaque values when p
 
 ## Query sizes
 
-Query counts use positive 32-bit integers, and page offsets use nonnegative 32-bit integers. Defaults are
-recommendations, not fixed result-count ceilings: increase `limit`, `entity_limit` or `max_nodes` for bulk reads.
-Each returned snapshot is collected at one safe point. Internal transfer chunks do not create additional observations or ticks.
-Catalogs, inventories, players, bindings, inspection collections and chat retain their documented pagination;
-spatial entities and UI trees do not gain artificial offsets. Each page is a fresh observation.
+Explicit query counts use positive 32-bit integers, and collection offsets use nonnegative 32-bit integers.
+Input bindings, players, inventory kinds/slots, inspect member catalogs and explicit name/field selections return
+all matches by default. Set `limit` to page actual collections. Other defaults are recommended starting sizes: increase `limit`, `entity_limit`,
+`cell_limit` for bulk reads. UI trees use live selectors and relative `max_depth`, without a node-count prefix.
+Each snapshot is collected at one safe point. Internal transfer chunks do not create additional observations or ticks.
+Pages are fresh observations. Use the documented continuation positions; spatial world selections and whole UI trees
+have no artificial offsets. Count, subtree, field and text-slice selection happens before observations leave the game
+process. Chat transfers retained message metadata for watermark/loss detection, but text only for the selected page
+and slice. Screenshot resizing and encoding operate on a complete captured frame in MCP.
 
-Reads support dynamic result sizes, including responses larger than 16 MiB. A serialized world observation must
-fit a signed 32-bit byte-array length (2,147,483,647 UTF-8 bytes). Allocation failures and integer representation limits
-are errors, not silent reductions of the requested count. Native UI labels and each retained
-chat string have a 16 MiB capture limit and report text truncation. Prototype/native-type names retain the field
-bounds documented below. World-query request arguments must fit within 16 MiB. Caller-selected table preview depth
-can leave explicit references to deeper values; cycles also remain references.
+Reads support dynamic result sizes, including responses larger than 16 MiB. Owned byte arrays and strings must
+fit their signed 32-bit representations; an individual byte array can hold at most 2,147,483,647 bytes.
+Strings, final message encoding and available memory impose their own practical limits.
+Allocation and representation failures are errors, not silent reductions of the requested count. Native UI labels,
+option labels, widget type names and retained chat strings have no separate 16 MiB capture ceiling. Identity fields
+retain the bounds documented below. Table previews leave references at the selected depth boundary and at cycles.
+
+Incoming HTTP and stdio JSON-RPC messages have a 16 MiB framing limit, including their envelope. There is no separate
+fixed world-query argument buffer. Outgoing responses have no MCP-owned 16 MiB ceiling, but clients may impose their
+own limits; the SDK stdio client also limits received frames to 16 MiB. Prefer focused fields, pages and string slices
+for large values, or an HTTP client that accepts the result size. JSON escaping, duplicate text/structured result
+content and image base64 encoding increase wire size.
+
+Collection limits count entries, not bytes inside each entry's values. Follow property/index paths and use string
+slices for large nested text. Slices bound returned text; read cost can still depend on the complete source value.
+Paged collections expose `has_more` and `next_offset`. A nonzero offset identifies a skipped prefix;
+selected collection/string `truncated` flags concern an unread suffix. Per-field truncation and partial spatial scans
+remain independent: `has_more: false` does not establish that every nested value is complete. Spatial world queries
+have no continuation and report `selection_complete`; their `truncated` flag also includes nested depth omission.
 
 The following defaults are also the recommended starting limits for agents. Count limits have no smaller
 product ceiling than the positive signed 32-bit representation (2,147,483,647); available memory and result encoding
@@ -49,22 +69,25 @@ still constrain a call. A finite game collection is not necessarily a small coll
 | Tool or selection | Default / recommended size | Remaining maximum | Pagination | Typical size behavior |
 |-------------------|----------------------------|----------------------------|------------|-----------------------|
 | `status`, `attach`, `detach` | One state/result | One state/result | No | Constant-size state. |
-| `ui_read` | 4096 traversed nodes | Integer representation; 16 MiB per label/option string | No; use selectors or increase traversal | Current interface only; large or modded interfaces can contain many nodes/options. |
-| `input_bindings` | 64 controls | Integer representation | Sorted ID `offset` | Finite loaded control registry; independent of factory size, but mods add controls. |
-| `world_query`: `entities`, `tiles` | 128 objects | Integer representation | No; narrow the area or filters | Can be very large as the queried area grows. |
-| `world_query`: `player`, `character`, `vehicle`, `physical_vehicle`, `force` | One selected object (`limit` defaults to 128) | One object; nested collections have no separate item cap | No | One object can expose large queues or related collections. |
-| `world_query`: `players`, `inventories`, `inventory`, `prototypes`, `recipes`, `technologies` | 64 entries | Integer representation | `offset` / `next_offset` | Players and inventory kinds are usually small; slot lists and modded catalogs can be large. |
-| `world_query`: `inspect` | 64 members/entries; table depth 3 | Caller-selected integer limit/depth; references at depth boundary or cycles | `offset` / `next_offset` | Member catalogs are finite; referenced tables, strings and collections can be very large. |
+| `ui_read` | UI depth 65535; GUI table depth 8; selected collection page 64 | Effective tree/table depth 65535; integer and memory representation | Selected options, GUI collections and strings: `offset` / `next_offset`; widget trees: live selectors and relative `max_depth` | Start with `max_depth:1` or 2; `fields:[]` optionally limits contents. No node-list clipping. |
+| `input_bindings` | All matching controls | Integer representation | Optional sorted ID `offset` / `limit` | Finite loaded control registry; independent of factory size, but mods add controls. |
+| `world_query`: spatial `entities`, area `tiles` | 128 objects | Integer representation | No; refine the area/filters or increase `limit` | Can be very large as the queried area grows. |
+| `world_query`: single object/reference or one tile | One selected object | No count parameter; table depth 65535 | No | One object can expose large queues or related collections. |
+| `world_query`: `players`, `inventories` | All matching entries | Integer representation | Optional `offset` / `limit` | Current-world players and available inventory kinds. |
+| `world_query`: `inventory` | All native slots | Integer representation | Optional native slot `offset` / `limit` | Inventory discovery reports its native size. |
+| `world_query`: `prototypes`, `recipes`, `technologies` | All explicit `names`; otherwise 64 entries | Integer representation | Optional `offset` / `next_offset` | Modded catalogs can be large; names sort by internal identifier. |
+| `world_query`: `inspect` | All requested values/members; entries 64; slices 4096 UTF-8 bytes; table depth 3 | Integer representation; depth 65535; native/cycle references | Members/entries/slice only: `offset` / `next_offset` | Values retain the selected structure within table depth; referenced objects require paths. |
+| `world_query` / entity `world_overview`: `reads` | Ordered explicit paths for each selected root/entry | Request size and integer representation | Each read's explicit collection/text mode has independent `offset` / `next_offset` | One safe point; a path failure preserves sibling reads. No hidden batch-count cap. |
 | `world_query`: `quickbar` | Explicit requested locations | No separate location-count cap; game validates each index | Explicit page/slot or screen-page indices | Normally small and fixed for the selected player. |
-| `world_overview` | 64 entity candidates per cell, or per area in entity mode; automatic cells start at 32 tiles and target at most 16 by 16 cells | Integer entity limit and cell count | No; query adjacent areas | Large areas or small explicit cells can return many groups/cells. |
-| `chat_read` | Latest 64 messages | Integer representation; 16 MiB per retained string | Forward tick/storage watermark | Limited by the game's retained history; mods can emit bursts. Evicted history is unavailable. |
-| `ui_action` | One widget action | `set_text`: 1024 Unicode scalar values; selector path: 16 steps | No | One dispatch result. |
+| `world_overview` | 256 cells; 64 entity candidates per cell or per area in entity mode | Integer page/entity limits | Grid: `start_cell` / `next_cell` | Automatic cells start at 32 tiles and target at most 16 by 16 cells. |
+| `chat_read` | Latest 64 messages; optional text slice 4096 bytes | Integer representation | Forward tick/storage watermark; optional `text_slice` | Limited by retained history. Evicted history is unavailable. |
+| `ui_action` | One widget action | 16384 Unicode scalar values for `set_text` | No | One dispatch result; selectors have no separate step ceiling. |
 | `input` | Explicit timeline | 256 entries; 64 intervals per entry; relative tick at most 4,294,967,295 | No | One execution result, not a collection query. |
 | `chat_send` | One explicit message | 4096 UTF-8 bytes | No | One dispatch result. |
-| `screenshot` | One next rendered frame | 8192 pixels per side, 16,777,216 total pixels, 16 MiB encoded image | No | Optional proportional height reduction. |
+| `screenshot` | One next rendered frame | 8192 pixels per side, 16,777,216 total pixels; integer encoded size | No | Optional proportional height reduction. |
 
-All world-query arguments must fit the 16 MiB request buffer. Spatial coordinates remain within ±1,000,000 tiles;
-query areas no longer have separate width/height caps. UI selectors, inspection paths and action inputs retain their
+Spatial coordinates remain within ±1,000,000 tiles;
+query areas have no separate width/height caps. UI selectors, inspection paths and action inputs retain their
 documented validation rules. These input constraints are separate from query result-count limits.
 
 ## Attachment and process state
@@ -91,12 +114,13 @@ need rendering. UI availability is reported independently through `ui_ready`.
 
 ## UI observation
 
-`ui_read` supports optional bounds, selected subtrees and a node limit. Large results indicate when
-they are truncated. Use its text, native types and available prototype identities to build a selector;
+`ui_read` supports optional bounds, live subtree selectors, relative depth and native/script field projection.
+Large results indicate when they are truncated. Use text, native types, prototype identities and script attributes to build a selector;
 node IDs apply only to that snapshot.
-For a selected-subtree read, optional property budgets apply only to the returned subtrees. Unrelated widgets do not
-consume their dropdown-option or icon-reference capacity. Selector discovery still requires a complete bounded tree; selecting
-a subtree does not bypass the node limit or make an incomplete search safe.
+For a selected read, the selector searches the complete live tree before relative depth bounds returned nodes and
+optional properties. Unrelated widgets do not consume the selected projection's property storage. A shallow result
+therefore does not prevent locating a deeply nested control. Traversal, selection and property collection occur
+in the same observation; a failed or incomplete search never dispatches an action.
 The returned tree and properties describe native observations. MCP does not classify windows by purpose or infer
 gameplay meaning from their hierarchy or values; interpreting them and choosing actions is the agent's responsibility.
 `visible`, `render_enabled` and `hidden_by_search` report the widget's own flags, with
@@ -108,13 +132,46 @@ Bounds describe widget geometry, including offscreen content; they do not establ
 another window covers the widget. `enabled` is the widget's own state; actions also check its ancestors and the active
 modal UI.
 When available, `flagged_for_destruction` reports the widget's own native destruction flag.
-Defaults are `bounds: false` and `max_nodes: 4096`; increase `max_nodes` for a larger tree. Native containers are preserved without
-inferred roles or automatic layout pruning. Output is postorder: children precede parents. Parent IDs
-refer to the same snapshot; a missing parent can mean a root, a selected subtree root or an omitted truncated ancestor.
-Selector reads and actions reject incomplete searches instead of choosing
-a potentially ambiguous target. Truncated text and type names are marked separately.
-An omitted `text` means an observed empty string. An unsupported text accessor instead reports `text: null`, with
+Defaults are `bounds:false` and effective `max_depth:65535`. Start exploration with `max_depth:1` or 2, then select
+a branch. No selector means the actual game UI root. Every selector match starts an independent subtree at depth 0;
+overlapping ancestor/descendant matches repeat their subtrees. Empty matches return empty `roots` and `nodes` arrays.
+Native containers are preserved without inferred roles or automatic layout pruning. Output is flat preorder:
+parents precede children, and `roots` lists each returned root's ID. Parent IDs refer only to this response;
+only returned roots omit `parent`. IDs are never accepted as cross-call addresses. Every call resolves its path anew.
+`max_depth:0` returns roots only; 1 includes direct children. Omitted or larger depths use 65535. Reaching the hard
+fallback is ordinary depth truncation, not an error. At a boundary, `children_truncated:true` means actual native
+children exist but were omitted. A boundary leaf has no marker, so increasing depth will not reveal children there.
+Top-level `truncated` is true when any returned widget has children omitted by depth. Property/text truncation
+remains separately reported. There is no returned-node count limit or node-list prefix truncation.
+`sibling_index` is the one-based position among observed native siblings when the parent is known. Append a
+`child` selector step with `match: {}` and `position: sibling_index` to a live parent selector to inspect that child.
+`gui_depth` separately controls
+plain Lua table expansion. Depth-bounded trees still report truncation; selectors resolve over the full live tree.
+Selector reads and actions reject incomplete searches instead of choosing a potentially ambiguous target.
+Truncated text and type names are marked separately. Empty text is returned as `text: ""`.
+An unsupported text accessor instead reports `text: null`, with
 `text_unavailable_reason` when available; it must not be treated as an empty string.
+
+Use `fields: []` to explore structure, script identity and each widget's own flags without optional contents.
+Omitting `fields` captures all supported paths. The response echoes the requested paths in `fields`.
+Select paths directly from the result shape:
+
+- `text`
+- `properties.check_state`, `properties.toggled`, `properties.toggle_mode`, `properties.selected_index`
+- `properties.value`, `properties.minimum`, `properties.maximum`, `properties.step`
+- `properties.options`, `properties.prototype`, `properties.quality`, `properties.number`, `properties.progress`
+- `properties.element`, `properties.icons`, `properties.quality_condition`, `properties.switch`, `properties.tooltip`
+- `properties.image`, `properties.graph`, `properties.achievement`
+- `gui.properties`, `gui.children`
+
+For example, `fields: ["text", "properties.icons", "gui.properties"]` reads labels, image references and the
+attributes selected by `gui_fields`. Unrequested paths are omitted, rather than reported as unavailable. Native
+text/prototype predicates still read the values needed to resolve a selector. Other optional native properties
+are collected only for the bounded selected nodes. Structure-only reads omit GUI child arrays; read
+`collection: {"source": "gui", "path": [{"property": "children"}], "limit": 64}` to page those relationships.
+Fields are selected before optional native capture, not just removed from the final JSON. A page or text slice can
+still require a full source read, and selectors still traverse the live tree. Depth is not a byte budget; wide
+levels can contain many nodes. Narrow the selector or optional fields when needed.
 
 An abridged illustrative snapshot shape is:
 
@@ -123,14 +180,23 @@ An abridged illustrative snapshot shape is:
   "frame": 42,
   "state": "in_game",
   "truncated": false,
-  "order": "postorder",
+  "order": "preorder",
   "identity_scope": "snapshot",
+  "max_depth": 65535,
+  "roots": [0],
   "visibility_basis": "own_widget_flags",
   "nodes": [
     {
       "id": 0,
+      "depth": 0,
+      "type": "agui::Window",
+      "enabled": true,
+      "visible": false
+    },
+    {
+      "id": 1,
       "depth": 1,
-      "parent": 1,
+      "parent": 0,
       "type": "agui::Switch",
       "enabled": true,
       "visible": true,
@@ -141,13 +207,6 @@ An abridged illustrative snapshot shape is:
           "allow_none": false
         }
       }
-    },
-    {
-      "id": 1,
-      "depth": 0,
-      "type": "agui::Window",
-      "enabled": true,
-      "visible": false
     }
   ]
 }
@@ -156,14 +215,106 @@ An abridged illustrative snapshot shape is:
 The child retains its own `visible: true` even when the parent reports false. IDs and the example state value are
 observations, not reusable selectors or constants to assume in later snapshots.
 
+### Existing script UI attributes
+
+When a native widget is registered to an existing `LuaGuiElement`, its `gui` object supplements the native tree:
+
+```json
+{
+  "index": 9,
+  "name": "my_button",
+  "type": "sprite-button",
+  "parent": 8,
+  "children": [],
+  "properties": {
+    "sprite": "item/iron-plate",
+    "tooltip": ["my-mod.help"],
+    "tags": {"opaque_key": 12},
+    "toggled": true,
+    "auto_toggle": false
+  },
+  "read_status": {}
+}
+```
+
+`index`, `parent` and `children` retain the game's script element indices, including zero when present. They are
+separate from native node IDs and may refer to elements outside the returned native subtree. Script and native
+ancestry can differ; neither replaces the other. These indices are observations of existing objects, not durable
+action handles. Names and types retain their API values, including empty names and unknown types.
+
+When `gui.properties` is selected, `gui_fields` selects readable `LuaGuiElement` attributes. Defaults are `caption`, `tooltip`, `elem_tooltip`, `tags`,
+`style`, `sprite`, `hovered_sprite`, `clicked_sprite`, `toggled`, `auto_toggle`, `number`, `elem_type` and `elem_value`.
+Use `[]` for no optional script attributes, or `["*"]` for all readable attributes in the selected installation's
+API catalog. The response echoes the expanded `gui_fields`. Unsupported attributes for an element report the game's
+error under `read_status`; nil attributes report `status: "nil"`. Missing values are not synthesized.
+
+`gui_depth` is a nonnegative table expansion depth for each attribute value, default 8, with effective maximum 65535. Nonempty tables at the
+depth boundary remain `depth_bound` references with `children_truncated:true`; empty tables stay empty. Ancestor
+cycles remain explicit `cycle` references. Sharing between separate branches is preserved. Plain table previews
+read stored entries without invoking indexing, iteration or length metamethods. `gui.values_truncated:true` marks
+depth omission in that widget's attribute values; selected GUI collections also report `depth_truncated` independently
+of `has_more`. Lua objects remain shallow references with their existing identity fields; further API inspection is
+available through `world_query`. Only the response envelopes' arrays are standardized; attribute table values retain
+the game's encoding, repetitions, original language and rich-text/localization expressions. Tags remain opaque and
+are not promoted to native flags, action capabilities or gameplay identities. `style` is an existing `LuaStyle`
+reference, not reconstructed rendering.
+
+These attributes require a loaded local world. When unavailable,
+native observations remain available with `gui_unavailable_reason`. A widget without a registered script element has
+no `gui`; many original game windows are entirely native. Script attributes do not expose arbitrary mod-private state.
+
+### Selected collections and text slices
+
+Use `collection` with a selector resolving exactly one widget to read one value instead of a subtree. This mode
+does not accept `fields`, `max_depth`, `bounds` or `gui_fields`; `gui_depth` still bounds returned GUI value previews.
+`source` is `options`, `graph`, `gui`, `text`, `tooltip_title` or `tooltip_text`. `offset` defaults to 0 and `limit` to 64.
+The result contains `native_type`, `source`, observation context and a `collection` envelope.
+
+For native dropdown options, `entries` retains zero-based `key` values and original label strings, with `total`,
+`offset`, `has_more`, `truncated` and any `next_offset`. Reading a page does not open the dropdown. For example:
+
+```json
+{
+  "selector": {"path": [{"axis": "descendant", "match": {"gui": {"name": "options"}}}]},
+  "collection": {"source": "options", "offset": 64, "limit": 64}
+}
+```
+
+To slice one option's label, add `path: [{"index": 64}]` with its zero-based native option index. In that case,
+`offset` and `limit` count UTF-8 bytes of that label, and the result uses the string envelope below.
+
+For `source: "graph"`, `path: [{"property":"series"}]` pages original series records, including each retained label
+and its values. `path: [{"property":"series"},{"index":0},{"property":"values"}]` pages only that series' numeric
+samples. Both use zero-based keys and the same collection envelope as options. An invalid series index is an error;
+an offset beyond a collection's end returns no entries. Samples outside the requested slice are not copied or
+transferred. These are native array pages, independent of widget-tree depth.
+
+For `source: "gui"`, `path` starts at the matched existing `LuaGuiElement` and accepts property/index steps only,
+such as `[{"property":"items"}]` or `[{"property":"tags"},{"index":"opaque_key"}]`. Methods and callbacks are
+not invoked. Tables and indexable objects return paged `entries` with original keys and bounded value previews;
+unavailable properties retain read status. Use `next_offset` for continuation without changing the path.
+Plain-table numeric indices retain zero, negative and fractional keys; native API index operators enforce their
+own domains.
+
+String sources return `value`, `value_type: "string"`, `unit: "utf8_bytes"`, `offset`, `total`, `has_more`, `truncated` and any
+`next_offset`. This also applies when a GUI path reaches a string. Offsets must start on UTF-8 character boundaries;
+limits must fit the next character. Offsets at or beyond the end return an empty value. Text sources read stored
+values only and do not invoke dynamic tooltip providers. Missing values report unavailable status.
+
+Every page is a fresh observation. Changing UI, table order or text can affect continuation; no historical widget
+or string snapshot is retained between requests. Tree reads use live selectors and relative `max_depth`.
+
 ### Control values
 
-Supported controls also expose `properties`: `check_state` for checkboxes/radio buttons, `toggled` for toggle buttons,
+Supported controls also expose `properties`: `check_state` for checkboxes/radio buttons, independent stored native
+`toggled` and `toggle_mode` flags for buttons,
 `selected_index` for dropdowns, and slider `value`, `minimum`, `maximum` and `step`. Dropdown indices are zero-based;
 null means no selection. Missing properties are not false or empty values. When property decoding is unavailable,
 the snapshot includes a reason and retains the basic tree.
 `check_state` is the original native enum integer on both platforms, preserving every state without converting it
 to a boolean or inventing a name. Do not assume a numeric mapping to state names.
+`toggled` is returned even when `toggle_mode` is false. Script-controlled selection need not use automatic native
+button toggling. A script element's `auto_toggle` is retained separately in `gui.properties`.
 
 Progress widgets expose `properties.progress` with their raw `value`, lowercase native enum identifier `direction`, and `has_text`
 flag. Values are not clamped or converted to a completion percentage. Unknown directions use `unknown_<number>`;
@@ -172,8 +323,7 @@ non-finite values become null with `value_non_finite: true`. An unavailable adap
 
 Dropdown properties also include `options`, each with a zero-based `index` and `text`, plus `options_total` and
 `options_truncated`. Empty labels are preserved. All observed options for each selected widget are returned in native
-list order; each label permits 16 MiB of UTF-8 text with `text_truncated: true` when shortened. List and
-label truncation are independent. A selected index may lie outside the returned prefix. If option metadata cannot
+list order. Reported list and label truncation are independent. A selected index may lie outside a returned page. If option metadata cannot
 be resolved, `options_unavailable_reason` is returned instead of an invented empty list. Reading options does not
 open or change the dropdown.
 
@@ -189,9 +339,17 @@ name) and `native_type` (the prototype's native class). For example, an item slo
 `{"name":"stone-furnace","native_type":"ItemPrototype"}` and a recipe slot can return `RecipePrototype`.
 An absent `prototype` means no supported provider was observed; a present object with null fields means the
 provider returned no prototype. This alone does not establish that an inventory is empty. Names are bounded to
-255 UTF-8 bytes and native types to 159, with independent `name_truncated` and `type_truncated` flags when shortened.
+255 UTF-8 bytes, with `name_truncated` when shortened. Native type text is copied in full, subject to representation
+and allocation checks; it has no separate small field capacity.
 If provider metadata is unavailable, `slot_identity_unavailable_reason` explains the failure. Do not infer quantity,
 quality or durability from the prototype name.
+
+Native widgets that directly retain a supported prototype pointer or typed ID also use `properties.prototype`.
+Starmap connection widgets expose their connection prototype, and achievement cards expose their achievement
+prototype. Select these by the same observed `prototype.name` predicate used for slots. Use the ordinary
+`world_query` prototype catalog and requested attributes for connection endpoints, location coordinates or other
+prototype details. The UI observation does not infer topology from screen geometry. Missing metadata for these
+retained references or card state is reported by `stored_identity_unavailable_reason`.
 
 The same provider returns `properties.quality`, using the same name/type/truncation structure. It is the quality
 prototype returned by the widget itself. Null fields mean the provider returned no quality; an absent property means
@@ -210,12 +368,44 @@ quality or an "any" state. An absent condition means that no supported provider 
 `quality_condition_unavailable_reason` reports unavailable adapter metadata. This covers the common item-filter
 provider used by inventory and other item slots; it does not claim every entity/signal filter or custom painter.
 
+### Graphs and achievement cards
+
+Native `agui::Graph` components expose `properties.graph`: `sample_count`, `minimum_value`, `maximum_value`,
+`index_base: 0`, and `series`. Each series retains its zero-based `index`, original `label` and ordered `values`.
+Empty and repeated labels and differing sample counts remain unchanged. Values are the stored native floats;
+they are not reconstructed from prototypes, pixels or graph formulas. Non-finite numbers use
+`{"value_type":"non_finite_number","value":"nan"}`, `"infinity"` or `"-infinity"` instead of invalid JSON numbers.
+Axis captions and formatted tick labels remain ordinary child widgets. Their formatting can differ from the raw
+sample units; no formatter or tooltip callback is invoked to convert them. An absent graph property means no
+supported graph component was observed; `graph_unavailable_reason` reports unavailable adapter metadata.
+
+For example, read a graph subtree through a live selector, then request a sample slice:
+
+```json
+{
+  "selector": {"path": [{"axis":"descendant","match":{"native_type":"agui::Graph"},"position":1}]},
+  "collection": {
+    "source":"graph",
+    "path":[{"property":"series"},{"index":0},{"property":"values"}],
+    "offset":0,
+    "limit":16
+  }
+}
+```
+
+Native achievement cards expose `properties.achievement` with `state_type: "AchievementState"`, raw `state_value`,
+`shown_state_value` and the card's `in_sidebar` flag. These are the card's cached native enums and context, preserving
+unknown values without inventing completion booleans or unlock eligibility. Names, descriptions, any progress bars
+and explanatory messages remain original child widgets and text. Global achievement history, a card's shown state
+and whether the current save can earn an achievement are distinct observations; no combined status is inferred.
+
 ### Item state and image references
 
 Supported element providers expose `properties.element`. A returned `ItemStack` has its raw `count` and an `item`
 object or null; direct item providers return the item object itself. Item objects include native type and raw `health`,
 plus `durability_left` or `magazine_left` when those native fields apply. Values are not clamped or converted into bar
-percentages. A non-finite field is null with `<field>_non_finite: true`. Native type truncation uses `type_truncated`.
+percentages. A non-finite field is null with `<field>_non_finite: true`. Native type text has no separate small
+field capacity; representation and allocation failures are errors.
 Null `element` means a supported provider returned no object; an absent property means no supported provider was
 observed. A stack's null `item` does not imply any health, durability or ammunition default. The observation never
 creates an item object to fill in missing data. `element_unavailable_reason` reports missing adapter metadata.
@@ -235,6 +425,21 @@ pixels or filenames. For example, a native button may report `"name": "side_menu
 `name_truncated: true` reports a bounded name; `icon_names_unavailable_reason` reports unavailable lookup metadata.
 Opaque references remain available when names cannot be read.
 
+Native image widgets also expose `properties.image`. Null means the widget holds no image; an absent property means
+no supported image component was observed. A non-null value has the existing image object's `native_type`.
+For `GuiImage`, `sprite` is the stored static sprite, using the same snapshot-local references and optional game
+registration names as `properties.icons`; null means no static sprite. Other image types, including `GuiAnimation`,
+retain their original type without expanding frames or selecting a sprite from an animation. For example:
+
+```json
+{"image":{"native_type":"GuiImage","sprite":{"reference":7,"identity_scope":"snapshot","name":"technology_white"}}}
+```
+
+An unidentified resource has `name: null`. A dynamic image may return only `{"native_type":"GuiAnimation"}`.
+`image_unavailable_reason` reports unavailable adapter metadata. No pixels, animation frames, simulation
+initialization/update scripts or inferred media names are returned. Simulation widgets remain visible in the tree
+by their native type; a widget type does not identify the subject of its animation.
+
 Widgets with a stored tooltip provider expose `properties.tooltip`. `status: "stored"` includes the provider's
 original `title` and `text`, including empty strings, rich-text markers and line breaks. `title_truncated` and
 `text_truncated` report bounded copies. An unsupported provider reports `status: "unsupported_provider"`; a failed
@@ -243,28 +448,42 @@ metadata is unavailable; `tooltips_unavailable_reason` reports the latter. This 
 would show no tooltip: style defaults and dynamically generated tooltips are outside this passive read.
 The reader never hovers, creates a tooltip or invokes a tooltip callback.
 
-For existing script GUI elements, `world_query` object inspection also reads the game's original `SpritePath` values,
-such as `item/iron-plate`. Follow `player.gui.screen` (or another existing GUI root) by element name or index, then
-request `sprite`, `hovered_sprite` and `clicked_sprite` where the element supports them. Empty configured strings
-remain empty strings; they are not filled from a rendered fallback. `clicked_sprite` is a Lua configuration field,
-not the native icon button's `disabled` reference. These observations do not provide a name for every native UI image
-or correlate Lua elements with snapshot-local widget IDs.
-The same inspection can request `tooltip` and `elem_tooltip` where supported. These retain the game's original
-localization expression or element descriptor; they are not expanded into generated hover content.
+For script GUI elements, `gui.properties` preserves original `SpritePath` values such as `item/iron-plate`,
+`recipe/iron-plate` or a mod's own identifier. Empty configured sprite strings remain empty; they are not filled from
+a rendered fallback. `clicked_sprite` is an API configuration field, separate from a native icon's `disabled`
+reference. `tooltip` and `elem_tooltip` retain existing localization expressions or element descriptors without
+generating hover content. These observations do not name every native image or expand image layers.
+The same attributes are also available through `world_query` inspection, independently of native widget registration:
 
 ```json
 {
-  "selection": {
-    "kind": "inspect",
-    "target": {"kind": "player"},
-    "path": [
-      {"property": "gui"},
-      {"property": "screen"},
-      {"index": "my_frame"},
-      {"index": "my_sprite_button"}
+  "query": {
+    "selection": {
+      "kind": "inspect",
+      "target": {
+        "kind": "player"
+      },
+      "path": [
+        {
+          "property": "gui"
+        },
+        {
+          "property": "screen"
+        },
+        {
+          "index": "my_frame"
+        },
+        {
+          "index": "my_sprite_button"
+        }
+      ]
+    },
+    "fields": [
+      "sprite",
+      "hovered_sprite",
+      "clicked_sprite"
     ]
-  },
-  "fields": ["sprite", "hovered_sprite", "clicked_sprite"]
+  }
 }
 ```
 
@@ -281,27 +500,32 @@ widgets; element properties expose existing object fields, not reconstructed ren
 
 Use the same selector structure for `ui_read` and `ui_action`. Reads return every matched subtree; actions require one
 eligible target. `matched` marks directly selected nodes; descendants are included without becoming action handles.
-`selector_nodes_omitted` counts nodes excluded by selection, not data lost to truncation.
 
-Each selector has 1–16 steps. Each step requires `axis` (`child` or `descendant`) and `match`, whose optional predicates
-are `native_type`, `text`, `enabled`, `visible` and `prototype`. A step's `position` selects within each preceding
-context in preorder (parent before descendants), independently of the snapshot's postorder output.
+A selector has one or more steps, without a separate step-count ceiling. Each step requires `axis` (`child` or `descendant`) and `match`, whose
+optional predicates are `native_type`, `text`, `enabled`, `visible`, `prototype` and `gui`. A step's `position` selects within each preceding
+context in preorder (parent before descendants), following native sibling order.
 `visible` accepts a boolean; widgets with unknown visibility match neither value.
-Type and text predicates must contain fewer than 160 and 1024 UTF-8 bytes respectively, with no null characters.
-`prototype` takes a required nonempty `name` and optional nonempty `native_type`, with limits of 255 and 159 UTF-8
-bytes respectively and no null characters. For example, `match: {native_type: "InventoryGuiSlot", prototype:
+String predicates contain no null characters; type and prototype predicates must be nonempty, while text may be
+empty. There is no separate small byte-length ceiling.
+`prototype` takes a required `name` and optional `native_type`. For example, `match: {native_type: "InventoryGuiSlot", prototype:
 {name: "stone-furnace"}}` matches that identity in a live slot. All predicates are exact matches; truncated identity
 fields cannot match. Add ancestor or position constraints when the same prototype appears in several widgets.
-Quality is not a selector predicate.
-Overlapping contexts return each target once. Selector resolution uses the complete captured tree; an incomplete
-tree is an error, so increase `max_nodes` when a selected observation requires a larger traversal.
+Native quality is not a dedicated selector predicate. Script attributes can be matched through `gui`.
+Overlapping contexts select each target once without removing repeated nodes from observations. Selector resolution
+uses the complete live tree before observation-depth projection; unsafe or incomplete traversal is an error.
+
+`match.gui` compares existing `LuaGuiElement` attributes, including those returned inside `gui.properties`. Attribute
+names are direct in the predicate: `{"gui":{"name":"my_button","sprite":"item/iron-plate"}}`.
+Object predicates recursively require the supplied fields; arrays and scalar values match exactly. For example,
+`{"gui":{"tags":{"opaque_key":12}}}` tests that stored value without interpreting the tag. Nested readable API
+attributes can also be matched. Unavailable attributes do not match, null predicates are rejected, and no methods or
+tooltip callbacks are invoked to evaluate predicates. Add native ancestors or positions to distinguish repetitions.
 
 ## UI actions
 
 To select an option, click the dropdown, read the expanded tree and click the option's live widget selector. Existing
 options can be clicked outside the visible scroll region; scrolling is not required. Expanding a list makes its
-option widgets discoverable for selectors. Normal tree limits
-still apply, and a widget that has not yet been created cannot be selected.
+option widgets discoverable for selectors. A widget that has not yet been created cannot be selected.
 
 For example, to click a button whose displayed text is `Settings`:
 
@@ -332,10 +556,11 @@ When a slider has an editable numeric field, prefer selecting that field and usi
 The agent chooses the field from the observed UI; MCP does not infer a slider-to-field relationship or redirect actions.
 If direct widget operations cannot express an interaction, viewport-positioned mouse input through `input` is a fallback
 in a normally running world. It follows current geometry and hit testing, so observe the UI before choosing coordinates
-and verify the result afterwards. `input` requires simulation ticks and is unavailable in menus or paused worlds.
+and verify the result afterwards. Nonempty `input` timelines require simulation ticks and are unavailable in menus or paused worlds.
 Click modifiers are `alt`, `control` and `shift`; `position: {x, y}` uses fractions in 0–1, defaulting to the center.
-Text replacement accepts up to 1024 Unicode scalar values, including line feeds. Tabs, carriage returns, nulls and
-malformed surrogate pairs are rejected. The widget's own rules can filter or shorten the replacement.
+Native text command storage holds up to 16384 Unicode scalar values, including line feeds. Other C0 controls
+(U+0000 through U+001F) and malformed surrogate pairs are rejected. The widget's own rules can filter or shorten
+the replacement.
 `press_key` takes an uppercase key name from `input_bindings`, such as `TAB`, `ESCAPE` or `RETURN`, and optional
 modifiers. It sends a complete press/release gesture, including in menus and paused games. Omit `selector` to use
 current focus, or specify it to focus a widget first. Use `set_text` for character text; key gestures do not type text
@@ -349,13 +574,14 @@ In multiplayer, observe the changed UI before issuing a dependent action: a resp
 
 Use `input_bindings` with `ids`, such as `["build", "confirm-gui"]`, or `search` to find controls. Results include mod
 controls and linked binding sources for the primary and secondary keyboard/mouse slots, with `offset`/`limit`
-pagination (64 entries by default). Empty binding slots are omitted; linked controls also report their effective
+pagination when requested. All matching controls are returned by default. Empty binding slots are omitted; linked controls also report their effective
 bindings. Snapshots report whether discovery was complete and capture the full existing registry. Registration and a
 configured binding do not imply that an
 action is permitted in the current game state. Control IDs and structured bindings are independent of the display
 language; this tool does not return localized control names or descriptions. It only reads bindings and does not send
 input.
-`offset` defaults to 0; `limit` defaults to 64. `ids` accepts exact control IDs; `search`
+`offset` defaults to 0; omitting `limit` returns all matches after that offset. `has_more` and `next_offset` describe
+an explicitly bounded page. `ids` accepts exact control IDs; `search`
 matches control IDs case-insensitively. Every page is a new sorted snapshot, so binding changes between pages may change
 the results. Inspect truncation before assuming a control is absent. Native control IDs and linked-owner IDs
 must fit 255 UTF-8 bytes; a longer native identifier produces an explicit capacity error.
@@ -375,10 +601,35 @@ discovery. `ids` and `search` can be combined and both filters must match. Missi
 
 ## Input timelines
 
-`input` accepts `timeline` and optional `stop_previous` (default `false`). Each array entry is an independent action
-with inclusive relative ticks. Use `input_bindings` for physical key names and add modifier keys as separate entries.
+`input` coordinates keyboard and mouse actions in one call: multi-key chords, simultaneous holds, repeated presses
+and timed sequences. A single timeline can hold the build button while moving through several path segments and
+pressing rotation at corners, for example to lay a long belt route with turns. Keep an entire held gesture in one
+call: its keys and buttons are released when that timeline completes or aborts.
+
+`timeline` entries share one relative tick clock. Overlapping ranges run together; later ranges schedule subsequent
+actions. Array order controls dispatch within a tick, not sequential execution of whole entries. Give each key,
+modifier, button and pointer action its own entry. Discover current bindings with `input_bindings`.
+`stop_previous` defaults to `false`.
 Tick `0` is the first eligible local-player input evaluation after the task is admitted, meaning start as soon as
 possible. It is not the time the agent sends the request, a wall-clock deadline or an authoritative server tick.
+
+For example, this holds Ctrl and Shift while briefly pressing C. The physical keys are illustrative; select keys and
+modifiers from the current bindings for the intended action. Put modifiers before the key they modify:
+
+```json
+{
+  "timeline": [
+    {"device": "keyboard", "key": "LCTRL", "tick": "0-7"},
+    {"device": "keyboard", "key": "LSHIFT", "tick": "0-7"},
+    {"device": "keyboard", "key": "C", "tick": "2-3"}
+  ]
+}
+```
+
+For a drag with a turn, combine one button hold, two motion segments and a rotation press. The following example
+assumes the intended item is already held, its initial orientation follows the first leg, build is bound to left
+mouse and rotate to R. Choose world coordinates inside the current viewport. Each motion uses `per_point_ticks:2`
+to dwell at each tile center:
 
 ```json
 {
@@ -386,31 +637,40 @@ possible. It is not the time the agent sends the request, a wall-clock deadline 
     {
       "device": "mouse",
       "motion": {
-        "space": "viewport",
-        "from": {"x": 100, "y": 200},
-        "to": {"x": 200, "y": 200}
+        "space": "world",
+        "snap": "tile_center",
+        "from": {"x": -4, "y": -3},
+        "to": {"x": 3, "y": -3}
       },
-      "tick": "0-100"
+      "start_tick": 0,
+      "per_point_ticks": 2
     },
-    {"device": "mouse", "button": "left", "tick": "0-200"},
-    {"device": "keyboard", "key": "R", "tick": "100"},
+    {"device": "mouse", "button": "left", "tick": "0-31"},
+    {"device": "keyboard", "key": "R", "tick": "16"},
     {
       "device": "mouse",
       "motion": {
-        "space": "viewport",
-        "from": {"x": 200, "y": 200},
-        "to": {"x": 200, "y": 300}
+        "space": "world",
+        "snap": "tile_center",
+        "from": {"x": 3, "y": -3},
+        "to": {"x": 3, "y": 4}
       },
-      "tick": "101-200"
+      "start_tick": 16,
+      "per_point_ticks": 2
     }
   ]
 }
 ```
 
-This holds the left button while moving along two paths, with a one-tick R press between them. The first motion
-entry precedes the button entry so the initial pointer position is dispatched before the press. Within each tick,
-entries dispatch in array order, with intervals in their supplied order; the last active pointer position wins.
-All scheduled presses/moves run before the local input evaluation, and interval-ending buttons release after it.
+The first leg visits eight centers from `(-3.5,-2.5)` to `(3.5,-2.5)` during ticks `0-15`; the second visits eight
+from `(3.5,-2.5)` to `(3.5,4.5)` during `16-31`. R is pressed at the shared corner while the mouse button remains
+held throughout both legs. Longer routes use additional motion entries and appropriately timed rotation presses.
+The tool sends these inputs; placement still depends on the held item, orientation, available space and game rules.
+
+The first motion entry precedes the button entry so the initial pointer position is dispatched before the press.
+Within each tick, entries dispatch in array order, with intervals in their supplied order; the last active pointer
+position wins. All scheduled presses/moves run before the local input evaluation, and interval-ending buttons
+release after it. Motion alone does not press a mouse button.
 
 `tick: "0-100"` includes 101 evaluations. A single value such as `"100"` occupies one evaluation. Multiple segments
 such as `"100-200,201,300-400"` stay separate; each interval owns and closes its hold, including adjacent intervals.
@@ -437,32 +697,13 @@ They refer to the currently viewed surface, which can differ from the character'
 The current game view projects each world position to the nearest representable viewport pixel on that tick;
 offscreen world positions fail and release held input. The tool does not move the camera.
 
-For long paths with point-by-point dwell, replace `tick` with `per_point_ticks` and optional `start_tick` (default 0):
-
-```json
-{
-  "timeline": [
-    {
-      "device": "mouse",
-      "motion": {
-        "space": "world",
-        "snap": "tile_center",
-        "from": {"x": 10, "y": 20},
-        "to": {"x": 20, "y": 20}
-      },
-      "start_tick": 0,
-      "per_point_ticks": 1
-    },
-    {"device": "mouse", "button": "left", "tick": "0-10"}
-  ]
-}
-```
-
+For point-by-point dwell, replace `tick` with `per_point_ticks` and optional `start_tick` (default 0), as above.
 The generated path has `ceil(max(abs(dx),abs(dy)))+1` uniformly spaced points, including endpoints, after any
-endpoint snapping. Viewport points are rounded to pixels; tile-center paths are snapped to centers. The example
-visits 11 centers from `(10.5,20.5)` to `(20.5,20.5)` and occupies ticks `0-10`. Each point is held for the specified
-number of evaluations. This mode is available only for motion and cannot be combined with `tick`; its final tick
-must fit the same endpoint bound. Dwell counts client input evaluations, without guaranteeing placement, selection
+endpoint snapping. Viewport points are rounded to pixels; tile-center paths are snapped to centers. Duration is the
+point count times `per_point_ticks`; a segment starting at `s` occupies `s` through `s + duration - 1`. Schedule the
+next segment explicitly; separate entries do not concatenate automatically. This mode is available only for motion
+and cannot be combined with `tick`; its final tick must fit the same endpoint bound. Dwell counts client input
+evaluations, without guaranteeing placement, selection
 or server effects. Use several entries for complex paths or varying speeds.
 
 Viewport coordinates are nonnegative integer game-content pixels from the top-left, not desktop pixels. Choose
@@ -470,8 +711,9 @@ positions within the viewport; viewport coordinates are not clamped. Input chang
 input or focus. For UI actions, a same-tick move and press can precede hover processing; use an earlier position
 entry or prefer `ui_action`. Wheel input over UI can be unreliable.
 
-A request permits at most 256 entries. Empty `timeline` completes immediately; with `stop_previous: true`, it cancels
-and cleans up the previous task without starting another. Nonempty timelines require a running world.
+A request permits at most 256 entries. Empty `timeline` completes without input when idle; with `stop_previous: true`,
+it cancels and cleans up the previous task without starting another. All input calls require attachment, including
+empty timelines. Nonempty timelines require a running world.
 Only one task may run in the attached game; busy calls fail unless `stop_previous` is true. Replacement validates
 arguments and context before aborting the old task. Other observation and UI tools can run while input is pending.
 Pause, unload, detach or cancellation stops further work and releases MCP-held buttons cooperatively. Original
@@ -492,10 +734,13 @@ map bounds and surface index, plus the local player's controller and physical co
 `not_evaluated`; world data may be hidden from the player and is not remembered map-chart content.
 
 The default `detail: "grid"` aggregates cells. `detail: "entities"` returns individual objects with the same
-`attributes`, `read_status`, `details` and `detail_status` as entity queries. It accepts `fields` and
+`attributes`, `read_status`, `details` and `detail_status` as entity queries. It accepts native `fields`, per-root `reads`,
+table `depth` and
 `include: ["recipe", "fluids", "filters"]`; `entity_limit` then applies to the entire area. Related objects stay
 references. This provides selected configuration information without reproducing the game's ALT overlay or inferring
-what should be drawn. Grid mode rejects `fields`/`include`; entity mode rejects `cell_size`.
+what should be drawn. Both modes accept additional native entity `filters`.
+Grid mode rejects `fields`/`include`/`reads`; entity mode rejects `cell_size`, `cell_limit`, `start_cell`, `group_by`
+and `aggregates`. In either mode, `depth` bounds ordinary table values in fields or grouping keys.
 
 Grid grouping defaults to `group_by: ["name", "type", "quality"]`. Choose distinct entity fields;
 `group_by: []` produces one group per cell. Equal projected values group together regardless of table key order.
@@ -557,8 +802,13 @@ camera:
 An explicit area may also specify `surface` by name or positive index; otherwise it uses the current controller's
 surface. Coordinates must be finite and within ±1,000,000 tiles.
 Areas must have positive dimensions. `cell_size` is a positive integer; it defaults to at least 32, enlarged as needed
-to fit within 16 rows and 16 columns. Smaller explicit cells may return more than 256 cells. Cell counts must fit a
-32-bit signed integer. Partial edge cells retain their actual bounds.
+to fit within 16 rows and 16 columns. Partial edge cells retain their actual bounds.
+
+`cell_limit` defaults to 256 returned cells. If cells remain, `next_cell` contains the inclusive zero-based
+`{row,column}` for `start_cell`. Continue with the original explicit `area`, `surface` and `cell_size`; default-viewport
+queries must first be repeated with explicit bounds and cell size. Order is row-major, with columns increasing first.
+`total_cells` counts the entire grid, including grids larger than a signed 32-bit count. A page's `truncated` also
+includes partial entity scans; only `next_cell` indicates remaining cells. Each page reads current world state.
 
 The row-major `objects` array contains cells with zero-based `row`/`column`, map `area`, `entity_groups`, a center
 `tile_sample`, and `coverage`. Each group contains the original grouping values in `attributes`, their `read_status`, `count` and requested `aggregates`. Spatial discovery uses collision candidates, then assigns only entities whose centers lie within the
@@ -579,26 +829,30 @@ fail instead of inventing camera state. Use `world_query` for individual objects
 
 ## World queries
 
-`world_query` reads a loaded world, including while another UI window is open. For example:
+`world_query` takes one `query` object and reads a loaded world without moving the player or opening entity windows,
+including on another surface or while another UI window is open. All selection, projection and read options belong
+inside `query`. For example:
 
 ```json
 {
-  "selection": {
-    "kind": "entities",
-    "position": {
-      "x": 0,
-      "y": 0
+  "query": {
+    "selection": {
+      "kind": "entities",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "radius": 16
     },
-    "radius": 16
-  },
-  "fields": [
-    "name",
-    "type",
-    "position",
-    "quality",
-    "health"
-  ],
-  "limit": 64
+    "fields": [
+      "name",
+      "type",
+      "position",
+      "quality",
+      "health"
+    ],
+    "limit": 64
+  }
 }
 ```
 
@@ -614,50 +868,75 @@ and splitters have their own native types. To read belts, underground belts, spl
 
 ```json
 {
-  "selection": {
-    "kind": "entities",
-    "area": {
-      "left_top": {
-        "x": 0,
-        "y": 0
+  "query": {
+    "selection": {
+      "kind": "entities",
+      "area": {
+        "left_top": {
+          "x": 0,
+          "y": 0
+        },
+        "right_bottom": {
+          "x": 32,
+          "y": 32
+        }
       },
-      "right_bottom": {
-        "x": 32,
-        "y": 32
-      }
+      "type": [
+        "transport-belt",
+        "underground-belt",
+        "splitter",
+        "mining-drill"
+      ]
     },
-    "type": [
-      "transport-belt",
-      "underground-belt",
-      "splitter",
-      "mining-drill"
-    ]
-  },
-  "fields": [
-    "name",
-    "type",
-    "position"
-  ],
-  "limit": 128
+    "fields": [
+      "name",
+      "type",
+      "position"
+    ],
+    "limit": 128
+  }
 }
 ```
 
+Additional `selection.filters` pass native `EntitySearchFilters` such as `force`, `quality`, `ghost_name`,
+`to_be_deconstructed` or `has_item_inside` to the game. They cannot override geometry, `name`, `type` or the result
+limit. Unknown filter names fail against the installed runtime API instead of being silently ignored.
+
 Filters apply before the result limit. Check truncation and narrow the area when necessary; a bounded response does
-not promise every matching entity in a dense area. Each filter string is nonblank, at most 256 characters and contains
+not promise every matching entity in a dense area. Each `name`/`type` filter string is nonblank and contains
 no null characters. Coordinates must be finite
-and within ±1,000,000 tiles. The top-level `surface` accepts a nonblank name or positive index and defaults to the
+and within ±1,000,000 tiles. `query.surface` accepts a nonempty name or positive index and defaults to the
 current controller's surface. Results include the observation tick, controller/physical
 positions, truncation and per-property nil/error status. Entity point/area queries use collision geometry; radius
 queries use entity centers. Tile queries round to containing/intersecting cells.
 These are **live world reads**, which may include hidden entities; chunk visibility/charting flags distinguish them
 from what the player can currently see. Results are not remembered map-chart data. Queries do not generate chunks.
-`limit` defaults to 128 and can be increased. Areas require positive dimensions and radius must be finite and
-nonnegative. `fields` accepts distinct supported API property names; `tools/list` advertises the
-allowed
-names for each selection kind. Related objects are shallow references; use the selections below to inspect inventories
+Spatial `limit` defaults to 128 and can be increased. Exact `unit_number`, player/force/entity-reference selections
+and one-tile reads reject `limit`; they already select at most one object. Areas require positive dimensions and radius must be finite and
+nonnegative. `fields` accepts distinct native readable property names, including names outside the branch defaults.
+Discover applicable attributes with inspection `members`; absent/unsupported reads remain explicit nil/error statuses.
+`fields:[]` omits optional attributes while retaining identities and requested `reads`.
+Related objects are shallow references; use paths or the selections below to inspect inventories
 and prototypes. Entity order is unspecified; tile order is row-major. `candidates_observed` is not an entity total when
 the
 result is truncated. Use the containing world's identity scope when retaining entity unit numbers across calls.
+Player and surface numeric selectors accept positive unsigned 32-bit API indices. Entity `unit_number` accepts
+positive unsigned 64-bit integers exactly representable by the game's Lua number type; nonrepresentable integers
+fail before execution. Above 2^53, only appropriately spaced integers are representable. Clients must preserve
+the requested integer instead of rounding it during JSON encoding.
+
+Spatial results report `selection_complete`: false means matching entities or selected tiles were omitted by the
+count bound. They have no `has_more`, offset or continuation position. Choose a smaller area, stronger filters or a
+larger count for another current observation; calls do not share a frozen snapshot. Tiles are returned in row-major
+order, x first. `total` is the rounded rectangle's tile count and may exceed a signed 32-bit count.
+`candidates_observed` is the observed candidate count, not an entity total for an incomplete scan.
+
+`depth` controls ordinary table-valued attributes, starting at 0 for each selected value. The default is 3 and the
+effective maximum is 65535. Nonempty boundary tables carry `reason:"depth_bound"` and `children_truncated:true`;
+empty tables remain empty and cycles become references. `depth_truncated:true` marks nested depth omission and
+contributes to top-level `truncated`, independently of `selection_complete`. Native object references remain shallow.
+Non-finite numbers and unsupported Lua value kinds have explicit observation markers. Unsupported table key kinds
+report read errors rather than silently dropping entries.
 
 ### Entity configuration and related objects
 
@@ -672,101 +951,138 @@ These return separate `details` entries with per-entry nil/error information in 
 
 ```json
 {
-  "selection": {
-    "kind": "entities",
-    "position": {
-      "x": 10,
-      "y": 20
-    }
-  },
-  "fields": [
-    "name",
-    "status",
-    "crafting_progress"
-  ],
-  "include": [
-    "recipe",
-    "fluids",
-    "filters"
-  ]
+  "query": {
+    "selection": {
+      "kind": "entities",
+      "position": {
+        "x": 10,
+        "y": 20
+      }
+    },
+    "fields": [
+      "name",
+      "status",
+      "crafting_progress"
+    ],
+    "include": [
+      "recipe",
+      "fluids",
+      "filters"
+    ]
+  }
 }
 ```
 
-For deeper reads, use `selection.kind: "inspect"` with a `target`. Targets include `game`, ordinary entity/player/
+For deeper reads, use `selection.kind: "inspect"` with a `target`. Targets include `game`, `prototypes`, `defines`, ordinary entity/player/
 character/vehicle/physical_vehicle/force selectors, `surface` with an optional name, `planet`/`recipe`/`technology`
 with a name, or `prototype` with catalog `type` and `name`. Entity targets must resolve exactly one entity. Optional
-`player` selects player references or the force used for a recipe/technology. `game` provides roots such as players,
-surfaces and forces. Inspection requires the selected installation's `doc-html/runtime-api.json`.
+`player` selects player references or the force used for a recipe/technology. `force` selects a force by name/index
+for force, recipe and technology targets, mutually exclusive with `player`. `game` provides roots such as players,
+surfaces, forces and the train manager. `prototypes` exposes the native prototype registry; `defines` exposes the
+game's stored enum tables, including inventory indices and status codes. No mod or vanilla-name catalog is inferred.
 
 `mode` is one of:
 
-- `members`: discover readable attributes and admitted query methods, including shipped API descriptions, parameter
-  and return metadata, subclass restrictions and index/length capabilities. Availability in metadata does not mean
+- `members`: discover admitted passive attributes and query methods, including shipped API descriptions, parameter
+  and return metadata, subclass restrictions and index/length/iterator capabilities. Optional `search` filters native
+  member names by a case-insensitive literal substring before paging. Availability in metadata does not mean
   a property applies to the current concrete object.
-- `values` (default): read specified `fields`, or a page of all readable attributes. Native errors and nil values
-  remain explicit. Select distinct field names.
+- `values` (default): read the specified `fields`, or all admitted passive attributes of a native object when omitted.
+  Without `fields`, a selected plain table or scalar is returned as `value`, bounded by table depth. Explicit fields
+  read stored properties of a plain table; `fields:[]` omits optional values/attributes. No entry paging or attribute
+  count is applied. Native errors and nil values remain explicit. Select distinct field names.
 - `entries`: page a returned table or indexable collection. Each entry has its native `key`, bounded value preview,
-  and any read status. Keys sort by native scalar type/value; array-like objects use one-based indices.
+  and any read status. Keys sort by native scalar type/value; array-like objects use one-based indices. A fresh
+  `LuaChunkIterator` from `get_chunks` can also be consumed: entries have one-based ordinal `index` values, and
+  `total` is present only after exhaustion. Calls recreate the iterator; offsets are not persistent cursors.
+- `slice`: read a string reached by the target/path, using `offset` and `limit` as UTF-8 byte positions/counts.
+  The result preserves bytes and reports `value`, `total`, `unit: "utf8_bytes"`, `truncated` and any `next_offset`.
+  Offsets must start on a character boundary; the limit must fit the next character. Continuations never split a
+  character. Offsets at or beyond the end return an empty value.
 
-Use `selection.path` to follow up to 12 steps from a freshly resolved target. Each step is exactly
+Use `selection.path` to follow an ordered path from a freshly resolved target, without a separate step-count cap.
+Each step is exactly
 `{"property":"name"}`, `{"index":1}` (or a string key), or
 `{"method":"get_recipe","arguments":[],"result":2}`. Methods come from a restricted passive-query set; arbitrary
-Lua, mutation methods and insertion-capacity probes are not accepted. `arguments` contains up to eight JSON arguments;
-`result` selects one of up to eight return positions and defaults to 1. Omit trailing optional arguments.
+Lua, mutation methods, insertion-capacity probes and statistics reads that can create missing serialized data
+are not accepted. A documented readable attribute or a `get_` method name alone does not establish passivity.
+`arguments` contains positional JSON data
+matching the selected method's signature; `result` is a positive one-based return position and defaults to 1.
+Omit trailing optional arguments. Paths and argument data must fit the request buffer; actual API contracts still apply.
 
 ```json
 {
-  "selection": {
-    "kind": "inspect",
-    "target": {
-      "kind": "entities",
-      "unit_number": 123
-    }
-  },
-  "mode": "members",
-  "limit": 32
+  "query": {
+    "selection": {
+      "kind": "inspect",
+      "target": {
+        "kind": "entities",
+        "position": {
+          "x": 10,
+          "y": 20
+        },
+        "unit_number": 123
+      }
+    },
+    "mode": "members",
+    "limit": 32
+  }
 }
 ```
 
 ```json
 {
-  "selection": {
-    "kind": "inspect",
-    "target": {
-      "kind": "entities",
-      "unit_number": 123
+  "query": {
+    "selection": {
+      "kind": "inspect",
+      "target": {
+        "kind": "entities",
+        "position": {
+          "x": 10,
+          "y": 20
+        },
+        "unit_number": 123
+      },
+      "path": [
+        {
+          "method": "get_recipe"
+        }
+      ]
     },
-    "path": [
-      {
-        "method": "get_recipe"
-      }
+    "fields": [
+      "name",
+      "ingredients",
+      "products",
+      "enabled"
     ]
-  },
-  "fields": [
-    "name",
-    "ingredients",
-    "products",
-    "enabled"
-  ]
+  }
 }
 ```
 
 ```json
 {
-  "selection": {
-    "kind": "inspect",
-    "target": {
-      "kind": "entities",
-      "unit_number": 123
+  "query": {
+    "selection": {
+      "kind": "inspect",
+      "target": {
+        "kind": "entities",
+        "position": {
+          "x": 10,
+          "y": 20
+        },
+        "unit_number": 123
+      },
+      "path": [
+        {
+          "method": "get_fluid",
+          "arguments": [
+            1
+          ]
+        }
+      ]
     },
-    "path": [
-      {
-        "method": "get_fluid",
-        "arguments": [1]
-      }
-    ]
-  },
-  "mode": "entries"
+    "mode": "entries"
+  }
 }
 ```
 
@@ -775,29 +1091,108 @@ Fluid storage indices range from 1 through the observed `fluids_count`. Inspect 
 `has_fluid_segment` and admitted `get_fluid_segment_*` methods expose existing segment observations.
 No fluid mutation methods are admitted.
 
-All inspection modes accept `offset` (default 0) and `limit` (default 64), and report `total`, `truncated` and
-`next_offset` where applicable. Properties returning native objects remain references: continue the path to inspect
-them. `depth` controls plain-table preview depth (default 3); increase it to expand deeper values. Tables at that depth
-and cycles remain explicit references. There is no separate per-table entry count, string length or total preview-value
-budget. Collection scans are not limited to 65536 keys; indexed lengths must fit a 32-bit signed integer.
+Only `members`, `entries` and `slice` accept `offset` (default 0) and `limit`. `members` returns the complete catalog
+unless a count is supplied; `entries` defaults to 64 and `slice` to 4096 UTF-8 bytes. `values` rejects both parameters.
+Paged results report `has_more` and `next_offset` when more entries/bytes remain, plus `total` when the collection
+size is known; continuation is also
+available on the outer result. Properties returning native objects remain references: continue the path to inspect
+them. After resolving the path, the selected plain value, each attribute or each collection entry starts at preview depth 0.
+`depth` controls its expansion (default 3, effective maximum 65535).
+Nonempty boundary tables remain `depth_bound` references with `children_truncated:true`; empty tables stay empty.
+Ancestor cycles are `cycle` references, while shared branches are expanded independently. Plain table previews
+read stored entries without table indexing, iteration or length callbacks. An ordinary `object_name` key remains data.
+`depth_truncated:true` reports omitted nested children and contributes to `truncated`, even on a final collection page
+with `has_more:false`. There is no separate per-table entry count, string length or total preview-value
+budget. Indexed lengths must fit a 32-bit signed integer.
 This interface exposes supported native data, not arbitrary mod-private state, and does not compute game eligibility.
+Index steps preserve string keys, including empty strings and embedded NUL, or finite numeric keys, including zero,
+negative and fractional plain-table keys.
+An indexed native object still applies its own API rules.
 
-For script GUI elements exposed to the selected Lua context, prefer this inspection path for their API properties.
+### Batched relative reads
+
+`query.reads` is an ordered array of independent relative reads. It applies to each selected entity, generated tile,
+player, force, catalog value, inventory kind or inventory slot. Ungenerated tile placeholders have no live object to
+read. With `inspect` in `values` mode it applies to the available selected root;
+in `entries` mode it applies to each selected entry before its value becomes a shallow reference. Each read has
+`path` (default `[]`), `mode` (default `values`) and its own projection/depth or collection/text bounds. Reads cannot
+contain further `reads`. One path error produces that read's `read_status`, preserving the other reads and their order.
+Repeated paths and values remain repeated. All selected roots and reads observe the same safe point.
+
+For example, read recipes, output contents and module contents for every selected machine in one call:
+
+```json
+{
+  "query": {
+    "selection": {
+      "kind": "entities",
+      "area": {"left_top": {"x": 0, "y": 0}, "right_bottom": {"x": 32, "y": 32}},
+      "type": "assembling-machine"
+    },
+    "fields": ["name", "crafting_speed", "products_finished"],
+    "reads": [
+      {"path": [{"method": "get_recipe"}], "fields": ["name", "ingredients", "products"]},
+      {"path": [{"method": "get_recipe", "result": 2}], "fields": ["name"]},
+      {"path": [{"method": "get_output_inventory"}, {"method": "get_contents"}]},
+      {"path": [{"method": "get_module_inventory"}, {"method": "get_contents"}]}
+    ]
+  }
+}
+```
+
+Rows for native objects retain their `reference`; scalar catalog values and empty inventory slots need no reference.
+Available selected roots add ordered `reads[]`. A read returns attributes, `value`,
+entries/members, a slice, explicit `availability:"nil"` or a read error. Its public path preserves the original
+arguments. Native runtime `object_name` values remain unchanged; `api_class` records a declared documented interface
+when the concrete runtime class has no separate metadata. This type information follows documented properties,
+method returns and container entries; it does not guess concrete class aliases or game meaning.
+
+Native references remain references regardless of depth. To read a related object's properties, extend its path
+or add a relative read; raising depth expands ordinary tables only. Native empty tables retain the game's `{}`
+encoding; only MCP envelope arrays such as `objects`, `reads`, `entries` and paths normalize empty arrays to `[]`.
+Nested truncation contributes to the overall `truncated` flag but never turns a complete spatial selection into
+an incomplete one or creates a spatial continuation.
+
+The same paths cover quality-dependent prototype methods, blueprint entities/tiles/tags, schedule records and
+wait conditions, train-manager collections, transport-line contents, surface properties and generated chunks.
+Discover their applicable signatures with `members`. No UI navigation, player reach check or workflow interpretation
+is added. Force statistics getters and `LuaFlowStatistics` count attributes/methods are unavailable because they can
+allocate synchronized game state when the underlying statistics are empty. Safe statistics references and their
+native identity remain observable; this does not promise access to their counters.
+
+For script GUI elements exposed to the selected Lua context, `ui_read` returns selected attributes alongside native
+widgets. Use this inspection path for additional object traversal or script elements without native registration.
 For example, a named radio button inside a named screen frame can be read with:
 
 ```json
 {
-  "selection": {
-    "kind": "inspect",
-    "target": {"kind": "player"},
-    "path": [
-      {"property": "gui"},
-      {"property": "screen"},
-      {"index": "frame_name"},
-      {"index": "radio_name"}
+  "query": {
+    "selection": {
+      "kind": "inspect",
+      "target": {
+        "kind": "player"
+      },
+      "path": [
+        {
+          "property": "gui"
+        },
+        {
+          "property": "screen"
+        },
+        {
+          "index": "frame_name"
+        },
+        {
+          "index": "radio_name"
+        }
+      ]
+    },
+    "fields": [
+      "name",
+      "type",
+      "state"
     ]
-  },
-  "fields": ["name", "type", "state"]
+  }
 }
 ```
 
@@ -807,23 +1202,26 @@ These roots expose script GUI elements, not the complete native interface tree. 
 
 `selection: {"kind":"players"}` enumerates current-world players, including disconnected players. Optional
 `connected`, `names` and `indices` filters combine with AND; entries within each list are OR. Results sort by player
-index and support `offset` and `limit` (default 64). Names and indices must be distinct. `fields` uses the same set as a single player query.
+index and support optional `offset` and `limit`; all matches are returned by default. Names and indices must be
+distinct. `fields` uses the same set as a single player query.
 
 ```json
 {
-  "selection": {
-    "kind": "players",
-    "connected": true
-  },
-  "fields": [
-    "index",
-    "name",
-    "position",
-    "surface",
-    "physical_position",
-    "physical_surface",
-    "character"
-  ]
+  "query": {
+    "selection": {
+      "kind": "players",
+      "connected": true
+    },
+    "fields": [
+      "index",
+      "name",
+      "position",
+      "surface",
+      "physical_position",
+      "physical_surface",
+      "character"
+    ]
+  }
 }
 ```
 
@@ -836,38 +1234,42 @@ direct reads; unavailable controllers/references retain errors or nil rather tha
 
 ```json
 {
-  "selection": {
-    "kind": "player",
-    "player": "Alice"
-  },
-  "fields": [
-    "name",
-    "connected",
-    "position",
-    "surface",
-    "physical_position",
-    "physical_surface"
-  ]
+  "query": {
+    "selection": {
+      "kind": "player",
+      "player": "Alice"
+    },
+    "fields": [
+      "name",
+      "connected",
+      "position",
+      "surface",
+      "physical_position",
+      "physical_surface"
+    ]
+  }
 }
 ```
 
 ```json
 {
-  "selection": {
-    "kind": "inventory",
-    "owner": {
-      "kind": "character",
-      "player": "Alice"
+  "query": {
+    "selection": {
+      "kind": "inventory",
+      "owner": {
+        "kind": "character",
+        "player": "Alice"
+      },
+      "inventory": "main"
     },
-    "inventory": "main"
-  },
-  "limit": 32
+    "limit": 32
+  }
 }
 ```
 
 ### Player context
 
-Use `world_query` with `{"selection":{"kind":"player"}}` for current held-stack identity, held ghost, held blueprint
+Use `world_query` with `{"query":{"selection":{"kind":"player"}}}` for current held-stack identity, held ghost, held blueprint
 record, cursor temporariness, original hand location and crafting queue. The shared `player` envelope also includes
 controller type, current `position`/`surface` and
 `physical_position`/`physical_surface`; retain both pairs when using remote view. These are native API values, not
@@ -875,16 +1277,18 @@ MCP predictions about which actions are allowed. Select fewer properties when on
 
 ```json
 {
-  "selection": {
-    "kind": "player"
-  },
-  "fields": [
-    "cursor_stack",
-    "cursor_ghost",
-    "cursor_record",
-    "cursor_stack_temporary",
-    "hand_location"
-  ]
+  "query": {
+    "selection": {
+      "kind": "player"
+    },
+    "fields": [
+      "cursor_stack",
+      "cursor_ghost",
+      "cursor_record",
+      "cursor_stack_temporary",
+      "hand_location"
+    ]
+  }
 }
 ```
 
@@ -904,34 +1308,36 @@ in `read_status`; durability or ammunition is not meaningful for every item:
 
 ```json
 {
-  "selection": {
-    "kind": "inspect",
-    "target": {
-      "kind": "player"
+  "query": {
+    "selection": {
+      "kind": "inspect",
+      "target": {
+        "kind": "player"
+      },
+      "path": [
+        {
+          "property": "cursor_stack"
+        }
+      ]
     },
-    "path": [
-      {
-        "property": "cursor_stack"
-      }
+    "fields": [
+      "valid_for_read",
+      "name",
+      "count",
+      "quality",
+      "health",
+      "durability",
+      "ammo",
+      "label",
+      "is_blueprint",
+      "is_blueprint_book"
     ]
-  },
-  "fields": [
-    "valid_for_read",
-    "name",
-    "count",
-    "quality",
-    "health",
-    "durability",
-    "ammo",
-    "label",
-    "is_blueprint",
-    "is_blueprint_book"
-  ]
+  }
 }
 ```
 
 Use the same path with `cursor_record` and `mode:"members"` to discover record properties such as
-`is_blueprint_preview`, `type` and snapping settings. A record may initially be a preview; content reads can return
+`is_preview`, `type` and snapping settings. A record may initially be a preview; content reads can return
 the game's preview-read error until it becomes available. The admitted `is_blueprint_setup` and
 `get_blueprint_entity_count` methods can inspect a supported blueprint stack or record without expanding its entities.
 For example, append `{"method":"get_blueprint_entity_count"}` after the cursor property path step.
@@ -946,16 +1352,18 @@ surface.
 
 ```json
 {
-  "selection": {
-    "kind": "character"
-  },
-  "fields": [
-    "position",
-    "surface",
-    "health",
-    "max_health",
-    "selected_gun_index"
-  ]
+  "query": {
+    "selection": {
+      "kind": "character"
+    },
+    "fields": [
+      "position",
+      "surface",
+      "health",
+      "max_health",
+      "selected_gun_index"
+    ]
+  }
 }
 ```
 
@@ -963,15 +1371,17 @@ Read the main inventory without opening its UI or discovering it first:
 
 ```json
 {
-  "selection": {
-    "kind": "inventory"
-  },
-  "fields": [
-    "name",
-    "count",
-    "quality"
-  ],
-  "limit": 128
+  "query": {
+    "selection": {
+      "kind": "inventory"
+    },
+    "fields": [
+      "name",
+      "count",
+      "quality"
+    ],
+    "limit": 128
+  }
 }
 ```
 
@@ -983,17 +1393,19 @@ within the observation rather than resolving a previously observed position. Veh
 
 ```json
 {
-  "selection": {
-    "kind": "inventory",
-    "owner": {
-      "kind": "character"
-    }
-  },
-  "fields": [
-    "name",
-    "count",
-    "quality"
-  ]
+  "query": {
+    "selection": {
+      "kind": "inventory",
+      "owner": {
+        "kind": "character"
+      }
+    },
+    "fields": [
+      "name",
+      "count",
+      "quality"
+    ]
+  }
 }
 ```
 
@@ -1003,17 +1415,28 @@ Quickbar slots contain filters or references, not inventory storage. Query expli
 
 ```json
 {
-  "selection": {
-    "kind": "quickbar",
-    "slots": [
-      {"page_index": 1, "slot_index": 1},
-      {"page_index": 1, "slot_index": 2},
-      {"page_index": 2, "slot_index": 1}
-    ],
-    "screen_pages": [
-      1,
-      2
-    ]
+  "query": {
+    "selection": {
+      "kind": "quickbar",
+      "slots": [
+        {
+          "page_index": 1,
+          "slot_index": 1
+        },
+        {
+          "page_index": 1,
+          "slot_index": 2
+        },
+        {
+          "page_index": 2,
+          "slot_index": 1
+        }
+      ],
+      "screen_pages": [
+        1,
+        2
+      ]
+    }
   }
 }
 ```
@@ -1024,7 +1447,8 @@ Quickbar slots contain filters or references, not inventory storage. Query expli
 `page_width` reports the game's actual row width. `active_pages` contains requested screen indices and `attributes.page`,
 with per-entry `read_status.page` for nil/error results.
 Provide at least one nonempty list: `slots` accepts distinct locations, and `screen_pages` accepts distinct indices.
-Page and slot indices are bounded to 1..256; screen indices to 1..65536. These API/tool bounds do not assert that the
+Page and slot indices are bounded to 1..256; screen indices accept the API's unsigned 32-bit range, 1..4294967295.
+These argument domains do not assert that the
 game has that many pages or slots. Input order is preserved.
 This selection does not accept `fields`, `surface`, `offset` or `limit` and does not infer which rows are visible.
 
@@ -1033,6 +1457,7 @@ This selection does not accept `fields`, `surface`, `offset` or `limit` and does
 Use `selection: {kind: "inventories"}` to discover the local player's inventories. To inspect an entity, provide `owner`
 using an ordinary `entities` selection; it must resolve exactly one current entity. Each inventory reports its actual
 name, API index, size, filter support and bar support. A bar is the one-based first restricted slot.
+Discovery and slot reads return all matches unless a `limit` is supplied.
 Owners may also select `character`, `vehicle` or `physical_vehicle`. A missing owner is an error. Discover actual names
 before reading weapon, ammunition, armor or vehicle inventories. Stack fields include `ammo` and `durability`;
 unsupported
@@ -1045,27 +1470,29 @@ are reused across different entity types and are insufficient to identify the re
 
 ```json
 {
-  "selection": {
-    "kind": "inventory",
-    "owner": {
-      "kind": "entities",
-      "position": {
-        "x": 6.5,
-        "y": 0.5
+  "query": {
+    "selection": {
+      "kind": "inventory",
+      "owner": {
+        "kind": "entities",
+        "position": {
+          "x": 6.5,
+          "y": 0.5
+        },
+        "unit_number": 30
       },
-      "unit_number": 30
+      "inventory": "chest"
     },
-    "inventory": "chest"
-  },
-  "offset": 0,
-  "limit": 32,
-  "fields": [
-    "name",
-    "count",
-    "quality",
-    "health",
-    "spoil_percent"
-  ]
+    "offset": 0,
+    "limit": 32,
+    "fields": [
+      "name",
+      "count",
+      "quality",
+      "health",
+      "spoil_percent"
+    ]
+  }
 }
 ```
 
@@ -1078,37 +1505,43 @@ remove, sort or test whether an inventory can accept an item.
 
 ### Prototype catalogs and force recipes
 
-Use `selection: {kind: "prototypes", type: "item"}` to list prototype definitions. Supported types are `item`, `recipe`,
-`entity`, `fluid`, `technology`, `quality`, `item_group` and `item_subgroup`. `names` accepts a nonempty list of distinct exact names
-for batch reads, each with 1–256 characters; `search` accepts 1–128 characters
+Use `selection: {kind: "prototypes", type: "item"}` to list prototype definitions. `type` can name any native
+`LuaCustomTable` catalog attribute of `LuaPrototypes`, including equipment, tiles, virtual signals and space locations.
+Inspect the `prototypes` root with `mode:"members"` to discover catalog names/types. Scalar catalog entries retain
+their native value rather than being fabricated into prototype objects. `names` accepts a nonempty list of distinct exact names
+for batch reads; `search` accepts a nonempty string
 and filters internal names by a case-insensitive substring. Neither accepts null characters. Both may be combined.
 Unresolved exact names appear in `missing_names`.
 
 ```json
 {
-  "selection": {
-    "kind": "recipes",
-    "names": [
-      "iron-gear-wheel",
-      "transport-belt"
+  "query": {
+    "selection": {
+      "kind": "recipes",
+      "names": [
+        "iron-gear-wheel",
+        "transport-belt"
+      ]
+    },
+    "fields": [
+      "name",
+      "enabled",
+      "categories",
+      "energy",
+      "ingredients",
+      "products"
     ]
-  },
-  "fields": [
-    "name",
-    "enabled",
-    "category",
-    "energy",
-    "ingredients",
-    "products"
-  ]
+  }
 }
 ```
 
-`recipes` reads the local player's force recipes, including their current enabled state. A recipe prototype's `enabled`
-attribute describes its default definition instead. Ingredient and product records retain the game's API fields,
+`recipes` reads the local player's force recipes, including their current enabled state; optional `selection.force`
+selects another force by name/index. `technologies` supports the same force selection. A recipe prototype's `enabled`
+attribute describes its default definition instead. `categories` retains the game's category collection.
+Ingredient and product records retain the game's API fields,
 including amounts, probabilities and temperature constraints when supplied. Localized names/descriptions are returned
 as untranslated `LocalisedString` values; no translation request is sent. Related prototypes and groups are shallow
-typed references. `tools/list` advertises each category's allowed properties; unavailable values retain nil/error
+typed references. Native property discovery uses inspection `members`; unavailable values retain nil/error
 status.
 
 Recipe names need not match product names. `product` and `ingredient` select recipes or recipe prototypes containing
@@ -1116,19 +1549,21 @@ at least one exact `{type: "item"|"fluid", name: "..."}` entry. They combine wit
 
 ```json
 {
-  "selection": {
-    "kind": "recipes",
-    "product": {
-      "type": "item",
-      "name": "iron-plate"
-    }
-  },
-  "fields": [
-    "name",
-    "enabled",
-    "ingredients",
-    "products"
-  ]
+  "query": {
+    "selection": {
+      "kind": "recipes",
+      "product": {
+        "type": "item",
+        "name": "iron-plate"
+      }
+    },
+    "fields": [
+      "name",
+      "enabled",
+      "ingredients",
+      "products"
+    ]
+  }
 }
 ```
 
@@ -1141,28 +1576,31 @@ for labels, ordering, parent and subgroup references. Prototype reads also expos
 ### Force and technology state
 
 `selection: {kind: "force"}` reads the local player's force, including current/previous research, research queue,
-progress and whether research is enabled. Its selection accepts optional `player`; use `fields` to choose force
+progress and whether research is enabled. Its selection accepts optional `player` or `force` name/index, mutually
+exclusive; use `fields` to choose force
 properties.
 It returns one force and does not accept `surface`, `offset` or selection filters.
 Use `technologies` for current-force technology objects with names/search and normal catalog pagination:
 
 ```json
 {
-  "selection": {
-    "kind": "technologies",
-    "names": [
-      "automation",
-      "electronics"
+  "query": {
+    "selection": {
+      "kind": "technologies",
+      "names": [
+        "automation",
+        "electronics"
+      ]
+    },
+    "fields": [
+      "name",
+      "researched",
+      "enabled",
+      "level",
+      "prerequisites",
+      "saved_progress"
     ]
-  },
-  "fields": [
-    "name",
-    "researched",
-    "enabled",
-    "level",
-    "prerequisites",
-    "saved_progress"
-  ]
+  }
 }
 ```
 
@@ -1171,8 +1609,11 @@ are name-keyed dictionaries of shallow technology references. Prototype defaults
 availability are distinct; none alone proves that an action can be performed. Research effects can be read from the
 related technology prototype. Native nil and per-field errors remain explicit, including an absent current research.
 
-Inventory discovery, inventory slots, prototype catalogs, recipes and technologies default to `limit: 64` and
-`offset: 0`. Increase the limit for larger pages. Quickbar and local player/entity/force selections do not use this
+Inventory slots and inventory-kind discovery return all matches from `offset:0` unless a limit is supplied. Native
+slot indices remain meaningful when contents change; a later range still observes the current contents.
+Prototype catalogs, recipes and technologies return all explicitly named matches by default; other catalog queries
+default to `limit:64`. Increase the limit for larger pages.
+Quickbar and local player/entity/force selections do not use this
 pagination contract.
 Results report `next_offset` when another page exists, and
 catalogs sort by internal name. Each page is a fresh observation, so live inventory edits can shift contents between
@@ -1191,7 +1632,7 @@ Each message has a native update `tick`, zero-based `position_in_tick` within it
 `player_index_raw`, `text`, `raw` and separate truncation flags. `player_index_raw` is the unmodified native unsigned
 index, not the one-based Lua player selector; non-player messages can carry a sentinel. No sender/channel is parsed
 from text. `text` is existing cached display text, which may be empty or stale. `raw` formats the localization
-expression without requesting translation. Each string permits 16 MiB of UTF-8 text, without splitting a character.
+expression without requesting translation. Original rich-text markers and formatting are preserved.
 `player_name` and `player_name_truncated` preserve a separately retained sender when available, and
 `text`/`raw` describe the stored message body. MCP does not
 reconstruct a formatted message from these fields or refresh the game's translation/rendering cache.
@@ -1204,12 +1645,18 @@ Follow `has_more` to drain further pages. Separate storage counts also admit a n
 unchanged tick after local messages have been read, including in paused worlds. Reads do not acknowledge or remove
 messages, and concurrent readers can use their own offsets.
 
+For a long message field, use `text_slice: {field: "text", offset: 0, limit: 4096}`. `field` is `text` (default),
+`raw` or `player_name`. Only that textual field is emitted, alongside metadata and `<field>_range` with UTF-8 byte
+`offset`, `total`, `truncated` and any `next_offset`. Character-boundary rules match inspection string slices.
+Each message's `read_from` watermark points immediately before that record: repeat with `offset: read_from`,
+`limit: 1` and the next text byte offset to continue the same field. A page is a fresh history read; eviction or
+changed cached text can affect continuation. Omitting `text_slice` retains the ordinary complete-field projection.
+
 The watermarks use native ticks and chronological retained-list positions, without process addresses, random
 attachment identifiers or MCP observation counters. They survive MCP restarts with unchanged native history.
 `offset_basis` is `native_tick_and_storage_position`. These are per-player console watermarks, not server-issued
 globally unique message IDs. Different players can receive different history and local notifications; carry offsets
-only between observations of the same player history in the same world. A native tick alone is the common boundary
-when reading another player's console; its messages may repeat. Identical messages at one tick retain separate
+only between observations of the same player history in the same world. Identical messages at one tick retain separate
 positions instead of being merged by text.
 
 With `timeout` omitted or `0`, the tool returns the next safe-point observation immediately. A positive timeout
@@ -1229,8 +1676,10 @@ Use the returned offset on the next call, for example:
 {"offset": {"tick": 2412, "counts": [3, 1]}, "timeout": 30, "limit": 64}
 ```
 
-Both complete retained native storage lists are captured at one safe point. `retained_counts` reports the native list counts; `snapshot_truncated` reports incomplete capture. `boundary_truncated` reports a tick group whose
-older entries are outside the capture bound; its counts cannot provide complete continuation through that group.
+Retained metadata from both native storage lists is captured at one safe point; only the selected page and text slice
+are transferred with message text. `retained_counts` reports the native list counts; `snapshot_truncated` reports
+incomplete capture. `boundary_truncated` reports an incomplete tick group whose counts cannot provide complete
+continuation through that group.
 `history_lost` reports observed console replacement, missing boundary positions or an incomplete requested boundary.
 It cannot detect every history edit or world change. `missed_between_reads_possible` is always true: messages can
 disappear between reads, and the console may merge repeated output. Changing cached translations does not create
@@ -1293,8 +1742,9 @@ If the game's native condition suppresses rendering at frontend admission, captu
 not reject capture: drawing may continue when `halt-rendering-when-minimized` is disabled. Paused worlds can be
 captured while rendering continues. A stalled frontend or graphics backend can still leave capture pending; this
 check does not detect every rendering stall.
-Capture supports at most 8192 pixels per side, 16,777,216 pixels in total and a 16 MiB encoded image; exceeding these
-bounds returns an error.
+Capture supports at most 8192 pixels per side and 16,777,216 pixels in total. These source-frame bounds protect
+capture memory. Encoded output must fit a signed 32-bit byte-array length; there is no separate 16 MiB image ceiling.
+Exceeding these bounds returns an error.
 
 ## Completion and cancellation
 
@@ -1303,7 +1753,8 @@ Observe the result before submitting a dependent action, especially in multiplay
 response was lost: inspect current state first.
 
 Tool results carry a JSON object in `structuredContent` and an equivalent MCP text content block; screenshots
-additionally carry PNG image content. Rejected or failed tool calls use `isError: true` with `{"error":"description"}`.
+additionally carry JPEG or PNG image content with the corresponding MIME type. Rejected or failed tool calls use
+`isError: true` with `{"error":"description"}`.
 An input's structured `status: "aborted"`
 instead preserves partial progress. These are distinct from MCP transport/protocol errors.
 

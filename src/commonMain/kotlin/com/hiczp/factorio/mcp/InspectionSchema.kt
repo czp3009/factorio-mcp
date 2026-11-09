@@ -4,19 +4,21 @@ import kotlinx.serialization.json.*
 
 internal fun inspectionPathSchema() = buildJsonObject {
     put("type", "array")
-    put("maxItems", 12)
     put(
         "description",
-        "inspect only. Ordered traversal reacquired from the root in this observation. A step selects a readable property, a collection index/key, or an admitted query method. Use mode:members to discover available names and signatures. Method arguments are data; arbitrary Lua and mutating methods are rejected.",
+        "Ordered relative traversal for inspect or per-root reads, reacquired in this observation. Select a readable property, a collection index/key, or an admitted query method. Use mode:members to discover names and signatures. Arguments are data; arbitrary Lua and mutating methods are rejected.",
     )
     putJsonObject("items") {
         put("type", "object")
         put("additionalProperties", false)
         putJsonObject("properties") {
-            putJsonObject("property") { put("type", "string") }
+            putJsonObject("property") {
+                put("type", "string")
+                put("pattern", "^[A-Za-z_][A-Za-z0-9_]*$")
+            }
             putJsonObject("index") {
                 putJsonArray("type") {
-                    add("integer")
+                    add("number")
                     add("string")
                 }
             }
@@ -26,7 +28,6 @@ internal fun inspectionPathSchema() = buildJsonObject {
             }
             putJsonObject("arguments") {
                 put("type", "array")
-                put("maxItems", 8)
                 put(
                     "description",
                     "Method only: positional arguments matching the discovered API signature. Table-style methods take one JSON object. Omit for no arguments.",
@@ -35,7 +36,7 @@ internal fun inspectionPathSchema() = buildJsonObject {
             putJsonObject("result") {
                 put("type", "integer")
                 put("minimum", 1)
-                put("maximum", 8)
+                put("maximum", Int.MAX_VALUE)
                 put("default", 1)
                 put(
                     "description",
@@ -46,6 +47,14 @@ internal fun inspectionPathSchema() = buildJsonObject {
         putJsonArray("oneOf") {
             for (key in listOf("property", "index", "method")) addJsonObject {
                 putJsonArray("required") { add(key) }
+                put("additionalProperties", false)
+                putJsonObject("properties") {
+                    put(key, buildJsonObject {})
+                    if (key == "method") {
+                        put("arguments", buildJsonObject {})
+                        put("result", buildJsonObject {})
+                    }
+                }
             }
         }
     }

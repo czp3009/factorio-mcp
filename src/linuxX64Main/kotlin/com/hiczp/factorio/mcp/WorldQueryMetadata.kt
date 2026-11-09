@@ -13,6 +13,8 @@ internal class WorldQueryMetadata private constructor(
     private val viewport: ViewportLayout,
     private val evidence: List<ElfImage.Symbol>,
 ) {
+    val playerSize: Long get() = player.playerSize
+
     fun writeTo(output: FmLinuxWorldQueryConfig, loadBias: Long) {
         world.writeTo(output.world, loadBias)
         context.writeTo(output.script, script, loadBias)

@@ -48,6 +48,13 @@ internal class ResidentChannel(
         operation: UInt,
         prepare: (FmLinuxShared) -> Unit,
         read: (FmLinuxShared, Result) -> T,
+    ): T = executePayload(operation, byteArrayOf(), prepare, read)
+
+    suspend fun <T> executePayload(
+        operation: UInt,
+        payload: ByteArray,
+        prepare: (FmLinuxShared) -> Unit,
+        read: (FmLinuxShared, Result) -> T,
     ): T = mutex.withLock {
         currentCoroutineContext().ensureActive()
         check(process.alive()) { "Factorio exited" }
@@ -56,7 +63,30 @@ internal class ResidentChannel(
         check(!actionOwned || operation == FM_LINUX_CLEANUP || operation == FM_LINUX_DETACH) {
             "Previous action cleanup is incomplete; retry detach"
         }
+        if (payload.isNotEmpty()) {
+            shared.pointed.requestSize = payload.size.toUInt()
+            val reserved = submit(FM_LINUX_RESERVE_REQUEST)
+            currentCoroutineContext().ensureActive()
+            check(reserved.code == 0 && shared.pointed.request.size == payload.size.toULong()) {
+                "Cannot reserve resident request storage: ${reserved.code}"
+            }
+            process.writeData(shared.pointed.request.address.toLong(), payload)
+        }
+        shared.pointed.selector.path.address = 0uL
+        shared.pointed.selector.path.size = 0uL
+        shared.pointed.query.source.address = 0uL
+        shared.pointed.query.source.size = 0uL
+        shared.pointed.query.arguments.address = 0uL
+        shared.pointed.query.arguments.size = 0uL
+        shared.pointed.bindingQuery.address = 0uL
+        shared.pointed.bindingQuery.size = 0uL
         prepare(shared.pointed)
+        val result = submit(operation)
+        read(shared.pointed, result)
+    }
+
+    private suspend fun submit(operation: UInt): Result {
+        currentCoroutineContext().ensureActive()
         shared.pointed.operation = operation
         fm_ipc_store(fm_linux_cancel_word(shared), 0u)
         check(fm_ipc_exchange_if(fm_linux_command_word(shared), FM_LINUX_IDLE, FM_LINUX_PENDING) != 0) {
@@ -71,7 +101,7 @@ internal class ResidentChannel(
                 awaitResult()
             }
         }
-        read(shared.pointed, result)
+        return result
     }
 
     private suspend fun awaitResult(): Result {

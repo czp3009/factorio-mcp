@@ -95,12 +95,13 @@ internal class PrivateValueCopies(
                     ?: error("Selected producer has no register result")
             require(
                 site in flow.reachable &&
-                    instruction.operation in
-                        listOf(Operation.DOUBLE_DIVIDE, Operation.DOUBLE_MULTIPLY) &&
-                    target.number in 16..31 &&
-                    target.width == 8 &&
-                    value.field.width == 8 &&
-                    value.field.offset in 0..4088
+                    when (instruction.operation) {
+                        Operation.DOUBLE_DIVIDE, Operation.DOUBLE_MULTIPLY -> target.number in 16..31 && target.width == 8
+                        Operation.FLOAT_MINIMUM, Operation.FLOAT_MAXIMUM -> target.number in 16..31 && target.width == 4
+                        Operation.SUB -> target.number in 0..15 && target.width == 8
+                        else -> false
+                    } && value.field.width == target.width &&
+                    value.field.offset in 0..4096L - target.width
             )
         }
         val initial = MutableList<List<ByteSource?>>(32) { List(16) { null } }

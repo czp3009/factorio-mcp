@@ -154,6 +154,12 @@ internal class DebugTypes(private val process: HANDLE, private val base: ULong) 
     fun memberTypeName(owner: String, field: String): String =
         checkNotNull(name(member(owner, field).type)) { "Unnamed member type: $owner::$field" }
 
+    fun pointerTargetName(owner: String, field: String): String {
+        val value = member(owner, field)
+        check(uint(value.type, IMAGEHLP_SYMBOL_TYPE_INFO.TI_GET_SYMTAG) == 14u && length(value.type) == 8uL)
+        return checkNotNull(name(uint(value.type, IMAGEHLP_SYMBOL_TYPE_INFO.TI_GET_TYPEID)))
+    }
+
     fun byteArrayMember(owner: String, field: String, minimum: UInt): UInt {
         val value = member(owner, field)
         check(uint(value.type, IMAGEHLP_SYMBOL_TYPE_INFO.TI_GET_SYMTAG) == 15u)
@@ -252,6 +258,22 @@ internal class DebugTypes(private val process: HANDLE, private val base: ULong) 
             current = uint(current, IMAGEHLP_SYMBOL_TYPE_INFO.TI_GET_TYPEID)
         }
         check(name(current) == target) { "Unexpected PDB pointer path: $owner" }
+        check(offset <= UInt.MAX_VALUE.toULong() && offset + 8uL <= aggregateSize(owner))
+        return offset.toUInt()
+    }
+
+    fun scalarPointerPath(owner: String, vararg names: String, bytes: ULong, basic: UInt): UInt {
+        var current = type(owner)
+        var offset = 0uL
+        names.forEach {
+            val field = member(current, it)
+            offset += field.offset
+            current = field.type
+        }
+        check(uint(current, IMAGEHLP_SYMBOL_TYPE_INFO.TI_GET_SYMTAG) == 14u && length(current) == 8uL)
+        current = uint(current, IMAGEHLP_SYMBOL_TYPE_INFO.TI_GET_TYPEID)
+        check(uint(current, IMAGEHLP_SYMBOL_TYPE_INFO.TI_GET_SYMTAG) == 16u &&
+            uint(current, IMAGEHLP_SYMBOL_TYPE_INFO.TI_GET_BASETYPE) == basic && length(current) == bytes)
         check(offset <= UInt.MAX_VALUE.toULong() && offset + 8uL <= aggregateSize(owner))
         return offset.toUInt()
     }

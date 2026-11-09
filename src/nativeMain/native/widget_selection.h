@@ -32,6 +32,7 @@ struct Node {
     bool enabled = false;
     std::optional<bool> visible;
     Text type, text, prototypeName, prototypeType;
+    std::string_view guiMatches;
 };
 
 struct Step {
@@ -39,6 +40,7 @@ struct Step {
     int position = 0;
     std::optional<bool> enabled, visible;
     std::optional<std::string_view> type, text, prototypeName, prototypeType;
+    int guiMatch = -1;
 };
 
 template <size_t Capacity> std::string_view terminated(const char (&text)[Capacity]) {
@@ -58,7 +60,8 @@ inline bool matches(const Node &node, const Step &step) {
         return !expected || (observed.available && !observed.truncated &&
             (type ? nativeType(observed.value) : observed.value) == *expected);
     };
-    return (!step.enabled || node.enabled == *step.enabled) &&
+    return (step.guiMatch < 0 || (static_cast<size_t>(step.guiMatch) < node.guiMatches.size() &&
+            node.guiMatches[step.guiMatch] == '1')) && (!step.enabled || node.enabled == *step.enabled) &&
            (!step.visible || node.visible == step.visible) && text(node.type, step.type, true) &&
            text(node.text, step.text) && text(node.prototypeName, step.prototypeName) &&
            text(node.prototypeType, step.prototypeType, true);
@@ -128,7 +131,7 @@ public:
     }
 
     template <class Canceled> std::vector<int> select(const std::vector<Step> &path, Canceled canceled) const {
-        require(!path.empty() && path.size() <= 16, "Invalid selector length");
+        require(!path.empty() && path.size() <= INT_MAX, "Invalid selector length");
         const int count = static_cast<int>(nodes.size());
         std::vector<int> current{count};
         for (const auto &step : path) {
@@ -172,20 +175,72 @@ public:
         return current;
     }
 
-    std::vector<int> observation(const std::vector<int> &matches) const {
-        std::vector<bool> selected(nodes.size());
+    struct Retained {
+        int source, parent, depth, siblingIndex;
+        bool childrenTruncated;
+    };
+
+    // Keep only owned observations selected at this safe point. Original sibling positions survive pruning.
+    std::vector<Retained> retain(const std::vector<int> &indices, bool postorder = false) const {
+        std::vector<int> positions(nodes.size(), -1), depths(nodes.size()), siblings(nodes.size());
+        for (int index : indices) {
+            require(index >= 0 && index < static_cast<int>(nodes.size()) && positions[index] < 0,
+                    "Invalid retained widget index");
+            positions[index] = 0;
+        }
+        for (const auto &entries : children)
+            for (size_t sibling = 0; sibling < entries.size(); ++sibling)
+                siblings[entries[sibling]] = static_cast<int>(sibling + 1);
+        for (int index : order) {
+            const int parent = nodes[index].parent;
+            depths[index] = parent >= 0 && positions[parent] >= 0 ? depths[parent] + 1 : 0;
+        }
+        std::vector<int> retainedOrder;
+        struct Visit { int index; bool exit; };
+        std::vector<Visit> pending;
+        // Pruned ancestor/descendant matches can become independent roots. Keep their original document order.
+        for (int root : order) {
+            const int parent = nodes[root].parent;
+            if (positions[root] < 0 || (parent >= 0 && positions[parent] >= 0)) continue;
+            pending.push_back({root, false});
+            while (!pending.empty()) {
+                const auto visit = pending.back();
+                pending.pop_back();
+                if (visit.exit || !postorder) retainedOrder.push_back(visit.index);
+                if (visit.exit) continue;
+                if (postorder) pending.push_back({visit.index, true});
+                for (auto child = children[visit.index].rbegin(); child != children[visit.index].rend(); ++child)
+                    if (positions[*child] >= 0) pending.push_back({*child, false});
+            }
+        }
+        for (size_t index = 0; index < retainedOrder.size(); ++index)
+            positions[retainedOrder[index]] = static_cast<int>(index);
+        std::vector<Retained> output;
+        output.reserve(retainedOrder.size());
+        for (int index : retainedOrder) {
+            const int parent = nodes[index].parent;
+            const bool omitted = std::any_of(children[index].begin(), children[index].end(),
+                [&](int child) { return positions[child] < 0; });
+            output.push_back({index, parent < 0 ? -1 : positions[parent], depths[index], siblings[index], omitted});
+        }
+        return output;
+    }
+
+    std::vector<int> observation(const std::vector<int> &matches, int maxDepth = INT_MAX) const {
+        require(maxDepth >= 0, "Invalid observation depth");
+        std::vector<int> distances(nodes.size(), -1);
         for (int index : matches) {
             require(index >= 0 && index < static_cast<int>(nodes.size()), "Invalid selected widget");
-            selected[index] = true;
+            distances[index] = 0;
         }
         for (int index : order) {
             const int parent = nodes[index].parent;
-            if (parent >= 0 && selected[parent])
-                selected[index] = true;
+            if (distances[index] != 0 && parent >= 0 && distances[parent] >= 0 && distances[parent] < maxDepth)
+                distances[index] = distances[parent] + 1;
         }
         std::vector<int> output;
         for (int index = 0; index < static_cast<int>(nodes.size()); ++index) {
-            if (selected[index])
+            if (distances[index] >= 0)
                 output.push_back(index);
         }
         return output;

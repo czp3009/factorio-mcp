@@ -4,8 +4,8 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "observation_buffer.h"
+#include "../../nativeMain/native/chat_observation.h"
 
-#define FM_LINUX_CHAT_RECORD_BYTES (16 * 1024 * 1024)
 
 typedef struct FmLinuxChatReadLayout {
     uint32_t consoleSize, consolePlayer;
@@ -27,6 +27,8 @@ typedef struct FmLinuxChatRecord {
     uint64_t identity, tick;
     uint32_t stream, playerIndex, truncated, textSize, rawSize, playerNameSize;
     FmLinuxObservationBuffer text, raw, playerName;
+    FmTextRange textRange;
+    uint32_t textIncluded;
 } FmLinuxChatRecord;
 
 typedef struct FmLinuxChatSnapshot {

@@ -24,10 +24,10 @@ internal fun createServer(game: GameSession): Server {
             instructions =
                 """
                 Attach to an existing, fully loaded Factorio client; this server never launches it.
-                Prefer structured reads: world_query for objects, properties and collections, world_overview for spatial observations, chat_read for retained messages, and ui_read for interface state. Discover inspect members and use paths, filters, fields and pages. Query limits are caller-selected positive 32-bit integers; start with the defaults and increase them for bulk reads. Each snapshot is collected at one safe point; pages are fresh observations. Use screenshot for missing visual information, verification or requested images.
-                Use ui_action with live selectors for widgets and input for concurrent keyboard/mouse timelines. Discover current bindings with input_bindings. Use set_text for editable text.
-                Interpret native values, text, repetitions and hierarchy yourself. Missing, null and unavailable are distinct, widget flags are local, and controller context can differ from the physical character. Check truncation before treating results as complete.
-                Every action, including chat, reports client dispatch/execution and cleanup. Completion does not confirm server acceptance, delivery or gameplay success. Network latency and prediction rollback can delay, change or undo effects; reads observe current state. Actions do not wait for a resulting state. Observe effects before dependent actions. Do not blindly repeat a mutation whose result was lost or uncertain.
+                Prefer structured reads: world_query for objects, properties and collections, world_overview for spatial summaries, chat_read for retained messages, and ui_read for interface state. world_query takes a query object: select roots, choose native fields, and batch relative reads for each root value or inspected entry. Discover attributes and admitted method signatures with inspect members; prototypes and defines expose native catalogs and enums. Bindings, players, inventory kinds/slots, explicit catalog names and inspect members return all matches by default; inspect values uses depth rather than entry counts. Spatial selections are count-bounded observations without continuation; check selection_complete and refine the area/filters or increase limit. Collection pages are fresh observations, not a frozen snapshot. Start UI discovery with max_depth:1 or 2, then narrow a live selector. fields:[] omits optional contents. Trees expand by depth, without node-list clipping or cross-call handles; native object references require paths. Explicit collection counts are positive 32-bit integers, not byte budgets; string slices count UTF-8 bytes. Each observation stays at one safe point; a page may still require a full source scan. Use screenshot for missing visual information, verification or requested images.
+                Use input to combine keyboard/mouse chords, simultaneous holds and timed action sequences in one call, including continuous drags with turns. Overlap tick ranges to combine controls; offset them to sequence actions. Discover current keys/buttons/modifiers with input_bindings. Use ui_action with live selectors for widgets and set_text for editable text.
+                Interpret native values, text, repetitions and hierarchy yourself. Missing, null and unavailable are distinct, widget flags are local, and controller context can differ from the physical character. Follow has_more/next positions for pages; inspect other truncation and depth-bound references independently.
+                Every action, including chat, reports client dispatch/execution and cleanup. Completion does not confirm server acceptance, delivery or gameplay success. Network latency and prediction rollback can delay, change or undo effects; reads observe current state. Actions do not wait for a resulting state. Plan known input sequences together; observe results before making decisions that depend on them. Do not blindly repeat a mutation whose result was lost or uncertain.
                 Tools have no execution timeout. Send explicit MCP cancellation to stop unwanted work; HTTP disconnection alone is not guaranteed to cancel. All clients share this server's attachment.
                 All tools assume the player is not operating the game concurrently. Errors or unexpected results from concurrent player actions are outside the tool contract; tools do not detect or compensate for that interference.
                 """
@@ -39,12 +39,13 @@ internal fun createServer(game: GameSession): Server {
         description: String,
         properties: JsonObject = buildJsonObject {},
         required: List<String> = emptyList(),
+        definitions: JsonObject? = null,
         operation: suspend (JsonObject) -> CallToolResult,
     ) {
         server.addTool(
             name,
             description,
-            ToolSchema(properties = properties, required = required),
+            ToolSchema(properties = properties, required = required, defs = definitions),
         ) { request ->
             try {
                 val args = request.arguments ?: buildJsonObject {}
@@ -70,9 +71,10 @@ internal fun createServer(game: GameSession): Server {
         description: String,
         properties: JsonObject = buildJsonObject {},
         required: List<String> = emptyList(),
+        definitions: JsonObject? = null,
         operation: suspend (JsonObject) -> JsonObject,
     ) {
-        register(name, description, properties, required) { args -> toolResult(operation(args)) }
+        register(name, description, properties, required, definitions) { args -> toolResult(operation(args)) }
     }
 
     tool(
@@ -88,6 +90,7 @@ internal fun createServer(game: GameSession): Server {
             putJsonObject("pid") {
                 put("type", "integer")
                 put("minimum", 1)
+                put("maximum", Int.MAX_VALUE)
                 put("description", "Existing client PID. Mutually exclusive with process_name.")
             }
             putJsonObject("process_name") {
@@ -121,16 +124,17 @@ internal fun createServer(game: GameSession): Server {
     }
     tool(
         "ui_read",
-        "Read interface structure and native properties in menus, paused worlds and gameplay. Returns postorder nodes with text, own flags, parent links and snapshot-local IDs; actions require live selectors. Selected subtrees narrow output, while selector resolution requires a complete bounded traversal. Missing properties mean unsupported or unavailable; inspect reasons and truncation. Flags and bounds do not establish effective visibility or action eligibility. Options and selected_index are zero-based. Icon references are snapshot-local, with game-registered names when available. Tooltip reads copy stored plain text without hovering or invoking providers. Script GUI icon paths and tooltip expressions are available through world_query inspection. Interpret native values and hierarchy yourself. Use screenshot for missing visual information.",
+        "Read live UI subtrees at one frontend safe point. Without selector, start at the game's UI root. Each match is an independent tree rooted at depth 0; flat preorder nodes preserve sibling order and snapshot-local parent IDs. Overlapping matches repeat their subtrees. Selectors are resolved afresh; IDs cannot address later calls. Start with max_depth:1 or 2, then select a branch. children_truncated appears only where real children are omitted by depth. fields optionally narrows contents. gui supplements native ancestry with existing script identity, references and requested attributes. Native properties include retained prototype identities, graph series and raw achievement-card state. Use collection for one widget's paged options, graph data, GUI value or stored text. Flags are own widget values, not effective visibility or action eligibility. Tooltips copy stored values without provider callbacks. Images expose retained identities only, without frames or simulation scripts.",
         buildJsonObject {
-            putJsonObject("max_nodes") {
-                put("type", "integer")
-                put("minimum", 1)
-                put("default", 4096)
-                put(
-                    "description",
-                    "Traversal limit, including when selector is set. An incomplete selector search fails; selected subtrees only narrow the returned nodes and optional properties.",
-                )
+            put("collection", uiCollectionSchema())
+            putJsonObject("fields") {
+                put("type", "array")
+                put("uniqueItems", true)
+                putJsonObject("items") {
+                    put("type", "string")
+                    putJsonArray("enum") { UiField.entries.forEach { add(it.path) } }
+                }
+                put("description", "Optional result paths to capture. Omit for all; [] returns structure, script identity and own flags only. gui_fields selects attributes within gui.properties. Collection reads select their own source and reject fields.")
             }
             putJsonObject("bounds") {
                 put("type", "boolean")
@@ -140,15 +144,42 @@ internal fun createServer(game: GameSession): Server {
                     "Include widget geometry when needed for positioning; geometry does not imply visibility.",
                 )
             }
+            putJsonObject("max_depth") {
+                put("type", "integer")
+                put("minimum", 0)
+                put("maximum", Int.MAX_VALUE)
+                put("default", MAX_OBSERVATION_DEPTH)
+                put("description", "Maximum child depth relative to each returned root. Zero returns roots only. Omitted or larger values use 65535. Reaching that depth truncates children normally; it is not an error. Boundary leaves have no children_truncated flag.")
+            }
             put("selector", selectorSchema())
+            putJsonObject("gui_fields") {
+                put("type", "array")
+                putJsonObject("items") { put("type", "string") }
+                put("description", "Readable LuaGuiElement attribute names when gui.properties is selected, or [\"*\"] for the target API's complete readable catalog. Defaults include caption, tooltip, elem_tooltip, tags, style, sprite variants, toggled, auto_toggle, number and elem identity. Empty list omits optional script attributes. Unsupported attributes report read_status.")
+            }
+            putJsonObject("gui_depth") {
+                put("type", "integer")
+                put("minimum", 0)
+                put("maximum", Int.MAX_VALUE)
+                put("default", 8)
+                put("description", "Relative preview depth for each plain-table GUI attribute value; default 8. Values above 65535 use 65535. Nonempty deeper tables have depth_bound references with children_truncated; empty tables remain empty. Lua objects remain references. GUI collection paths can select nested values directly.")
+            }
         },
     ) { args ->
-        val limit = args["max_nodes"]?.intArgument() ?: 4096
-        require(limit > 0) { "max_nodes must be positive" }
+        val collection = args["collection"]?.let(::parseUiCollection)
+        require(collection == null || "selector" in args) { "collection requires a selector" }
+        require(collection == null || args.keys.none { it in setOf("fields", "max_depth", "bounds", "gui_fields") }) {
+            "collection returns one selected value and does not accept fields/max_depth/bounds/gui_fields"
+        }
+        val maxDepth = uiDepth(args["max_depth"]?.intArgument())
         game.read(
-            limit,
             args["bounds"]?.booleanArgument() ?: false,
             args["selector"]?.let(::parseSelector),
+            args["gui_fields"]?.jsonArray?.map { it.stringArgument() } ?: defaultGuiFields,
+            observationDepth(args["gui_depth"]?.intArgument(), 8),
+            collection,
+            maxDepth,
+            parseUiFields(args["fields"]),
         )
     }
     tool(
@@ -161,7 +192,7 @@ internal fun createServer(game: GameSession): Server {
     }
     tool(
         "input_bindings",
-        "Discover native and mod control IDs and current primary/secondary keyboard/mouse bindings; available in menus and paused worlds. Use bindings to construct input controls or ui_action press_key; control IDs themselves are not accepted as input. For linked controls use effective_bindings from binding_owner; otherwise use bindings. Include required modifiers. has_binding counts known keyboard/mouse types, not action eligibility. Controller slots and controller input are unsupported. Results sort by ID; pages are fresh observations. Check snapshot_complete, next_offset and missing_ids/unobserved_ids before concluding a control is absent. Sends no input.",
+        "Discover native and mod control IDs and current primary/secondary keyboard/mouse bindings; available in menus and paused worlds. Returns all matches unless limit is supplied; results sort by ID and pages are fresh observations. Use bindings for input controls or ui_action press_key; control IDs themselves are not input. For linked controls use effective_bindings from binding_owner. Include required modifiers. has_binding counts keyboard/mouse types, not action eligibility. Controller input is unsupported. Check snapshot_complete, has_more and missing_ids/unobserved_ids before concluding a control is absent. Sends no input.",
         buildJsonObject {
             putJsonObject("ids") {
                 put("type", "array")
@@ -178,6 +209,7 @@ internal fun createServer(game: GameSession): Server {
             putJsonObject("offset") {
                 put("type", "integer")
                 put("minimum", 0)
+                put("maximum", Int.MAX_VALUE)
                 put("default", 0)
                 put(
                     "description",
@@ -187,7 +219,8 @@ internal fun createServer(game: GameSession): Server {
             putJsonObject("limit") {
                 put("type", "integer")
                 put("minimum", 1)
-                put("default", 64)
+                put("maximum", Int.MAX_VALUE)
+                put("description", "Omit to return all matching controls. Set a positive count for a page.")
             }
         },
     ) { args ->
@@ -198,32 +231,34 @@ internal fun createServer(game: GameSession): Server {
             }
         val search = args["search"]?.stringArgument()
         val offset = args["offset"]?.intArgument() ?: 0
-        val limit = args["limit"]?.intArgument() ?: 64
-        require(offset >= 0 && limit > 0) { "offset must be nonnegative and limit positive" }
+        val limit = args["limit"]?.intArgument()
+        require(offset >= 0 && (limit == null || limit > 0)) { "offset must be nonnegative and limit positive" }
         game.bindings(ids, search, offset, limit)
     }
     tool(
         "world_overview",
-        "Summarize entities in the viewport or an explicit area with group_by and optional numeric aggregates, or read individual entities with selected fields. Requires a loaded world/local player; works while paused or covered by UI. Returns bounded observations and viewport/controller context, including hidden data; UI occlusion is ignored. Check truncation, coverage and excluded aggregate values. Grouping and calculations use observed properties without interpreting gameplay. Does not move the camera or generate chunks.",
+        "Summarize entities in the viewport or an explicit area with group_by and optional numeric aggregates, or read individual entities with selected fields and batched relative reads. Requires a loaded world/local player; works while paused or covered by UI. Grid pages use cell_limit and next_cell; retain the original explicit area, surface and cell_size to continue. Returns viewport/controller context, including hidden data; UI occlusion is ignored. Check truncation, coverage and excluded aggregate values. Grouping and calculations use observed properties without interpreting gameplay. Does not move the camera or generate chunks.",
         worldOverviewSchema(),
+        definitions = worldReadDefinitions(),
     ) { args ->
         game.query(parseWorldOverview(args))
     }
     tool(
         "world_query",
-        "Read native objects, properties, inventories, catalogs and related collections without opening UI. Requires a loaded world/local player; works while paused. Use inspect members for discoverable properties and passive methods, values for selected properties, and path/entries for related objects or collections. Discover inventory references before reading slots. Narrow selections, fields and pages. Missing, nil and read errors remain distinct; localized expressions stay untranslated. Reads may include hidden data. Check truncation; pages are fresh observations and entity ordering is not stable.",
+        "Read current objects, properties, collections and native catalogs without moving the player or opening UI. Select entities by area/position and native filters; retain observed surface/position/unit_number for precise follow-ups. reads applies explicit native paths to each available selected root value, or each entry of an inspected collection, in one observation. inspect members discovers admitted passive attributes, methods and signatures; search narrows member names. Global game/prototypes/defines roots expose existing structures and enum values. Inventory discovery returns actual names and slots. Native references require paths; table previews expand by depth. Check selection_complete, nested truncation and collection continuation separately. Requires a loaded world/local player; works while paused and may include hidden data.",
         worldQuerySchema(),
-        listOf("selection"),
+        listOf("query"),
+        worldQueryDefinitions(),
     ) { args ->
-        game.query(parseWorldQuery(args))
+        game.query(parseWorldQuery(args.getValue("query").jsonObject))
     }
     tool(
         "chat_read",
-        "Read retained local chat and notifications without opening UI; optionally wait for later messages. Requires a loaded world. Pass next_offset to continue the same player's history, including multiple messages at one native tick. Watermarks survive MCP restarts with unchanged history; reset them on world/player changes. text is cached text and may be empty/stale; raw preserves its localization expression. player_name is present when the game stores the sender separately from the body. Check history_lost, has_more and boundary/snapshot truncation. This is bounded observation, not a lossless subscription or server-wide log; unseen evicted messages cannot be recovered.",
+        "Read retained local chat and notifications without opening UI; optionally wait for later messages. Requires a loaded world. Pass next_offset to continue the same player's history, including multiple messages at one native tick. Watermarks survive MCP restarts with unchanged history; reset them on world/player changes. text is cached and may be empty/stale; raw preserves its localization expression. player_name is present when separately stored. Use text_slice for one textual field; repeat a message's read_from with limit:1 to continue that field. Check history_lost, has_more and truncation. Evicted messages cannot be recovered; this is not a lossless subscription or server-wide log.",
         chatReadSchema(),
     ) { args ->
         val request = parseChatRead(args)
-        game.readChat(request.offset, request.limit, request.timeout)
+        game.readChat(request.offset, request.limit, request.timeout, request.textSlice)
     }
     tool(
         "chat_send",
@@ -235,7 +270,7 @@ internal fun createServer(game: GameSession): Server {
     }
     tool(
         "input",
-        "Execute a finite concurrent keyboard/mouse timeline in a running world. Resolve physical keys with input_bindings; use separate entries for modifiers. Mouse paths support viewport pixels and world tile coordinates on the current viewed surface. World positions are projected using the current view each tick. Prefer ui_action for widgets; wheel routing over UI is not reliable in all states. Only one timeline runs; busy calls fail unless stop_previous:true. Pause, unload, detach or cancellation aborts and releases MCP-held buttons. Returns completed_entries and evaluated_ticks as client execution progress, never server acceptance or gameplay success.",
+        "Execute coordinated keyboard/mouse actions in one call: multi-key chords, simultaneous holds, repeated presses and timed sequences. Combine a held button, multiple mouse paths and rotation presses to drag-build a belt route with turns. Schedule overlapping or successive actions on one shared tick clock; keep the whole gesture in one call. Nonempty timelines require a running world; discover current keys/buttons/modifiers with input_bindings. Prefer ui_action for widgets. World paths must stay onscreen. Releases its held keys/buttons on completion or abort; reports client execution, not gameplay success.",
         inputSequenceProperties(),
         listOf("timeline"),
     ) { args ->
@@ -256,7 +291,7 @@ internal fun createServer(game: GameSession): Server {
     }
     register(
         "screenshot",
-        "Capture the next rendered game+UI frame, or cancel the active capture and wait for cleanup. Prefer structured reads; use images for missing visual information, verification or requested images. Start with JPG and max_height:720 to reduce image traffic; use PNG for lossless pixels. Only one capture may be pending. Requires active rendering (OpenGL on Linux, DirectX on Windows); suspended rendering returns an error at frontend admission. A stalled frontend or graphics backend can delay capture. Excludes desktop and OS/Steam overlays. MCP request cancellation also stops capture.",
+        "Capture the next rendered game+UI frame, or cancel the active capture and wait for cleanup. Prefer structured reads; use images for missing visual information, verification or requested images. Start with JPG and max_height:720 to reduce image traffic; use PNG for lossless pixels. Source frames must fit 8192 pixels per side and 16777216 total pixels before resizing. Only one capture may be pending. Requires active rendering (OpenGL on Linux, DirectX on Windows); suspended rendering returns an error at frontend admission. A stalled frontend or graphics backend can delay capture. Excludes desktop and OS/Steam overlays. MCP request cancellation also stops capture.",
         buildJsonObject {
             putJsonObject("action") {
                 put("type", "string")
@@ -290,7 +325,7 @@ internal fun createServer(game: GameSession): Server {
                 put("type", "integer")
                 put("minimum", 1)
                 put("maximum", Int.MAX_VALUE)
-                put("description", "Shrink to at most this pixel height, preserving aspect ratio. Never enlarges or crops. Omit for original dimensions.")
+                put("description", "Shrink after source capture, preserving aspect ratio; cannot bypass the source-frame budget. Never enlarges or crops. Omit for original dimensions.")
             }
         },
     ) { args ->

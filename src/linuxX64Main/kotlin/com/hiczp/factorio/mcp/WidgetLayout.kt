@@ -5,6 +5,10 @@ package com.hiczp.factorio.mcp
 import com.hiczp.factorio.mcp.linuxbridge.FmLinuxIconNamesLayout
 import com.hiczp.factorio.mcp.linuxbridge.FmLinuxMemberFlag
 import com.hiczp.factorio.mcp.linuxbridge.FmLinuxTooltipLayout
+import com.hiczp.factorio.mcp.linuxbridge.FmUiImageLayout
+import com.hiczp.factorio.mcp.linuxbridge.FmUiGraphLayout
+import com.hiczp.factorio.mcp.linuxbridge.FmUiStoredPrototypeLayout
+import com.hiczp.factorio.mcp.linuxbridge.FmUiAchievementLayout
 import com.hiczp.factorio.mcp.linuxbridge.FmLinuxUiLayout as NativeWidgetLayout
 import kotlinx.cinterop.get
 import kotlinx.cinterop.ptr
@@ -42,9 +46,13 @@ internal data class WidgetLayout(
     private val functions: List<ElfImage.Symbol>,
     val iconNames: Result<WidgetIconNamesLayout>,
     val tooltips: Result<WidgetTooltipLayout>,
+    val images: Result<WidgetImageLayout>,
+    val graph: Result<WidgetGraphLayout>,
+    val storedWidgets: Result<StoredWidgetLayouts>,
 ) {
     fun verifyLoaded(image: ElfImage, process: ProcessHandle, loadBias: Long) {
         render.verify(image, loadBias, process::readMemory)
+        toggle.evidence.verify(image, loadBias, process::readMemory)
         number.verify(image, loadBias, process::readMemory)
         identity.verify(image, loadBias, process::readMemory)
         elements.verify(image, loadBias, process::readMemory)
@@ -52,6 +60,9 @@ internal data class WidgetLayout(
         icons.evidence.verify(image, loadBias, process::readMemory)
         iconNames.getOrNull()?.evidence?.verify(image, loadBias, process::readMemory)
         tooltips.getOrNull()?.evidence?.verify(image, loadBias, process::readMemory)
+        images.getOrNull()?.evidence?.verify(image, loadBias, process::readMemory)
+        graph.getOrNull()?.evidence?.verify(image, loadBias, process::readMemory)
+        storedWidgets.getOrNull()?.evidence?.verify(image, loadBias, process::readMemory)
         switchNames.evidence
             .copy(functions = emptyList())
             .verify(image, loadBias, process::readMemory)
@@ -82,6 +93,14 @@ internal data class WidgetLayout(
         memset(output.tooltips.ptr, 0, sizeOf<FmLinuxTooltipLayout>().toULong())
         iconNames.getOrNull()?.writeTo(output.iconNames, loadBias)
         tooltips.getOrNull()?.writeTo(output.tooltips, loadBias)
+        memset(output.images.ptr, 0, sizeOf<FmUiImageLayout>().toULong())
+        images.getOrNull()?.writeTo(output.images, loadBias)
+        memset(output.graph.ptr, 0, sizeOf<FmUiGraphLayout>().toULong())
+        graph.getOrNull()?.writeTo(output.graph, loadBias)
+        memset(output.connectionPrototype.ptr, 0, sizeOf<FmUiStoredPrototypeLayout>().toULong())
+        memset(output.achievementPrototype.ptr, 0, sizeOf<FmUiStoredPrototypeLayout>().toULong())
+        memset(output.achievement.ptr, 0, sizeOf<FmUiAchievementLayout>().toULong())
+        storedWidgets.getOrNull()?.writeTo(output.connectionPrototype, output.achievementPrototype, output.achievement, loadBias)
         output.widgetSize = widgetSize.toUInt()
         output.root = root.toUInt()
         output.rangeCount = ranges.size.toUInt()
@@ -111,8 +130,8 @@ internal data class WidgetLayout(
         }
         output.rectangle.function = (loadBias + rectangle.address).toULong()
         output.rectangle.parent = rectangleAbi.parent.toUInt()
-        output.toggle.function = (loadBias + toggle.function.address).toULong()
-        output.toggle.slot = toggle.slot.toUInt()
+        output.toggle.widgetType = (loadBias + toggle.widgetType).toULong()
+        output.toggle.buttonType = (loadBias + toggle.buttonType).toULong()
         output.toggle.offset = toggle.offset.toUInt()
         output.toggle.modeOffset = toggle.modeOffset.toUInt()
         output.toggle.objectSize = toggle.size.toUInt()
@@ -155,10 +174,6 @@ internal data class WidgetLayout(
             output.checks[index].table = (loadBias + check.table).toULong()
             output.checks[index].offset = check.stateOffset.toUInt()
             output.checks[index].objectSize = check.size.toUInt()
-        }
-        output.toggle.tableCount = toggle.tables.size.toUInt()
-        toggle.tables.forEachIndexed { index, table ->
-            output.toggle.tables[index] = (loadBias + table).toULong()
         }
     }
 
@@ -290,9 +305,6 @@ internal data class WidgetLayout(
                     "_ZN4agui6Slider11setMinValueEd",
                     "_ZN4agui6Slider11setMaxValueEd",
                 )) functions += image.symbol(name)
-            functions += toggle.function
-            functions += toggle.modeFunction
-            functions += image.symbol("_ZN4agui6ButtonD0Ev")
             for (name in
                 listOf(
                     "_ZN4agui3GuiD0Ev",
@@ -314,6 +326,7 @@ internal data class WidgetLayout(
                     getter.function.name.removePrefix("_ZNK").removeSuffix("7getTextB5cxx11Ev")
                 functions += image.symbol("_ZN${owner}D0Ev")
             }
+            val identity = WidgetIdentityLayout.resolve(image)
             return WidgetLayout(
                 guiSize,
                 widgetSize,
@@ -338,7 +351,7 @@ internal data class WidgetLayout(
                 switches,
                 switchNames,
                 WidgetNumberLayout.resolve(image),
-                WidgetIdentityLayout.resolve(image),
+                identity,
                 WidgetElementLayout.resolve(image),
                 WidgetQualityLayout.resolve(image),
                 WidgetIconLayout.resolve(image),
@@ -347,6 +360,9 @@ internal data class WidgetLayout(
                 functions.distinct(),
                 runCatching { WidgetIconNamesLayout.resolve(image) },
                 runCatching { WidgetTooltipLayout.resolve(image, widgetSize) },
+                runCatching { WidgetImageLayout.resolve(image) },
+                runCatching { WidgetGraphLayout.resolve(image) },
+                runCatching { StoredWidgetLayouts.resolve(image, identity.names) },
             )
         }
     }

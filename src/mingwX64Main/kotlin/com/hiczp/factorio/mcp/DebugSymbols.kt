@@ -7,6 +7,8 @@ import kotlinx.cinterop.*
 import platform.posix.memset
 import platform.windows.*
 
+private val imageTypeNames = setOf("??_R0?AVImageWidget@agui@@@8", "??_R0?AVImage@agui@@@8", "??_R0?AVGuiImage@@@8")
+
 private val symbolPrefixes =
     listOf(
         "?updateGui@GlobalContext@@",
@@ -90,6 +92,7 @@ private val symbolPrefixes =
         "?isCorrectDataTypeForAction@InputAction@@",
         "??_R0?AV?\$basic_string@DU?\$char_traits@D@std@@V?\$allocator@D@2@@std@@@8",
         "?headlessMode@GlobalContext@@2_NA",
+        "?_Xbad_function_call@std@@",
     )
 
 internal class ResolvedSymbols(
@@ -99,7 +102,7 @@ internal class ResolvedSymbols(
     val rootOffset: UInt,
     val pauseOffsets: List<UInt>?,
     val events: EventLayouts,
-    val parentOffset: UInt,
+    val widgetTraversal: WidgetTraversalLayout,
     val controls: Result<ControlLayouts>,
     val input: Result<FrontendInputLayouts>,
     val processEventsEnd: ULong,
@@ -120,6 +123,10 @@ internal class ResolvedSymbols(
     val chat: Result<ChatLayouts>,
     val rendering: Result<RenderingLayouts>,
     val renderingControl: Result<RenderingControlLayouts>,
+    val guiRegistry: Result<GuiRegistryLayout>,
+    val images: Result<ImageLayout>,
+    val graph: Result<GraphLayout>,
+    val storedWidgets: Result<StoredWidgetLayouts>,
 ) {
     fun write(target: Symbols) {
         memset(target.ptr, 0, sizeOf<Symbols>().toULong())
@@ -127,7 +134,7 @@ internal class ResolvedSymbols(
         target.prepareEnd = prepareEnd
         target.mainEnd = mainEnd
         target.guiRootOffset = rootOffset
-        target.widgetParentOffset = parentOffset
+        widgetTraversal.write(target)
         target.pauseSupported = if (pauseOffsets == null) 0u else 1u
         events.write(target.events)
         controls.getOrNull()?.write(target.controls)
@@ -142,7 +149,11 @@ internal class ResolvedSymbols(
         elements.getOrNull()?.write(target.elements)
         icons.getOrNull()?.write(target.icons)
         tooltips.getOrNull()?.write(target.tooltips)
+        guiRegistry.getOrNull()?.write(target.guiRegistry)
         iconNames.getOrNull()?.write(target.iconNames)
+        images.getOrNull()?.write(target.images)
+        graph.getOrNull()?.write(target.graph)
+        storedWidgets.getOrNull()?.write(target.connectionPrototype, target.achievementPrototype, target.achievement)
         conditions.getOrNull()?.write(target.conditions)
         switches.getOrNull()?.write(target.switches)
         chat.getOrNull()?.write(target.chat)
@@ -173,6 +184,10 @@ private class SymbolCollector {
     val comparisonStrings = mutableListOf<ULong>()
     val switchTypes = mutableListOf<ULong>()
     val elementTypes = mutableMapOf<String, MutableList<ULong>>()
+    val imageTypes = mutableMapOf<String, MutableList<ULong>>()
+    val graphTypes = mutableMapOf<String, MutableList<ULong>>()
+    val storedTypes = mutableMapOf<String, MutableList<ULong>>()
+    val connectionRegistries = mutableListOf<ULong>()
 }
 
 internal fun resolveSymbols(process: HANDLE, module: ProcessModule): ResolvedSymbols = memScoped {
@@ -230,6 +245,14 @@ internal fun resolveSymbols(process: HANDLE, module: ProcessModule): ResolvedSym
                             result.switchTypes.add(info.pointed.Address)
                         if (name == "??_R0?AVIconButton@@@8")
                             result.iconTypes.add(info.pointed.Address)
+                        if (name in imageTypeNames)
+                            result.imageTypes.getOrPut(name) { mutableListOf() }.add(info.pointed.Address)
+                        if (name == "??_R0?AVGraph@agui@@@8")
+                            result.graphTypes.getOrPut(name) { mutableListOf() }.add(info.pointed.Address)
+                        if (name in setOf("??_R0?AVSpaceConnectionWidget@UniverseWidget@@@8", "??_R0?AVAchievementCard@@@8"))
+                            result.storedTypes.getOrPut(name) { mutableListOf() }.add(info.pointed.Address)
+                        if (name.startsWith("?indexToPrototype@?\$PrototypeList@VSpaceConnectionPrototype@@"))
+                            result.connectionRegistries.add(info.pointed.Address)
                         if (name == "??_R0?AVToolTipCreatorBase@agui@@@8")
                             result.tooltipBaseTypes.add(info.pointed.Address)
                         if (name == "??_R0?AVPlainToolTipCreator@agui@@@8")
@@ -342,7 +365,16 @@ internal fun resolveSymbols(process: HANDLE, module: ProcessModule): ResolvedSym
             root,
             pause,
             EventLayouts(types),
-            types.pointerMember("agui::Widget", "parentWidget", "agui::Widget"),
+            run {
+                val index = FmSymbol.Walk.value.toInt()
+                val bad = FmSymbol.BadFunctionCall.value.toInt()
+                require(collector.symbols.count(bad) == 1) { "Missing or ambiguous standard callback failure symbol" }
+                val rva = (addresses[index] - module.base).toLong()
+                val length = image.functionEnd(rva) - rva
+                require(length in 1..4096) { "Recursive widget visitor exceeds analysis bound" }
+                WidgetTraversalLayout(types, BinaryView(image.readonlyBytes(rva.toInt(), length.toInt())),
+                    addresses[index].toLong(), addresses[bad].toLong())
+            },
             runCatching {
                 for (index in
                     FmSymbol.ControlList.value.toInt() until FmSymbol.NextEvent.value.toInt()) {
@@ -454,6 +486,10 @@ internal fun resolveSymbols(process: HANDLE, module: ProcessModule): ResolvedSym
             },
             runCatching { RenderingLayouts(types, renderingControl.getOrThrow()) },
             renderingControl,
+            runCatching { GuiRegistryLayout(types) },
+            runCatching { ImageLayout(types, collector.imageTypes) },
+            runCatching { GraphLayout(types, collector.graphTypes) },
+            runCatching { StoredWidgetLayouts(types, collector.storedTypes, collector.connectionRegistries) },
         )
     } finally {
         SymCleanup(process)

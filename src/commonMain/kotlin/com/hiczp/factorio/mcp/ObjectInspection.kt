@@ -4,8 +4,9 @@ import kotlinx.serialization.json.*
 
 /**
  * Explicit passive methods. Metadata supplies availability/signatures, never mutation authority.
+ * Force statistics getters and LuaFlowStatistics count attributes/methods can allocate serialized state and are excluded.
  */
-internal val inspectionMethods =
+private val baseInspectionMethods =
     setOf(
         "get_recipe",
         "get_blueprint_entity_count",
@@ -32,12 +33,6 @@ internal val inspectionMethods =
         "get_fluid_segment_fluid",
         "get_fluid_segment_id",
         "get_fluid_segment_extent_bounding_box",
-        "get_capacity",
-        "get_connections",
-        "get_pipe_connections",
-        "get_fluid_segment_contents",
-        "get_locked_fluid",
-        "get_prototype",
         "get_driver",
         "get_passenger",
         "get_transport_line",
@@ -53,15 +48,7 @@ internal val inspectionMethods =
         "get_electric_input_flow_limit",
         "get_electric_output_flow_limit",
         "is_connected_to_electric_network",
-        "get_input_count",
-        "get_output_count",
-        "get_storage_count",
-        "get_flow_count",
         "get_resource_counts",
-        "get_item_production_statistics",
-        "get_fluid_production_statistics",
-        "get_entity_build_count_statistics",
-        "get_kill_count_statistics",
         "get_pollution",
         "get_total_pollution",
         "get_infinity_container_filter",
@@ -71,143 +58,97 @@ internal val inspectionMethods =
         "get_market_items",
         "get_section",
         "get_slot",
-        "get_vehicle_logistic_point",
-        "get_personal_logistic_slot",
     )
 
-internal class RuntimeApi(document: JsonObject) {
-    private val classes =
-        document.getValue("classes").jsonArray.associate {
-            val value = it.jsonObject
-            value.getValue("name").stringArgument() to value
-        }
+private val interfaceInspectionMethods = mapOf(
+    "LuaEntityPrototype" to setOf(
+        "has_flag", "get_attraction_range_elongation", "get_crafting_speed", "get_duration",
+        "get_energy_distribution_efficiency", "get_fluid_usage_per_tick", "get_inserter_extension_speed",
+        "get_inserter_rotation_speed", "get_inventory_size", "get_inventory_size_bonus",
+        "get_max_circuit_wire_distance", "get_max_distance_of_nearby_sector_revealed",
+        "get_max_distance_of_sector_revealed", "get_max_energy", "get_max_energy_production",
+        "get_max_energy_usage", "get_max_health", "get_max_power_output", "get_max_speed",
+        "get_max_wire_distance", "get_mining_drill_radius", "get_pumping_speed", "get_researching_speed",
+        "get_supply_area_distance", "get_valve_flow_rate",
+    ),
+    "LuaItemPrototype" to setOf(
+        "get_ammo_type", "get_cursor_box_type", "get_durability", "get_entity_filter_mode",
+        "get_entity_filters", "get_entity_type_filters", "get_inventory_size", "get_inventory_size_bonus",
+        "get_module_effects", "get_selection_border_color", "get_selection_mode_flags", "get_spoil_ticks",
+        "get_tile_filter_mode", "get_tile_filters",
+    ),
+    "LuaRecipePrototype" to setOf("get_ingredient_quality", "get_product_amount", "get_product_quality"),
+    "LuaSchedule" to setOf(
+        "get_inside_interrupt", "get_interrupt", "get_interrupts", "get_record", "get_record_count",
+        "get_records", "get_wait_condition", "get_wait_condition_count", "get_wait_conditions",
+    ),
+    "LuaTrainManager" to setOf("get_train_by_id", "get_train_stops", "get_trains"),
+    "LuaSurface" to setOf(
+        "get_chunks", "get_property", "get_tile", "get_hidden_tile", "get_double_hidden_tile",
+        "is_chunk_generated", "count_entities_filtered", "count_tiles_filtered",
+        "find_logistic_network_by_position", "find_closest_logistic_network_by_position",
+        "find_logistic_networks_by_construction_area",
+    ),
+    "LuaItemCommon" to setOf(
+        "get_blueprint_entities", "get_blueprint_tiles", "get_blueprint_entity_tag", "get_blueprint_entity_tags",
+        "get_entity_filter", "get_mapper", "get_tag", "get_tag_names", "get_tile_filter",
+    ),
+    "LuaForce" to setOf(
+        "is_quality_unlocked",
+        "is_space_location_unlocked",
+        "is_space_platforms_unlocked",
+        "get_friend",
+        "get_cease_fire",
+        "get_entity_count",
+        "get_spawn_position",
+        "get_surface_hidden",
+        "get_script_visible",
+        "get_evolution_factor",
+        "get_logistic_group",
+        "get_logistic_groups",
+        "get_space_platforms",
+    ),
+    "LuaControl" to setOf("get_inventory_name", "get_max_inventory_index", "get_requester_point"),
+    "LuaTransportLine" to setOf("get_detailed_contents", "get_item_position", "get_line_item_position"),
+)
 
-    init {
-        require(classes.size in 1..1024) { "Runtime API class count exceeds bound" }
-        require(document["application"]?.stringArgument() == "factorio") {
-            "Not a Factorio runtime API"
-        }
-    }
+internal val inspectionMethods = baseInspectionMethods + interfaceInspectionMethods.values.flatten()
 
-    private fun members(
-        name: String,
-        kind: String,
-        stack: Set<String> = emptySet(),
-    ): List<JsonObject> {
-        require(name !in stack && stack.size < 32) { "Invalid runtime API inheritance" }
-        val value = classes[name] ?: error("Missing API class $name")
-        val inherited =
-            value["parent"]?.stringArgument()?.let { members(it, kind, stack + name) }.orEmpty()
-        val own = value[kind]?.jsonArray?.map { it.jsonObject }.orEmpty()
-        require(own.size <= 2048) { "Runtime API member count exceeds bound" }
-        return (inherited + own)
-            .associateBy { it.getValue("name").stringArgument() }
-            .values
-            .toList()
-    }
+// Reading empty statistics through the Lua wrapper can allocate serialized counters.
+internal val allocatingStatisticsAttributes = setOf(
+    "input_counts", "output_counts", "storage_counts",
+    "input_quality_counts", "output_quality_counts", "storage_quality_counts",
+)
 
-    /**
-     * Only member identities enter the fixed reader. Descriptions remain outside the game process.
-     */
-    val catalog: JsonObject by lazy {
-        buildJsonObject {
-            classes.keys.sorted().forEach { name ->
-                putJsonObject(name) {
-                    val operators = members(name, "operators")
-                    put(
-                        "indexed",
-                        operators.any {
-                            it["name"]?.jsonPrimitive?.content == "index" && "read_type" in it
-                        },
-                    )
-                    put(
-                        "length",
-                        operators.any {
-                            it["name"]?.jsonPrimitive?.content == "length" && "read_type" in it
-                        },
-                    )
-                    putJsonArray("attributes") {
-                        members(name, "attributes")
-                            .filter { "read_type" in it }
-                            .map { it.getValue("name").stringArgument() }
-                            .sorted()
-                            .forEach {
-                                require(it.matches(Regex("[A-Za-z_][A-Za-z0-9_]*"))) {
-                                    "Invalid API attribute name"
-                                }
-                                add(it)
-                            }
-                    }
-                    putJsonArray("methods") {
-                        members(name, "methods")
-                            .map { it.getValue("name").stringArgument() }
-                            .filter { it in inspectionMethods }
-                            .sorted()
-                            .forEach { add(it) }
-                    }
-                }
-            }
-        }
-    }
+internal fun admittedInspectionAttribute(lineage: List<String>, attribute: String): Boolean =
+    "LuaFlowStatistics" !in lineage || attribute !in allocatingStatisticsAttributes
 
-    fun memberInfo(className: String, name: String, method: Boolean): JsonObject? {
-        if (className !in classes) return null
-        val member =
-            members(className, if (method) "methods" else "attributes").find {
-                it["name"]?.jsonPrimitive?.content == name
-            } ?: return null
-        return JsonObject(
-            member.filterKeys {
-                it in
-                        setOf(
-                            "name",
-                            "description",
-                            "read_type",
-                            "optional",
-                            "subclasses",
-                            "parameters",
-                            "format",
-                            "return_values",
-                        )
-            }
-        )
-    }
+internal fun admittedInspectionMethod(lineage: List<String>, method: String): Boolean =
+    method in baseInspectionMethods || lineage.any { method in interfaceInspectionMethods[it].orEmpty() }
 
-    fun prepare(query: WorldQuery): WorldQuery =
-        if ("inspection" !in query.arguments) query
-        else query.copy(arguments = JsonObject(query.arguments + ("api" to catalog)))
+internal val nativeMemberPattern = Regex("[A-Za-z_][A-Za-z0-9_]*")
 
-    fun annotate(result: JsonObject): JsonObject {
-        if (result["observation"]?.jsonPrimitive?.content != "object_inspection") return result
-        val objects =
-            result.getValue("objects").jsonArray.map { value ->
-                val item = value.jsonObject
-                val className = item["object_name"]?.jsonPrimitive?.content ?: return@map value
-                val members = item["members"]?.jsonArray ?: return@map value
-                JsonObject(
-                    item +
-                            ("members" to
-                                    JsonArray(
-                                        members.map { raw ->
-                                            val entry = raw.jsonObject
-                                            val info =
-                                                memberInfo(
-                                                    className,
-                                                    entry.getValue("name").stringArgument(),
-                                                    entry["kind"]?.jsonPrimitive?.content == "method",
-                                                )
-                                            if (info == null) entry else JsonObject(entry + ("api" to info))
-                                        }
-                                    ))
-                )
-            }
-        return JsonObject(result + ("objects" to JsonArray(objects)))
+internal fun nativeFields(value: JsonElement): List<String> = value.jsonArray.map { it.stringArgument() }.also {
+    require(it.distinct().size == it.size && it.all { field -> field.matches(nativeMemberPattern) }) {
+        "fields must contain distinct native attribute names"
     }
 }
 
 internal fun parseObjectInspection(args: JsonObject): WorldQuery {
     require(
-        args.keys.all { it in setOf("selection", "fields", "mode", "offset", "limit", "depth", "surface") }
+        args.keys.all {
+            it in setOf(
+                "selection",
+                "fields",
+                "mode",
+                "offset",
+                "limit",
+                "depth",
+                "surface",
+                "search",
+                "reads"
+            )
+        }
     ) {
         "Unknown object inspection argument"
     }
@@ -222,6 +163,8 @@ internal fun parseObjectInspection(args: JsonObject): WorldQuery {
         kind in
                 setOf(
                     "game",
+                    "prototypes",
+                    "defines",
                     "entities",
                     "player",
                     "force",
@@ -234,31 +177,34 @@ internal fun parseObjectInspection(args: JsonObject): WorldQuery {
     ) {
         "Unsupported inspection target"
     }
-    if (kind == "game") {
+    if (kind in setOf("game", "prototypes", "defines")) {
         require(target.keys == setOf("kind") && "surface" !in args) {
-            "game target accepts only kind"
+            "Global targets accept only kind"
         }
     } else if (kind in setOf("surface", "planet", "prototype", "recipe", "technology")) {
-        require(target.keys.all { it in setOf("kind", "name", "type", "player") }) {
+        require(target.keys.all { it in setOf("kind", "name", "type", "player", "force") }) {
             "Unknown inspection target member"
         }
         if (kind != "surface")
-            require(target["name"]?.stringArgument()?.isNotBlank() == true) {
+            require(target["name"]?.stringArgument()?.isNotEmpty() == true) {
                 "Target name is required"
             }
         target["name"]?.let {
             val name = it.stringArgument()
-            require(name.isNotBlank() && name.length <= 256 && '\u0000' !in name)
+            require(name.isNotEmpty() && '\u0000' !in name)
         }
         require(kind == "prototype" || "type" !in target) { "type is only valid for prototype" }
         if (kind == "prototype")
-            require(target["type"]?.stringArgument() in prototypeFields) {
+            require(target["type"]?.stringArgument()?.matches(nativeMemberPattern) == true) {
                 "Unknown prototype catalog"
             }
         require(kind in setOf("recipe", "technology") || "player" !in target) {
             "player selects a recipe/technology force"
         }
         target["player"]?.let(::validatePlayerSelector)
+        require(kind in setOf("recipe", "technology") || "force" !in target) { "force requires recipe or technology" }
+        require(target.keys.count { it in setOf("force", "player") } <= 1) { "Select force or player, not both" }
+        target["force"]?.let(::validateSurfaceSelector)
         require(kind == "surface" || "surface" !in args) {
             "surface is only valid for surface/spatial targets"
         }
@@ -267,126 +213,20 @@ internal fun parseObjectInspection(args: JsonObject): WorldQuery {
             buildJsonObject {
                 put("selection", target)
                 args["surface"]?.let { put("surface", it) }
-                put("limit", 2)
             }
         )
-    val path = selection["path"]?.jsonArray ?: JsonArray(emptyList())
-    require(path.size <= 12) { "Inspection path exceeds 12 steps" }
-    path.forEach { value ->
-        val step = value.jsonObject
-        require(step.keys.count { it in setOf("property", "index", "method") } == 1) {
-            "Path step requires exactly one property, index or method"
-        }
-        when {
-            "property" in step -> {
-                require(step.keys == setOf("property"))
-                require(
-                    step.getValue("property").stringArgument().let {
-                        it.length <= 128 && it.matches(Regex("[A-Za-z_][A-Za-z0-9_]*"))
-                    }
-                )
-            }
-
-            "index" in step -> {
-                require(step.keys == setOf("index"))
-                val index = step.getValue("index").jsonPrimitive
-                require(
-                    if (index.isString) index.content.length in 1..256 && '\u0000' !in index.content
-                    else index.intOrNull?.let { it > 0 } == true
-                )
-            }
-
-            else -> {
-                require(step.keys.all { it in setOf("method", "arguments", "result") })
-                require(step.getValue("method").stringArgument() in inspectionMethods) {
-                    "Method is not an admitted passive query"
-                }
-                val parameters = step["arguments"]?.jsonArray ?: JsonArray(emptyList())
-                require(
-                    parameters.size <= 8 && parameters.toString().encodeToByteArray().size <= 4096
-                ) {
-                    "Query method arguments exceed bound"
-                }
-                fun validate(value: JsonElement, depth: Int) {
-                    require(depth <= 4) { "Query argument nesting exceeds bound" }
-                    when (value) {
-                        is JsonObject ->
-                            value.forEach { (key, item) ->
-                                require(key.length <= 128 && '\u0000' !in key)
-                                validate(item, depth + 1)
-                            }
-
-                        is JsonArray -> {
-                            require(value.size <= 64)
-                            value.forEach { validate(it, depth + 1) }
-                        }
-
-                        is JsonPrimitive -> {
-                            require(value.content.length <= 512 && '\u0000' !in value.content)
-                            if (value != JsonNull && !value.isString && value.booleanOrNull == null)
-                                require(value.doubleOrNull?.isFinite() == true) {
-                                    "Query numbers must be finite"
-                                }
-                        }
-                    }
-                }
-                parameters.forEach { validate(it, 0) }
-                require((step["result"]?.intArgument() ?: 1) in 1..8) {
-                    "Method result index must be 1..8"
-                }
-            }
-        }
+    val options = JsonObject(args.filterKeys { it !in setOf("selection", "surface", "reads") } +
+            ("path" to (selection["path"] ?: JsonArray(emptyList()))))
+    val read = observationRead(options)
+    require(read["mode"]?.jsonPrimitive?.content in setOf("values", "entries") || "reads" !in args) {
+        "reads requires values or entries"
     }
-    val mode = args["mode"]?.stringArgument() ?: "values"
-    require(mode in setOf("values", "members", "entries")) {
-        "Inspection mode must be values, members or entries"
-    }
-    val fields = args["fields"]?.jsonArray?.map { it.stringArgument() }
-    require(
-        fields == null ||
-                mode == "values" &&
-                fields.isNotEmpty() &&
-                fields.distinct().size == fields.size &&
-                fields.all { it.length <= 128 && it.matches(Regex("[A-Za-z_][A-Za-z0-9_]*")) }
-    ) {
-        "Invalid inspection fields"
-    }
-    val depth = args["depth"]?.intArgument() ?: 3
-    require(depth >= 0) { "Inspection depth must be nonnegative" }
-    val offset = args["offset"]?.intArgument() ?: 0
-    val limit = args["limit"]?.intArgument() ?: 64
-    require(offset >= 0 && limit > 0) {
-        "Inspection offset must be nonnegative and limit positive"
-    }
-    return WorldQuery(
-        buildJsonObject {
-            put("selection", target)
-            args["surface"]?.let { put("surface", it) }
-            put("limit", limit)
-            put("offset", offset)
-            put(
-                "fields",
-                fields?.let { JsonArray(it.map(::JsonPrimitive)) } ?: JsonArray(emptyList()),
-            )
-            putJsonObject("inspection") {
-                put(
-                    "path",
-                    JsonArray(
-                        path.map { value ->
-                            val step = value.jsonObject
-                            if ("method" !in step) step
-                            else
-                                JsonObject(
-                                    step +
-                                            ("argument_count" to
-                                                    JsonPrimitive(step["arguments"]?.jsonArray?.size ?: 0))
-                                )
-                        }
-                    ),
-                )
-                put("mode", mode)
-                put("depth", depth)
-            }
-        }
-    )
+    return WorldQuery(buildJsonObject {
+        put("selection", target)
+        args["surface"]?.let { put("surface", it) }
+        read["limit"]?.let { put("limit", it) }
+        put("fields", JsonArray(emptyList()))
+        put("inspection", read)
+        args["reads"]?.let { put("reads", observationReads(it)) }
+    })
 }

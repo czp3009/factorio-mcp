@@ -22,6 +22,7 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
     private var channel: ResidentChannel? = null
     private var layout: WidgetLayout? = null
     private var worldMetadata: WorldQueryMetadata? = null
+    private var guiRegistry: Result<GuiRegistryLayout>? = null
     private var inputContextMetadata: InputContextMetadata? = null
     private var workerMetadata: WorkerListenerMetadata? = null
     private var workerBinding: WorkerListenerMetadata.Binding? = null
@@ -72,7 +73,11 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
         trace = owner
         owner.seize()
         owner.interrupt()
-        readiness?.requireRunning(owner)
+        // A validated retained IPC frame was published only by the verified main-thread
+        // frontend callback. Initial loading has already ended for this process lifetime.
+        // Its sole writer is stopped here, so the typed counter read is stable.
+        if (readiness != null && (mapping == null || storage().frame == 0uL))
+            readiness.requireRunning(owner)
         return site.stopAfterLogic(owner).also { safeStop = true }
     }
 
@@ -109,6 +114,7 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
         val site = FrontendSite.resolve(process)
         layout = null
         worldMetadata = null
+        guiRegistry = null
         inputContextMetadata = null
         workerMetadata = null
         workerBinding = null
@@ -184,9 +190,9 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
         if (operation == 1 && !ready) attach()
         check(ready && process.alive()) { "Linux attachment is not ready" }
         if (operation == 2) return observeState()
-        if (operation == 7) return inputBindings()
+        if (operation == 7) return bindings(BindingReadRequest(null, null, 0, null))
         if (operation == 6) return screenshot()
-        if (operation == 10) return readChat()
+        if (operation == 10) return readChat(ChatReadRequest(null, limit, 0))
         if (operation == 5)
             return when (checkNotNull(action).kind) {
                 1 -> click(action)
@@ -202,13 +208,17 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
         return if (operation == 3) {
             require(limit > 0)
             val widgets = uiLayout()
+            val gui = guiRead(action)
+            val payload = gui.payload(action)
             val readObservation = observationReader()
-            connection.execute(
+            connection.executePayload(
                 FM_LINUX_UI,
+                payload.bytes,
                 {
                     widgets.writeTo(it.ui, loadBias)
                     it.nodeLimit = limit.toUInt()
-                    it.selector.writePath(action?.path)
+                    it.selector.writePath(action, payload, it.request)
+                    gui.writeTo(it, loadBias, payload)
                 },
                 { shared, result ->
                     check(result.code == 0) { "Native UI read failed: ${result.code}" }
@@ -222,10 +232,25 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
                             widgets.switchNames.names,
                             widgets.progressNames,
                         ),
-                        truncated = shared.snapshot.truncated != 0u,
+                        truncated = shared.snapshot.treeTruncated != 0u,
                         paused = result.paused,
                         iconNamesUnavailableReason = widgets.iconNames.exceptionOrNull()?.message,
+                        imageUnavailableReason = widgets.images.exceptionOrNull()?.message,
+                        graphUnavailableReason = widgets.graph.exceptionOrNull()?.message,
+                        storedIdentityUnavailableReason = widgets.storedWidgets.exceptionOrNull()?.message,
                         tooltipsUnavailableReason = widgets.tooltips.exceptionOrNull()?.message,
+                        guiJson = if (shared.snapshot.guiStatus == 1u)
+                            shared.snapshot.guiJson.also {
+                                require(shared.snapshot.guiSize in 1u..Int.MAX_VALUE.toUInt())
+                                it.validateObservationBuffer(shared.snapshot.guiSize.toLong())
+                            }.readObservationBytes(readObservation).decodeToString()
+                        else null,
+                        guiUnavailableReason = if (shared.snapshot.guiStatus != 1u)
+                            gui.failure ?: shared.snapshot.guiMessage.toKString()
+                        else null,
+                        textRange = shared.snapshot.textRange.takeIf { it.available != 0u }?.let {
+                            ObservationTextRange(it.offset.toInt(), it.total.toLong(), it.nextOffset.toInt(), it.hasMore != 0u)
+                        },
                     )
                 },
             )
@@ -234,6 +259,39 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
             check(result.code == 0) { "Native frontend observation failed: ${result.code}" }
             GameSnapshot(result.state, true, result.frame.toLong(), paused = result.paused)
         }
+    }
+
+    private fun guiRead(action: UiAction?): GuiReadRequest {
+        val apiResult = runCatching {
+            runtimeApi ?: readRuntimeApi(process.executablePath()).also { runtimeApi = it }
+        }
+        if (action?.path?.any { it.gui != null } == true) apiResult.getOrThrow()
+        val api = apiResult.getOrElse {
+            return GuiReadRequest(null, null, byteArrayOf(), it.message ?: "Runtime API metadata is unavailable")
+        }
+        val arguments = guiArguments(action, api).toString().encodeToByteArray()
+        val metadata = runCatching {
+            worldMetadata ?: process.withExecutable { image ->
+                WorldQueryMetadata.resolve(image).also { it.verifyLoaded(image, process, loadBias) }
+            }.also { worldMetadata = it }
+        }
+        val registry = metadata.mapCatching { world ->
+            (guiRegistry ?: runCatching {
+                process.withExecutable { image ->
+                    GuiRegistryLayout.resolve(image, world.playerSize).also {
+                        it.evidence.verify(image, loadBias, process::readMemory)
+                    }
+                }
+            }.also { guiRegistry = it }).getOrThrow()
+        }
+        if (action?.path?.any { it.gui != null } == true) registry.getOrThrow()
+        return GuiReadRequest(metadata.getOrNull(), registry.getOrNull(), arguments,
+            registry.exceptionOrNull()?.let { it.message ?: "Script GUI metadata is unavailable" })
+    }
+
+    private fun writeActionGui(shared: FmLinuxShared, action: UiAction, gui: GuiReadRequest?, payload: RequestPayload) {
+        shared.guiEnabled = 0u
+        if (action.path.any { it.gui != null }) checkNotNull(gui).writeTo(shared, loadBias, payload)
     }
 
     private fun uiLayout(): WidgetLayout =
@@ -371,7 +429,7 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
             )
     }
 
-    private suspend fun inputBindings(): GameSnapshot {
+    suspend fun bindings(request: BindingReadRequest): GameSnapshot {
         val readObservation = observationReader()
         val metadata =
             controlLayouts
@@ -383,14 +441,26 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
                     }
                     .also { controlLayouts = it }
         return checkNotNull(channel)
-            .execute(
+            .executePayload(
                 FM_LINUX_CONTROLS,
-                { shared -> metadata.writeTo(shared.controlsLayout, loadBias) },
+                request.payload(),
+                { shared ->
+                    metadata.writeTo(shared.controlsLayout, loadBias)
+                    shared.bindingQuery.bindRequest(shared.request, RequestSlice(0, shared.request.size.toInt()))
+                },
                 { shared, result ->
                     check(result.code == 0) { "Native input binding read failed: ${result.code}" }
                     metadata
                         .read(shared.controlsSnapshot, result.frame.toLong(), readObservation)
-                        .copy(state = result.state, paused = result.paused)
+                        .copy(state = result.state, paused = result.paused,
+                            bindingPage = shared.controlsSnapshot.selection.let { page ->
+                                require(page.matchedCount <= shared.controlsSnapshot.registryCount && page.hasMore <= 1u &&
+                                    page.presenceSize == (request.ids?.size ?: 0).toUInt())
+                                val presence = if (page.presenceSize == 0u) byteArrayOf()
+                                    else readObservation(page.presenceAddress.toLong(), page.presenceSize.toInt())
+                                BindingPage(page.matchedCount.toInt(), page.hasMore != 0u,
+                                    presence.map { require(it in 0..1); it != 0.toByte() })
+                            })
                 },
             )
     }
@@ -667,12 +737,16 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
                     .withExecutable { image -> UiClickMetadata.resolve(image, process, loadBias) }
                     .also { clickMetadata = it }
         val widgets = uiLayout()
-        return connection.execute(
+        val gui = if (action.path.any { it.gui != null }) guiRead(action) else null
+        val payload = gui?.payload(action) ?: RequestPayload(selectorPayload(action.path))
+        return connection.executePayload(
             FM_LINUX_CLICK,
+            payload.bytes,
             { shared ->
+                writeActionGui(shared, action, gui, payload)
                 widgets.writeTo(shared.ui, loadBias)
                 metadata.writeTo(shared.clickConfig, loadBias)
-                shared.selector.writePath(action.path)
+                shared.selector.writePath(action, payload, shared.request)
                 shared.clickRequest.button = action.button.toUInt()
                 shared.clickRequest.x = action.x
                 shared.clickRequest.y = action.y
@@ -708,12 +782,16 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
                     }
                     .also { textMetadata = it }
         val widgets = uiLayout()
-        return connection.execute(
+        val gui = if (action.path.any { it.gui != null }) guiRead(action) else null
+        val payload = gui?.payload(action) ?: RequestPayload(selectorPayload(action.path))
+        return connection.executePayload(
             FM_LINUX_TEXT,
+            payload.bytes,
             { shared ->
+                writeActionGui(shared, action, gui, payload)
                 widgets.writeTo(shared.ui, loadBias)
                 metadata.writeTo(shared.textConfig, loadBias)
-                shared.selector.writePath(action.path)
+                shared.selector.writePath(action, payload, shared.request)
                 shared.textRequest.count = action.text.size.toUInt()
                 action.text.forEachIndexed { index, value ->
                     shared.textRequest.text[index] = value.toUInt()
@@ -730,18 +808,22 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
     }
 
     private suspend fun pressKey(action: UiAction): GameSnapshot {
-        require(action.kind == 3 && action.path.size <= FM_LINUX_UI_PATH)
+        require(action.kind == 3)
         val keys = SdlScancodes.chord(action.keys)
         val connection = checkNotNull(channel)
         check(!connection.actionOwned) { "Previous action cleanup is incomplete; retry detach" }
         val metadata = uiKey()
         val widgets = uiLayout()
-        return connection.execute(
+        val gui = if (action.path.any { it.gui != null }) guiRead(action) else null
+        val payload = gui?.payload(action) ?: RequestPayload(selectorPayload(action.path))
+        return connection.executePayload(
             FM_LINUX_KEY,
+            payload.bytes,
             { shared ->
+                writeActionGui(shared, action, gui, payload)
                 widgets.writeTo(shared.ui, loadBias)
                 metadata.writeTo(shared.keyConfig, shared.pollConfig, loadBias)
-                shared.selector.writePath(action.path)
+                shared.selector.writePath(action, payload, shared.request)
                 shared.keyRequest.count = keys.size.toUInt()
                 keys.forEachIndexed { index, key -> shared.keyRequest.keys[index] = key }
             },
@@ -755,7 +837,7 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
         )
     }
 
-    private suspend fun readChat(): GameSnapshot {
+    suspend fun readChat(request: ChatReadRequest): GameSnapshot {
         val readObservation = observationReader()
         val connection = checkNotNull(channel)
         check(!connection.actionOwned) { "Previous native cleanup is incomplete; retry detach" }
@@ -773,6 +855,20 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
             { shared ->
                 metadata.writeTo(shared.chatReadConfig, loadBias)
                 shared.chatSnapshot.count = 0u
+                shared.chatRead.apply {
+                    tick = request.offset?.tick ?: 0uL
+                    hasOffset = if (request.offset == null) 0u else 1u
+                    repeat(2) { counts[it] = request.offset?.counts?.get(it)?.toUInt() ?: 0u }
+                    limit = request.limit.toUInt()
+                    textSlice.source = when (request.textSlice?.field) {
+                        "text" -> 1u
+                        "raw" -> 2u
+                        "player_name" -> 3u
+                        else -> 0u
+                    }
+                    textSlice.offset = request.textSlice?.offset?.toUInt() ?: 0u
+                    textSlice.limit = request.textSlice?.limit?.toUInt() ?: 0u
+                }
             },
             { shared, result ->
                 check(result.code == 0 && !connection.actionOwned) {
@@ -797,9 +893,9 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
                                 row.stream <= 1u &&
                                 row.truncated <= 7u &&
                                 row.playerIndex < (1u shl (metadata.player.index.width * 8)) &&
-                                row.textSize <= FM_LINUX_CHAT_RECORD_BYTES.toUInt() &&
-                                row.rawSize <= FM_LINUX_CHAT_RECORD_BYTES.toUInt() &&
-                                row.playerNameSize <= FM_LINUX_CHAT_RECORD_BYTES.toUInt()
+                                row.textSize <= Int.MAX_VALUE.toUInt() &&
+                                row.rawSize <= Int.MAX_VALUE.toUInt() &&
+                                row.playerNameSize <= Int.MAX_VALUE.toUInt()
                         )
                         ChatRecord(
                             row.identity,
@@ -821,6 +917,10 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
                                 .readObservationBytes(readObservation)
                                 .decodeToString(),
                             row.truncated and 4u != 0u,
+                            row.textRange.takeIf { it.available != 0u }?.let {
+                                ObservationTextRange(it.offset.toInt(), it.total.toLong(), it.nextOffset.toInt(), it.hasMore != 0u)
+                            },
+                            row.textIncluded.also { require(it <= 1u) } != 0u,
                         )
                     }
                 require(
@@ -892,32 +992,21 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
                         }
                     }
                     .also { worldMetadata = it }
-        val prepared =
-            if ("inspection" in query.arguments) {
-                val api =
-                    runtimeApi ?: readRuntimeApi(process.executablePath()).also { runtimeApi = it }
-                api.prepare(query)
-            } else query
-        val source = worldQueryLua.encodeToByteArray()
-        val arguments = prepared.arguments.toString().encodeToByteArray()
-        require(
-            source.size in 1 until FM_LINUX_LUA_SOURCE &&
-                arguments.size in 1 until FM_LINUX_QUERY_ARGUMENTS
-        ) {
-            "World query payload exceeds bound"
-        }
+        val api = runtimeApi ?: readRuntimeApi(process.executablePath()).also { runtimeApi = it }
+        val prepared = api.prepare(query)
+        val payload = RequestPayload(source = worldQueryLua.encodeToByteArray(),
+            arguments = prepared.arguments.toString().encodeToByteArray())
         return checkNotNull(channel)
-            .execute(
+            .executePayload(
                 FM_LINUX_QUERY,
+                payload.bytes,
                 { shared ->
                     shared.queryResult.size = 0u
                     shared.queryResult.errorSize = 0u
                     metadata.writeTo(shared.worldConfig, loadBias)
-                    shared.query.sourceSize = source.size.toUInt()
-                    shared.query.argumentsSize = arguments.size.toUInt()
+                    shared.query.source.bindRequest(shared.request, payload.source)
+                    shared.query.arguments.bindRequest(shared.request, payload.arguments)
                     shared.query.includeViewport = if (query.includeViewport) 1u else 0u
-                    source.forEachIndexed { index, byte -> shared.query.source[index] = byte }
-                    arguments.forEachIndexed { index, byte -> shared.query.arguments[index] = byte }
                 },
                 { shared, result ->
                     val output = shared.queryResult
@@ -945,6 +1034,7 @@ internal class ResidentConnection(pid: Int, private val residentPath: String) {
                                 .also { it.validateObservationBuffer(output.size.toLong()) }
                                 .readObservationBytes(readObservation)
                                 .decodeToString(),
+                        worldApi = api,
                     )
                 },
             )

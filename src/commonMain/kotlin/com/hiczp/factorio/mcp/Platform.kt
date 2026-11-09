@@ -30,20 +30,28 @@ internal data class GameSnapshot(
     val registryCount: Int = 0,
     val propertiesUnavailableReason: String? = null,
     val worldJson: String? = null,
+    val worldApi: RuntimeApi? = null,
     val slotIdentityUnavailableReason: String? = null,
     val numberUnavailableReason: String? = null,
     val visibilityUnavailableReason: String? = null,
     val progressUnavailableReason: String? = null,
     val elementUnavailableReason: String? = null,
     val iconsUnavailableReason: String? = null,
+    val imageUnavailableReason: String? = null,
+    val graphUnavailableReason: String? = null,
+    val storedIdentityUnavailableReason: String? = null,
     val iconNamesUnavailableReason: String? = null,
     val tooltipsUnavailableReason: String? = null,
     val qualityConditionUnavailableReason: String? = null,
     val switchUnavailableReason: String? = null,
     val chat: ChatSnapshot? = null,
+    val guiJson: String? = null,
+    val guiUnavailableReason: String? = null,
+    val textRange: ObservationTextRange? = null,
+    val bindingPage: BindingPage? = null,
 )
 
-/** Native commands finish at a frontend safe point; cancellation is cooperative. */
+/** Platform commands use their verified game callbacks; cancellation and cleanup are cooperative. */
 internal interface GameConnection {
     suspend fun execute(operation: Int, limit: Int = 4096, action: UiAction? = null): GameSnapshot
 
@@ -51,6 +59,11 @@ internal interface GameConnection {
 
     suspend fun query(query: WorldQuery): GameSnapshot =
         error("World queries are unavailable on this adapter")
+
+    suspend fun bindings(request: BindingReadRequest): GameSnapshot =
+        error("Input binding reads are unavailable on this adapter")
+
+    suspend fun readChat(request: ChatReadRequest): GameSnapshot = execute(10)
 
     suspend fun sendChat(text: String): GameSnapshot =
         error("Chat submission is unavailable on this adapter")
@@ -73,6 +86,10 @@ internal expect class GameProcess(pid: Int) : GameConnection {
     override suspend fun isAlive(): Boolean
 
     override suspend fun query(query: WorldQuery): GameSnapshot
+
+    override suspend fun bindings(request: BindingReadRequest): GameSnapshot
+
+    override suspend fun readChat(request: ChatReadRequest): GameSnapshot
 
     override suspend fun sendChat(text: String): GameSnapshot
 

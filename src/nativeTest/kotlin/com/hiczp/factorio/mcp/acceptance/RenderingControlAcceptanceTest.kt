@@ -2,6 +2,8 @@
 
 package com.hiczp.factorio.mcp.acceptance
 
+import com.hiczp.factorio.mcp.worldQuery
+
 import com.hiczp.factorio.mcp.McpHttpClient
 import com.hiczp.factorio.mcp.toolValue
 import kotlin.io.encoding.Base64
@@ -36,14 +38,14 @@ class RenderingControlAcceptanceTest {
                     assertTrue(capture.getValue("isError").jsonPrimitive.boolean)
                     assertEquals("Screenshot unavailable while rendering is suspended.",
                         capture.getValue("structuredContent").jsonObject.getValue("error").jsonPrimitive.content)
-                    client.tool("ui_read", buildJsonObject { put("max_nodes", 2000) }).toolValue()
+                    client.tool("ui_read", buildJsonObject { put("max_depth", 2) }).toolValue()
                     client.tool("input_bindings", buildJsonObject { put("limit", 4) }).toolValue()
                 }
                 val after = client.tool("status").toolValue()
                 assertEquals(before["state"], after["state"])
                 assertEquals(before["paused"], after["paused"])
                 if (before["state"]?.jsonPrimitive?.content in setOf("in_game", "paused")) {
-                    client.tool("world_query", buildJsonObject {
+                    client.worldQuery(buildJsonObject {
                         putJsonObject("selection") { put("kind", "player") }
                     }).toolValue()
                 }
@@ -51,7 +53,7 @@ class RenderingControlAcceptanceTest {
                 client.tool("attach", buildJsonObject { put("pid", pid) }).toolValue()
                 val capture = withTimeout(30_000) { client.tool("screenshot", buildJsonObject { put("format", "png") }) }
                 assertTrue(capture.getValue("isError").jsonPrimitive.boolean)
-                client.tool("ui_read", buildJsonObject { put("max_nodes", 32) }).toolValue()
+                client.tool("ui_read", buildJsonObject { put("max_depth", 1) }).toolValue()
                 repeat(2) {
                     assertEquals(buildJsonObject { put("dispatch", "completed") },
                         client.tool("set_rendering", buildJsonObject { put("enabled", true) }).toolValue())
@@ -93,29 +95,45 @@ class RenderingControlAcceptanceTest {
         }
     }
 
-    /** Run explicitly with the window minimized and halt-rendering-when-minimized enabled. */
+    /** Run explicitly with the window minimized and MCP rendering enabled initially. */
     @Test
-    fun enablingDoesNotOverrideMinimization() = runBlocking {
+    fun enablingPreservesNativeMinimizationPolicy() = runBlocking {
         fun environment(name: String) = checkNotNull(getenv(name)) { "Select $name explicitly" }.toKString()
         val client = McpHttpClient(environment("FACTORIO_MCP_ACCEPTANCE_URL"))
         try {
             withTimeout(120_000) {
                 client.initialize()
                 client.tool("attach", buildJsonObject { put("pid", environment("FACTORIO_MCP_TEST_PID").toInt()) }).toolValue()
+                suspend fun capture() = withTimeout(30_000) {
+                    client.tool("screenshot", buildJsonObject { put("format", "png") })
+                }
+                fun suspended(result: JsonObject): Boolean {
+                    if (result["isError"]?.jsonPrimitive?.boolean != true) {
+                        assertTrue(result.getValue("content").jsonArray.any {
+                            it.jsonObject["type"]?.jsonPrimitive?.content == "image"
+                        })
+                        return false
+                    }
+                    assertEquals("Screenshot unavailable while rendering is suspended.",
+                        result.getValue("structuredContent").jsonObject.getValue("error").jsonPrimitive.content)
+                    return true
+                }
+                val initiallySuspended = suspended(capture())
                 for (enabled in listOf(false, true, true)) {
                     client.tool("set_rendering", buildJsonObject { put("enabled", enabled) }).toolValue()
-                    val capture = withTimeout(30_000) { client.tool("screenshot", buildJsonObject { put("format", "png") }) }
-                    assertTrue(capture.getValue("isError").jsonPrimitive.boolean)
-                    assertEquals("Screenshot unavailable while rendering is suspended.",
-                        capture.getValue("structuredContent").jsonObject.getValue("error").jsonPrimitive.content)
-                    client.tool("ui_read", buildJsonObject { put("max_nodes", 32) }).toolValue()
+                    assertEquals(!enabled || initiallySuspended, suspended(capture()))
+                    client.tool("ui_read", buildJsonObject { put("max_depth", 1) }).toolValue()
                 }
-                println("Enabling cleared only suppression; native minimization still prevents screenshots")
+                println("Enabling preserved the game's minimized presentation policy: initially_suspended=$initiallySuspended")
             }
         } finally {
             withContext(NonCancellable) {
                 try {
-                    client.tool("detach").toolValue()
+                    try {
+                        client.tool("set_rendering", buildJsonObject { put("enabled", true) }).toolValue()
+                    } finally {
+                        client.tool("detach").toolValue()
+                    }
                 } finally {
                     client.close()
                 }

@@ -5,6 +5,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
+import kotlin.test.assertNull
 
 class RelatedWorldQueryTest {
     private fun query(text: String) =
@@ -14,7 +15,7 @@ class RelatedWorldQueryTest {
     fun inventoryAndCatalogDefaultsKeepTheirDistinctContracts() {
         val inventory = query("""{"selection":{"kind":"inventory"},"offset":7}""")
         assertEquals(7, inventory["offset"]!!.jsonPrimitive.int)
-        assertEquals(64, inventory["limit"]!!.jsonPrimitive.int)
+        assertNull(inventory["limit"])
         assertTrue(inventory["fields"]!!.jsonArray.contains(JsonPrimitive("quality")))
         val discovery =
             query(
@@ -24,16 +25,18 @@ class RelatedWorldQueryTest {
         val recipe =
             query("""{"selection":{"kind":"recipes","names":["iron-gear-wheel","copper-cable"]}}""")
         assertTrue(recipe["fields"]!!.jsonArray.contains(JsonPrimitive("enabled")))
+        assertNull(recipe["limit"])
         val prototype =
             query("""{"selection":{"kind":"prototypes","type":"item","search":"plate"}}""")
         assertTrue(prototype["fields"]!!.jsonArray.contains(JsonPrimitive("place_result")))
+        assertEquals(64, prototype["limit"]!!.intArgument())
     }
 
     @Test
     fun recursiveOwnersAndWrongFieldFamiliesAreRejected() {
         for (text in
         listOf(
-            """{"selection":{"kind":"prototypes","type":"unknown"}}""",
+            """{"selection":{"kind":"prototypes","type":"invalid-type"}}""",
             """{"selection":{"kind":"recipes","type":"recipe"}}""",
             """{"selection":{"kind":"recipes"},"surface":1}""",
             """{"selection":{"kind":"recipes","names":[]}}""",
@@ -46,8 +49,8 @@ class RelatedWorldQueryTest {
             """{"selection":{"kind":"inventories"},"fields":["name"]}""",
             """{"selection":{"kind":"inventories","inventory":"fuel"}}""",
             """{"selection":{"kind":"inventory","inventory":"bad\u0000name"}}""",
-            """{"selection":{"kind":"inventory"},"fields":["can_insert"]}""",
-            """{"selection":{"kind":"recipes"},"fields":["stack_size"]}""",
+            """{"selection":{"kind":"inventory"},"fields":["can_insert()"]}""",
+            """{"selection":{"kind":"recipes"},"fields":["stack_size()"]}""",
             """{"selection":{"kind":"player"},"offset":0}""",
         )) assertFailsWith<IllegalArgumentException>(text) { query(text) }
     }
@@ -83,7 +86,7 @@ class RelatedWorldQueryTest {
         for (request in
         listOf(
             """{"selection":{"kind":"technologies","type":"technology"}}""",
-            """{"selection":{"kind":"technologies"},"fields":["ingredients"]}""",
+            """{"selection":{"kind":"technologies"},"fields":["ingredients()"]}""",
             """{"selection":{"kind":"inventory","owner":{"kind":"force"}}}""",
             """{"selection":{"kind":"inventory","owner":{"kind":"character"}},"surface":1}""",
         )) assertFailsWith<IllegalArgumentException> { query(request) }
@@ -93,14 +96,12 @@ class RelatedWorldQueryTest {
     fun quickbarUsesExplicitBoundedPageAndSlotLocations() {
         val result =
             query("""{"selection":{"kind":"quickbar","slots":[{"page_index":1,"slot_index":1},{"page_index":2,"slot_index":1},{"page_index":256,"slot_index":256}],"screen_pages":[1,4]}}""")
-        assertEquals(3, result["limit"]!!.jsonPrimitive.int)
+        assertEquals(3, result.getValue("selection").jsonObject.getValue("slots").jsonArray.size)
+        assertNull(result["limit"])
         assertTrue(result["fields"]!!.jsonArray.isEmpty())
-        assertEquals(
-            0,
-            query("""{"selection":{"kind":"quickbar","screen_pages":[1]}}""")["limit"]!!
-                .jsonPrimitive
-                .int,
-        )
+        assertEquals(4294967295L, query("""{"selection":{"kind":"quickbar","screen_pages":[4294967295]}}""")
+            .getValue("selection").jsonObject.getValue("screen_pages").jsonArray.single().jsonPrimitive.long)
+        assertNull(query("""{"selection":{"kind":"quickbar","screen_pages":[1]}}""")["limit"])
         for (request in
         listOf(
             """{"selection":{"kind":"quickbar"}}""",
@@ -113,7 +114,7 @@ class RelatedWorldQueryTest {
             """{"selection":{"kind":"quickbar","slots":[{"page_index":257,"slot_index":1}]}}""",
             """{"selection":{"kind":"quickbar","slots":[{"page_index":"1","slot_index":1}]}}""",
             """{"selection":{"kind":"quickbar","slots":[{"page_index":1,"slot_index":1},{"slot_index":1,"page_index":1}]}}""",
-            """{"selection":{"kind":"quickbar","screen_pages":[65537]}}""",
+            """{"selection":{"kind":"quickbar","screen_pages":[4294967296]}}""",
             """{"selection":{"kind":"quickbar","slots":[1]},"limit":1}""",
             """{"selection":{"kind":"quickbar","slots":[1]},"fields":["filter"]}""",
             """{"selection":{"kind":"quickbar","slots":[1]},"offset":0}""",
@@ -131,11 +132,11 @@ class RelatedWorldQueryTest {
                 }
             }
         }
-        assertEquals(129, parseWorldQuery(excessive).arguments.getValue("limit").jsonPrimitive.int)
+        assertEquals(129, parseWorldQuery(excessive).arguments.getValue("selection").jsonObject.getValue("slots").jsonArray.size)
     }
 
     @Test
-    fun emptyRecipeArraysAndMissingNamesAreNormalizedWithoutChangingDictionaries() {
+    fun onlyEnvelopeArraysAreNormalized() {
         val result =
             decodeWorldQuery(
                 """{"missing_names":{},"objects":[{"attributes":{"ingredients":{},"products":{},"prerequisites":{},"crafting_categories":{}},"read_status":{}}]}"""
@@ -143,8 +144,8 @@ class RelatedWorldQueryTest {
         assertEquals(JsonArray(emptyList()), result["missing_names"])
         val attributes =
             result["objects"]!!.jsonArray.single().jsonObject["attributes"]!!.jsonObject
-        assertEquals(JsonArray(emptyList()), attributes["ingredients"])
-        assertEquals(JsonArray(emptyList()), attributes["products"])
+        assertEquals(JsonObject(emptyMap()), attributes["ingredients"])
+        assertEquals(JsonObject(emptyMap()), attributes["products"])
         assertEquals(JsonObject(emptyMap()), attributes["prerequisites"])
         assertEquals(JsonObject(emptyMap()), attributes["crafting_categories"])
         val force =
@@ -153,7 +154,7 @@ class RelatedWorldQueryTest {
             )
         assertEquals(JsonArray(emptyList()), force["active_pages"])
         assertEquals(
-            JsonArray(emptyList()),
+            JsonObject(emptyMap()),
             force["objects"]!!
                 .jsonArray
                 .single()

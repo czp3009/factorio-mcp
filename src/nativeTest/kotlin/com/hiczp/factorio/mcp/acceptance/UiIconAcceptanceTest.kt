@@ -2,6 +2,8 @@
 
 package com.hiczp.factorio.mcp.acceptance
 
+import com.hiczp.factorio.mcp.worldQuery
+
 import com.hiczp.factorio.mcp.McpHttpClient
 import com.hiczp.factorio.mcp.toolValue
 import kotlin.test.*
@@ -72,9 +74,7 @@ class UiIconAcceptanceTest {
                     )) {
                     val api =
                         client
-                            .tool(
-                                "world_query",
-                                buildJsonObject {
+                            .worldQuery(buildJsonObject {
                                     putJsonObject("selection") {
                                         put("kind", "inspect")
                                         putJsonObject("target") { put("kind", "player") }

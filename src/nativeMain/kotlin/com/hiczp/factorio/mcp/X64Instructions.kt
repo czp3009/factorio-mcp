@@ -86,6 +86,7 @@ internal class X64Instructions(
         VECTOR_AND_NOT,
         VECTOR_OR,
         VECTOR_ADD_DWORDS,
+        VECTOR_ADD_QWORDS,
         VECTOR_SUBTRACT_DWORDS,
         VECTOR_EQUAL_BYTES,
         VECTOR_EQUAL_WORDS,
@@ -850,6 +851,7 @@ internal class X64Instructions(
                     0x75,
                     0x76,
                     0xdb,
+                    0xd4,
                     0xdf,
                     0xeb,
                     0xef,
@@ -885,6 +887,7 @@ internal class X64Instructions(
                                 0xeb -> Operation.VECTOR_OR
                                 0xef -> Operation.VECTOR_XOR
                                 0xfe -> Operation.VECTOR_ADD_DWORDS
+                                0xd4 -> Operation.VECTOR_ADD_QWORDS
                                 0xfa -> Operation.VECTOR_SUBTRACT_DWORDS
                                 else -> Operation.VECTOR_MOV
                             }

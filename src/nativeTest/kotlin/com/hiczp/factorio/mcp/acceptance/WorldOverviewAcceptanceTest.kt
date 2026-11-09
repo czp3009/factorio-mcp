@@ -2,6 +2,8 @@
 
 package com.hiczp.factorio.mcp.acceptance
 
+import com.hiczp.factorio.mcp.worldQuery
+
 import com.hiczp.factorio.mcp.McpHttpClient
 import com.hiczp.factorio.mcp.toolValue
 import kotlinx.cinterop.toKString
@@ -72,7 +74,7 @@ class WorldOverviewAcceptanceTest {
                 }
                 val selected = client.tool("world_overview", request).toolValue()
                 assertFalse(selected.getValue("truncated").jsonPrimitive.boolean)
-                val entities = client.tool("world_query", buildJsonObject {
+                val entities = client.worldQuery(buildJsonObject {
                     putJsonObject("selection") {
                         put("kind", "entities")
                         put("area", bounds)
@@ -86,7 +88,7 @@ class WorldOverviewAcceptanceTest {
                 }.sorted()
                 assertEquals(observations(entities), observations(selected))
                 assertTrue(selected.getValue("objects").jsonArray.isNotEmpty())
-                val numericEntities = client.tool("world_query", buildJsonObject {
+                val numericEntities = client.worldQuery(buildJsonObject {
                     putJsonObject("selection") {
                         put("kind", "entities")
                         put("area", bounds)

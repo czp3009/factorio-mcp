@@ -1,6 +1,7 @@
 #pragma once
 #include <stdint.h>
 #include "observation_buffer.h"
+#include "../../nativeMain/native/binding_query.h"
 
 #define FM_LINUX_CONTROL_ID_BYTES 256
 
@@ -55,15 +56,17 @@ typedef struct FmLinuxControlsSnapshot {
     uint32_t count;
     uint32_t truncated;
     FmLinuxObservationBuffer controls;
+    FmBindingSelection selection;
 } FmLinuxControlsSnapshot;
 
 #ifdef __cplusplus
 struct ControlsSnapshot {
     uint32_t registryCount = 0, count = 0, truncated = 0;
     std::vector<FmLinuxControl> controls;
+    fm::BindingSelection selection;
 
     FmLinuxControlsSnapshot wire() const {
-        return {registryCount, count, truncated, observationBuffer(controls)};
+        return {registryCount, count, truncated, observationBuffer(controls), selection.wire()};
     }
 };
 

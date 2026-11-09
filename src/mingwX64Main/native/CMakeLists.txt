@@ -7,7 +7,7 @@ add_subdirectory("../../nativeMain/native" "${CMAKE_CURRENT_BINARY_DIR}/common")
 add_library(factorio_bridge SHARED
     resident.cpp ui_selector.cpp ui_capture.cpp detour.cpp screenshot.cpp controls.cpp frontend_input.cpp
     widget_properties.cpp world_query.cpp viewport.cpp resident_input.cpp input_events.cpp
-    chat.cpp
+    chat.cpp script_gui.cpp
 )
 target_link_libraries(factorio_bridge PRIVATE factorio_input_sequence)
 target_compile_definitions(factorio_bridge PRIVATE FM_BUILD WIN32_LEAN_AND_MEAN NOMINMAX _ITERATOR_DEBUG_LEVEL=0)

@@ -2,6 +2,8 @@
 
 package com.hiczp.factorio.mcp.acceptance
 
+import com.hiczp.factorio.mcp.worldQuery
+
 import com.hiczp.factorio.mcp.McpHttpClient
 import com.hiczp.factorio.mcp.toolValue
 import kotlin.test.Test
@@ -52,9 +54,7 @@ class TimedInputSmokeAcceptanceTest {
                 val key = binding.getValue("name").jsonPrimitive.content
                 suspend fun position(): JsonObject =
                     client
-                        .tool(
-                            "world_query",
-                            buildJsonObject { putJsonObject("selection") { put("kind", "player") } },
+                        .worldQuery(buildJsonObject { putJsonObject("selection") { put("kind", "player") } },
                         )
                         .toolValue()
                         .getValue("player")

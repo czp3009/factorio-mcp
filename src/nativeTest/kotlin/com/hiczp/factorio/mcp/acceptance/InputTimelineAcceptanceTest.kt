@@ -2,6 +2,8 @@
 
 package com.hiczp.factorio.mcp.acceptance
 
+import com.hiczp.factorio.mcp.worldQuery
+
 import com.hiczp.factorio.mcp.McpHttpClient
 import com.hiczp.factorio.mcp.toolValue
 import com.hiczp.factorio.mcp.uiSelector
@@ -107,9 +109,7 @@ class InputTimelineAcceptanceTest {
             }
         suspend fun playerPosition() =
             client
-                .tool(
-                    "world_query",
-                    buildJsonObject {
+                .worldQuery(buildJsonObject {
                         putJsonObject("selection") { put("kind", "player") }
                         putJsonArray("fields") { add("position") }
                     },

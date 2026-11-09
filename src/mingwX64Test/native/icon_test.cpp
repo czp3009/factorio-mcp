@@ -10,6 +10,17 @@ struct Icon {
 };
 
 static Icon *receiver{};
+struct ImageWidget {
+    void *padding{};
+    void *image{};
+};
+struct Image {
+    void *padding{};
+    const void *sprite{};
+};
+static ImageWidget imageWidget;
+static Image image;
+static bool staticImage = true;
 static int lookups, destroyed;
 static void lookup(const void *registry, void *output, const void *sprite) {
     assert(registry && sprite);
@@ -29,9 +40,16 @@ static size_t size(const void *value) {
     return static_cast<const std::string *>(value)->size();
 }
 
-static void *cast(void *widget, long, void *, void *, int) {
+static void *cast(void *widget, long, void *, void *target, int) {
+    if (target == reinterpret_cast<void *>(16))
+        return widget == &imageWidget ? widget : nullptr;
+    if (target == reinterpret_cast<void *>(32))
+        return widget == &image && staticImage ? widget : nullptr;
     return widget == reinterpret_cast<void *>(1) ? receiver : nullptr;
 }
+
+static const void *typeId(const void *value) { return value; }
+static const char *typeName(const void *) { return staticImage ? "class GuiImage" : "class FixtureDynamicImage"; }
 
 int main() {
     Symbols symbols{};
@@ -82,6 +100,28 @@ int main() {
     assert(lookups == 1 && destroyed == 1);
     assert(observationText(node.iconNames[0]) == "fixture_registered_icon");
     assert(node.iconNames[0].address == node.iconNames[1].address);
+    symbols.address[TypeId] = reinterpret_cast<uintptr_t>(typeId);
+    symbols.address[TypeName] = reinterpret_cast<uintptr_t>(typeName);
+    symbols.images = {16, 24, 32, 1, sizeof(ImageWidget), offsetof(ImageWidget, image), sizeof(void *),
+                      sizeof(Image), offsetof(Image, sprite)};
+    assert(validUiImageLayout(symbols.images));
+    FmNode emptyImage{};
+    named.collectImage(&imageWidget, emptyImage, storage);
+    assert(emptyImage.image.status == 1);
+    imageWidget.image = &image;
+    image.sprite = icon.normal;
+    FmNode imageNode{};
+    named.collectImage(&imageWidget, imageNode, storage);
+    assert(imageNode.image.status == 2 && imageNode.image.spriteObserved == 1);
+    assert(imageNode.image.reference == node.iconNormal);
+    assert(imageNode.image.name.address == node.iconNames[0].address && lookups == 1 && destroyed == 1);
+    staticImage = false;
+    FmNode dynamicImage{};
+    named.collectImage(&imageWidget, dynamicImage, storage);
+    assert(dynamicImage.image.status == 2 && !dynamicImage.image.spriteObserved && !dynamicImage.image.name.size);
+    FmNode other{};
+    named.collectImage(nullptr, other, storage);
+    assert(other.image.status == 0);
     IconReferences fresh(symbols);
     icon.normal = &sources.back();
     fresh.collect(reinterpret_cast<void *>(1), node);

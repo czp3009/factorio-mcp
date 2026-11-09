@@ -4,6 +4,7 @@ package com.hiczp.factorio.mcp.acceptance
 
 import com.hiczp.factorio.mcp.McpHttpClient
 import com.hiczp.factorio.mcp.toolValue
+import com.hiczp.factorio.mcp.uiSelectorForNode
 import kotlin.test.*
 import kotlinx.cinterop.toKString
 import kotlinx.coroutines.*
@@ -12,6 +13,54 @@ import platform.posix.getenv
 
 /** A loaded disposable world with its ordinary SideMenu; observes without moving the pointer. */
 class UiResourceAcceptanceTest {
+    @Test
+    fun readsRetainedImageIdentityWithoutFramesOrScripts() = runBlocking {
+        val client = McpHttpClient(checkNotNull(getenv("FACTORIO_MCP_ACCEPTANCE_URL")).toKString())
+        val pid = checkNotNull(getenv("FACTORIO_MCP_TEST_PID")).toKString().toInt()
+        var attached = false
+        withTimeout(600_000) {
+            try {
+                client.initialize()
+                client.tool("attach", buildJsonObject { put("pid", pid) }).toolValue()
+                attached = true
+                val value = client.tool("ui_read", buildJsonObject {
+                    putJsonObject("selector") {
+                        putJsonArray("path") { addJsonObject {
+                            put("axis", "descendant")
+                            putJsonObject("match") { put("native_type", "agui::ImageWidget") }
+                        } }
+                    }
+                    put("max_depth", 0)
+                    putJsonArray("fields") { add("properties.image") }
+                }).toolValue()
+                assertNull(value["image_unavailable_reason"])
+                assertNull(value["icon_names_unavailable_reason"])
+                val images = value.getValue("nodes").jsonArray.mapNotNull {
+                    (it.jsonObject["properties"] as? JsonObject)?.get("image") as? JsonObject
+                }
+                assertTrue(images.isNotEmpty(), "The loaded stock world must contain image widgets")
+                assertTrue(images.any { it["native_type"] == JsonPrimitive("GuiImage") && "sprite" in it })
+                for (image in images) {
+                    assertTrue(image.keys.all { it in setOf("native_type", "sprite") })
+                    if (image["native_type"] != JsonPrimitive("GuiImage")) assertFalse("sprite" in image)
+                    (image["sprite"] as? JsonObject)?.let { sprite ->
+                        assertEquals(JsonPrimitive("snapshot"), sprite["identity_scope"])
+                        assertNotNull(sprite["reference"])
+                    }
+                }
+                println("Retained image metadata: ${JsonArray(images)}")
+            } finally {
+                withContext(NonCancellable) {
+                    try {
+                        if (attached) client.tool("detach").toolValue()
+                    } finally {
+                        client.close()
+                    }
+                }
+            }
+        }
+    }
+
     @Test
     fun readsLowerHudAndNavigatesTipsThroughLiveWidgets() = runBlocking {
         val client = McpHttpClient(checkNotNull(getenv("FACTORIO_MCP_ACCEPTANCE_URL")).toKString())
@@ -37,7 +86,6 @@ class UiResourceAcceptanceTest {
                     .tool(
                         "ui_read",
                         buildJsonObject {
-                            put("max_nodes", 20000)
                             put("selector", selector(type))
                         },
                     )
@@ -99,6 +147,28 @@ class UiResourceAcceptanceTest {
                     "Lower HUD: ${slots.size} quickbar slots, ${shortcuts.size} shortcut nodes, ${equipment.size} equipment nodes; raw identities and stored text present"
                 )
                 val hud = read("SideMenu")
+                val structure = client.tool("ui_read", buildJsonObject {
+                    put("selector", selector("SideMenu"))
+                    putJsonArray("fields") {}
+                }).toolValue()
+                assertFalse(structure.getValue("truncated").jsonPrimitive.boolean)
+                val structureNodes = structure.getValue("nodes").jsonArray.map { it.jsonObject }
+                assertEquals(hud.size, structureNodes.size)
+                assertTrue(structureNodes.all { "text" !in it && "properties" !in it && "enabled" in it })
+                assertTrue(structureNodes.all { row -> (row["gui"] as? JsonObject)?.let {
+                    "children" !in it && "properties" !in it && "read_status" !in it
+                } ?: true })
+                val iconOnly = client.tool("ui_read", buildJsonObject {
+                    put("selector", selector("SideMenu"))
+                    putJsonArray("fields") { add("properties.icons") }
+                }).toolValue().getValue("nodes").jsonArray.map { it.jsonObject }
+                assertTrue(iconOnly.all { "text" !in it &&
+                    (it["properties"] as? JsonObject)?.keys?.all { key -> key == "icons" } != false })
+                fun registeredNames(nodes: List<JsonObject>) = properties(nodes).mapNotNull { it["icons"] as? JsonObject }
+                    .map { icons -> listOf("normal", "hovered", "disabled").map { key ->
+                        (icons[key] as? JsonObject)?.get("name") ?: JsonNull
+                    } }
+                assertEquals(registeredNames(hud), registeredNames(iconOnly))
                 val tips =
                     hud.single {
                         (((it["properties"] as? JsonObject)?.get("icons") as? JsonObject)?.get(
@@ -167,7 +237,6 @@ class UiResourceAcceptanceTest {
                 client.tool("attach", buildJsonObject { put("pid", pid) }).toolValue()
                 attached = true
                 val request = buildJsonObject {
-                    put("max_nodes", 20000)
                     putJsonObject("selector") {
                         putJsonArray("path") {
                             add(
@@ -224,7 +293,32 @@ class UiResourceAcceptanceTest {
                             }
                         }
                     if (expected == null) expected = pairs else assertEquals(expected, pairs)
-                    if (it == 0) println("Observed HUD resources: ${JsonArray(pairs)}")
+                    if (it == 0) {
+                        println("Observed HUD resources: ${JsonArray(pairs)}")
+                        val entry = snapshot.getValue("nodes").jsonArray.map { it.jsonObject }.first { node ->
+                            node["properties"]?.jsonObject?.get("icons")?.jsonObject?.get("normal")?.jsonObject?.get("name") ==
+                                JsonPrimitive("side_menu_tutorials_icon")
+                        }
+                        val tooltip = entry.getValue("properties").jsonObject.getValue("tooltip").jsonObject
+                        val relativePath = uiSelectorForNode(snapshot, entry.getValue("id").jsonPrimitive.int)
+                            .getValue("path").jsonArray.drop(1)
+                        val entrySelector = buildJsonObject {
+                            put("path", JsonArray(request.getValue("selector").jsonObject.getValue("path").jsonArray + relativePath))
+                        }
+                        for ((source, field) in listOf("tooltip_title" to "title", "tooltip_text" to "text")) {
+                            val original = tooltip.getValue(field).jsonPrimitive.content
+                            val prefix = original.indexOf(' ').takeIf { index -> index >= 0 }?.let { end -> original.substring(0, end + 1) } ?: original
+                            val sliced = client.tool("ui_read", buildJsonObject {
+                                put("selector", entrySelector)
+                                putJsonObject("collection") {
+                                    put("source", source)
+                                    put("limit", prefix.encodeToByteArray().size.coerceAtLeast(1))
+                                }
+                            }).toolValue().getValue("collection").jsonObject
+                            assertEquals(prefix, sliced.getValue("value").jsonPrimitive.content)
+                            assertEquals(original.encodeToByteArray().size, sliced.getValue("total").jsonPrimitive.int)
+                        }
+                    }
                 }
             } finally {
                 withContext(NonCancellable) {

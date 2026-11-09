@@ -22,6 +22,9 @@ internal data class WidgetSnapshot(
     val hiddenBySearch: Boolean? = null,
     val textUnavailableReason: String? = null,
     val flaggedForDestruction: Boolean? = null,
+    val guiIndex: Long? = null,
+    val siblingIndex: Int? = null,
+    val childrenTruncated: Boolean = false,
 )
 
 /** Convert a bounded preorder forest without inventing missing parents or reordering siblings. */
@@ -66,7 +69,14 @@ internal data class WidgetProperties(
     val qualityCondition: WidgetQualityCondition? = null,
     val switch: WidgetSwitch? = null,
     val tooltip: WidgetTooltip? = null,
+    val toggleMode: Boolean? = null,
+    val image: WidgetImage? = null,
+    val graph: WidgetGraph? = null,
+    val achievement: WidgetAchievement? = null,
 )
+
+/** Raw cached card enums; descriptions and any progress remain native child widgets. */
+internal data class WidgetAchievement(val stateValue: Int, val shownStateValue: Int, val inSidebar: Boolean)
 
 /** Only already stored plain text is observed; providers are never invoked. */
 internal data class WidgetTooltip(
@@ -158,7 +168,7 @@ internal data class WidgetPrototype(
 
 internal data class WidgetOption(val text: String, val truncated: Boolean = false)
 
-internal data class WidgetOptions(val values: List<WidgetOption>, val total: Int)
+internal data class WidgetOptions(val values: List<WidgetOption>, val total: Int, val offset: Int = 0)
 
 internal data class SliderProperties(
     val value: Double,
@@ -173,7 +183,7 @@ internal fun JsonObjectBuilder.widgetText(node: WidgetSnapshot) {
     if (text == null) {
         put("text", JsonNull)
         node.textUnavailableReason?.let { put("text_unavailable_reason", it) }
-    } else if (text.isNotEmpty()) {
+    } else {
         put("text", text)
     }
     if (node.textTruncated) put("text_truncated", true)

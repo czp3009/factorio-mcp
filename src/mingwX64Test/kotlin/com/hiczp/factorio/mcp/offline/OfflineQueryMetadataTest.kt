@@ -77,7 +77,6 @@ class OfflineQueryMetadataTest {
         println("factorio-mcp: offline runtime API catalog check enabled")
         val document = SystemFileSystem.source(Path(path)).buffered().use { it.readString() }
         val api = RuntimeApi(Json.parseToJsonElement(document).jsonObject)
-        assertTrue(api.catalog.toString().encodeToByteArray().size < FM_MAX_QUERY_ARGUMENTS)
         val player = api.catalog.getValue("LuaPlayer").jsonObject
         assertTrue(
             player.getValue("attributes").jsonArray.any {

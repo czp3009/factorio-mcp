@@ -38,8 +38,7 @@ internal actual object PlatformImageEncoder {
                     ) == 0
                 ) { "JPEG encoding failed: ${tjGetErrorStr2(encoder)?.toKString()}" }
             }
-            check(size.value in 1uL..ImageEncoder.MAX_BYTES.toULong()) { "JPEG exceeds output bound" }
-            checkNotNull(buffer.value).readBytes(size.value.toInt())
+            checkNotNull(buffer.value).readBytes(ImageEncoder.encodedSize(size.value))
         } finally {
             tjFree(buffer.value)
             tjDestroy(encoder)
@@ -55,10 +54,12 @@ internal actual object PlatformImageEncoder {
         image.height = height.toUInt()
         image.format = PNG_FORMAT_RGB.toUInt()
         val size = alloc<png_alloc_size_tVar>()
-        // A bounded destination avoids encoding the image twice just to query its size.
-        val output = ByteArray(ImageEncoder.MAX_BYTES)
-        size.value = output.size.toULong()
         try {
+            val measured = rgb.usePinned { input ->
+                png_image_write_to_memory(image.ptr, null, size.ptr, 0, input.addressOf(0), width * 3, null)
+            }
+            check(measured != 0) { "PNG size query failed: ${image.message.toKString()}" }
+            val output = ByteArray(ImageEncoder.encodedSize(size.value))
             val success =
                 rgb.usePinned { input ->
                     output.usePinned { destination ->
@@ -74,7 +75,7 @@ internal actual object PlatformImageEncoder {
                     }
                 }
             check(success != 0) {
-                "PNG encoding failed or exceeded the image limit: ${image.message.toKString()}"
+                "PNG encoding failed: ${image.message.toKString()}"
             }
             check(size.value in 1uL..output.size.toULong()) { "Invalid PNG size" }
             output.copyOf(size.value.toInt())

@@ -7,8 +7,10 @@
 #include "ui_selector.h"
 #include "ui_capture.h"
 #include "world_query.h"
+#include "script_gui.h"
 #include "chat.h"
 #include "resident_input.h"
+#include "../../nativeMain/native/selector_payload.h"
 #include <algorithm>
 #include <atomic>
 #include <cstring>
@@ -28,7 +30,9 @@ static ResidentInput timedInput;
 static Detour inputTickHook, gameDestroyHook;
 static Detour presentHook, glHook;
 static std::vector<void *> widgets;
+static bool selectorText, selectorPrototype;
 static ObservationStorage observations;
+static fm::RequestStorage requestStorage;
 static_assert(noexcept(observations = ObservationStorage{}));
 static std::atomic<unsigned> callbacks{};
 static std::atomic<bool> enabled{};
@@ -53,42 +57,44 @@ struct Guard {
     }
 };
 
-static void copyText(char *out, size_t capacity, const char *text, size_t length, FmNode &node, int flag) {
-    size_t n = std::min(capacity - 1, length);
-    if (n < length) {
-        node.truncated |= flag;
-        while (n > 0 && (static_cast<unsigned char>(text[n]) & 0xc0) == 0x80)
-            n--;
-    }
-    memcpy(out, text, n);
-    out[n] = 0;
-}
-
-static void collect(void *widget) {
-    if (InterlockedCompareExchange(&shared->cancel, 0, 0))
-        return;
-    auto &result = shared->result;
-    const auto limit = shared->operation == 5 ? std::numeric_limits<int>::max() : shared->limit;
-    if (result.count >= limit) {
-        result.truncated = 1;
-        return;
-    }
-    if (fn<bool (*)(void *)>(Destroying)(widget))
-        return;
-    auto &node = observations.nodes.emplace_back();
-    ++result.count;
-    widgets.push_back(widget);
-    memset(&node, 0, sizeof(node));
-    void *type = fn<void *(*)(void *)>(TypeId)(widget);
-    const char *name = fn<const char *(*)(void *)>(TypeName)(type);
-    copyText(node.type, sizeof(node.type), name, strlen(name), node, 2);
+static void collectText(void *widget, FmNode &node) {
     const void *text = readWidgetText(symbols, widget);
-    auto data = fn<const char *(*)(const void *)>(StringData);
-    auto size = fn<size_t (*)(const void *)>(StringSize);
+    const auto data = fn<const char *(*)(const void *)>(StringData);
+    const auto size = fn<size_t (*)(const void *)>(StringSize);
     bool truncated = false;
     node.text = observations.copyText(data(text), size(text), truncated);
     if (truncated)
         node.truncated |= 1;
+}
+
+static void collect(void *widget, int depth) {
+    if (InterlockedCompareExchange(&shared->cancel, 0, 0))
+        return;
+    auto &result = shared->result;
+    require(result.count < std::numeric_limits<int>::max(), "UI node count exceeds integer representation");
+    const bool destroying = fn<bool (*)(void *)>(Destroying)(widget);
+    auto &node = observations.nodes.emplace_back();
+    ++result.count;
+    widgets.push_back(widget);
+    memset(&node, 0, sizeof(node));
+    node.destroying = destroying;
+    node.depth = depth;
+    node.guiIndex = -1;
+    void *type = fn<void *(*)(void *)>(TypeId)(widget);
+    const char *name = fn<const char *(*)(void *)>(TypeName)(type);
+    bool truncated = false;
+    node.type = observations.copyText(name, strlen(name), truncated);
+    if (selectorText)
+        collectText(widget, node);
+
+    std::unordered_set<void *> ancestors;
+    for (void *parent = widget; parent;) {
+        require(ancestors.insert(parent).second, "Cyclic UI parent hierarchy");
+        SIZE_T copied = 0;
+        require(ReadProcessMemory(GetCurrentProcess(), static_cast<unsigned char *>(parent) + symbols.widgetParentOffset,
+                                  &parent, sizeof(parent), &copied) && copied == sizeof(parent),
+                "Unreadable UI parent pointer");
+    }
 
     struct Rect {
         int x, y, width, height;
@@ -101,15 +107,17 @@ static void collect(void *widget) {
     node.height = rectangle.height;
     node.enabled = fn<bool (*)(void *)>(Enabled)(widget);
     collectVisibility(symbols, widget, node);
-    collectSlotIdentity(symbols, widget, node);
-    auto parent = [](void *p) {
-        return *reinterpret_cast<void **>(static_cast<unsigned char *>(p) + symbols.widgetParentOffset);
-    };
-    std::unordered_set<void *> ancestors{widget};
-    for (void *p = parent(widget); p; p = parent(p)) {
-        require(ancestors.insert(p).second && node.depth < std::numeric_limits<int>::max(), "Invalid UI ancestry");
-        ++node.depth;
-    }
+    if (selectorPrototype)
+        collectSlotIdentity(symbols, widget, node, observations, FM_UI_PROTOTYPE);
+}
+
+template <class Visit> static void walk(void *root, Visit visit, bool cancellable = true) {
+    fm::ui::walk(reinterpret_cast<uintptr_t>(root), symbols.widgetSize, symbols.widgetChildren,
+        std::size(symbols.widgetChildren), [](uintptr_t address, auto &value) {
+            SIZE_T copied = 0;
+            return ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void *>(address),
+                                     &value, sizeof(value), &copied) && copied == sizeof(value);
+        }, visit, [cancellable] { return cancellable && shared->cancel != 0; });
 }
 
 static bool currentGui(void *root, void *gui) {
@@ -122,11 +130,10 @@ static bool live(void *widget, void *root, void *gui) {
     if (!currentGui(root, gui))
         return false;
     bool found = false;
-    const std::function<void(void *)> visitor = [&](void *p) {
-        if (p == widget)
+    walk(root, [&](uintptr_t p, int) {
+        if (p == reinterpret_cast<uintptr_t>(widget))
             found = true;
-    };
-    fn<void (*)(void *, const std::function<void(void *)> &)>(Walk)(root, visitor);
+    }, false);
     return found && !fn<bool (*)(void *)>(Destroying)(widget);
 }
 
@@ -275,7 +282,8 @@ static void performAction(void *root, void *gui) {
         };
         key(layout.keyA, 0, true);
         key(layout.keyBackspace, 0, false);
-        for (unsigned i = 0; i < action.textCount && i < 1024; ++i)
+        require(action.textCount <= FM_UI_TEXT_CHARACTERS, "UI text exceeds native command storage");
+        for (unsigned i = 0; i < action.textCount; ++i)
             key(layout.keyNone, action.text[i], false);
     } else if (action.kind == 3) {
         fn<void (*)(void *, bool)>(FocusWidget)(widget, false);
@@ -348,12 +356,26 @@ static void service(void *root, void *gui) {
     result.optionCount = 0;
     result.registryCount = 0;
     result.worldSize = 0;
+    result.guiStatus = 0;
+    result.guiMessage[0] = 0;
     result.chat = {};
+    result.textRange = {};
     observations = ObservationStorage{};
     observations.publish(result);
     try {
         if (shared->cancel)
             throw std::runtime_error("Tool was cancelled before UI traversal");
+        if (shared->operation == 13) {
+            shared->request = requestStorage.reserve(shared->requestSize);
+        } else {
+            require(requestStorage.owns(shared->action.path) && requestStorage.owns(shared->worldQuery.source) &&
+                        requestStorage.owns(shared->worldQuery.arguments) && requestStorage.owns(shared->bindingQuery),
+                    "Request byte range is not owned");
+            require(shared->action.collection <= 1 && shared->action.optionOffset <= INT32_MAX &&
+                        shared->action.optionLimit <= INT32_MAX && shared->action.maxDepth >= 0 &&
+                        !(shared->action.fields & ~FM_UI_ALL_FIELDS),
+                    "Invalid UI collection bounds");
+        }
         if (shared->operation == 7) {
             require(!loading, "Control registry is unavailable during loading");
             collectControls(symbols, *shared, observations);
@@ -369,9 +391,10 @@ static void service(void *root, void *gui) {
         }
         if (shared->operation == 10 || shared->operation == 11) {
             require(!loading && game, "Chat requires a loaded world");
-            if (shared->operation == 10)
+            if (shared->operation == 10) {
                 readChat(symbols, game, result.chat, observations, &shared->cancel);
-            else
+                selectChatText(observations.chatRecords, shared->chatRead, observations.strings);
+            } else
                 sendChat(symbols, game, shared->chat);
         }
         const bool keyAction = shared->operation == 5 && shared->action.kind == 3;
@@ -384,28 +407,58 @@ static void service(void *root, void *gui) {
             require(shared->limit > 0 && shared->limit <= uint32_t(std::numeric_limits<int>::max()),
                     "Invalid UI observation limit");
             widgets.clear();
-            const std::function<void(void *)> visitor = collect;
-            fn<void (*)(void *, const std::function<void(void *)> &)>(Walk)(root, visitor);
+            selectorText = false;
+            selectorPrototype = false;
+            if (shared->action.count) for (const auto &step : fm::ui::selectorPath(shared->action.path, shared->action.count)) {
+                selectorText |= step.text.has_value();
+                selectorPrototype |= step.prototypeName.has_value() || step.prototypeType.has_value();
+            }
+            walk(root, [](uintptr_t widget, int depth) { collect(reinterpret_cast<void *>(widget), depth); });
             require(!shared->cancel, "Tool cancelled before UI dispatch");
+            if (shared->operation == 3 || hasGuiPredicates(shared->action))
+                prepareScriptGui(symbols, loading ? nullptr : game, shared->worldQuery, shared->action,
+                                 widgets, result, observations, &shared->cancel);
             if (shared->operation == 5)
                 performAction(root, gui);
             else {
                 if (shared->action.count)
                     selectWidgets(result, observations, shared->action, &shared->cancel);
+                auto observed = observationWidgets(result, observations, shared->action.count != 0,
+                                                   shared->action.collection != 0, shared->action.maxDepth);
+                if (shared->action.collection) {
+                    observations.optionOffset = shared->action.optionOffset;
+                    observations.optionLimit = shared->action.optionLimit;
+                }
                 IconReferences icons(symbols);
-                for (int i : observationWidgets(result, observations, shared->action.count != 0)) {
+                const auto fields = shared->action.fields;
+                for (int i : observed) {
                     require(!shared->cancel, "Tool cancelled during UI property observation");
                     void *widget = widgets[i];
                     auto &node = observations.nodes[i];
-                    collectWidgetProperties(symbols, widget, node, &result, &observations, &shared->cancel);
-                    collectNumber(symbols, widget, node);
-                    collectProgress(symbols, widget, node);
-                    collectSwitch(symbols, widget, node);
-                    collectElement(symbols, widget, node);
-                    collectQualityCondition(symbols, widget, node);
-                    icons.collect(widget, node, &observations);
-                    collectTooltip(symbols, widget, node, observations);
+                    if ((fields & FM_UI_TEXT) && !selectorText)
+                        collectText(widget, node);
+                    collectSlotIdentity(symbols, widget, node, observations, fields);
+                    collectWidgetProperties(symbols, widget, node, &result, &observations, &shared->cancel, fields);
+                    if (fields & FM_UI_NUMBER) collectNumber(symbols, widget, node);
+                    if (fields & FM_UI_PROGRESS) collectProgress(symbols, widget, node);
+                    if (fields & FM_UI_SWITCH) collectSwitch(symbols, widget, node);
+                    if (fields & FM_UI_ELEMENT) collectElement(symbols, widget, node, observations);
+                    if (fields & FM_UI_QUALITY_CONDITION) collectQualityCondition(symbols, widget, node);
+                    if (fields & FM_UI_ICONS) icons.collect(widget, node, &observations);
+                    if (fields & FM_UI_IMAGE) icons.collectImage(widget, node, observations);
+                    if (fields & FM_UI_TOOLTIP) collectTooltip(symbols, widget, node, observations);
+                    if (fields & FM_UI_GRAPH) collectGraph(symbols, widget, node, observations, shared->action.graph, &shared->cancel);
+                    if (fields & FM_UI_ACHIEVEMENT) collectAchievement(symbols, widget, node);
                 }
+                observeScriptGui(symbols, game, shared->worldQuery, observed, result, observations);
+                if (shared->action.textSlice.source) {
+                    require(shared->action.collection && observed.size() == 1, "Text slicing requires one widget");
+                    auto &node = observations.nodes[observed.front()];
+                    const auto &request = shared->action.textSlice;
+                    result.textRange = sliceUiText(node, observations.options, request, true,
+                        (node.properties & 16) != 0, observations.strings);
+                }
+                retainObservedWidgets(result, observations, observed, fields);
             }
         }
         if (keyGesture.active()) {
@@ -448,6 +501,13 @@ static void service(void *root, void *gui) {
     observations.publish(result);
     if (uiButtons.active())
         return;
+    if (shared->operation != 13) {
+        requestStorage.clear();
+        shared->request = {};
+        shared->action.path = {};
+        shared->worldQuery.source = {};
+        shared->worldQuery.arguments = {};
+    }
     InterlockedExchange(&shared->command, 3);
 }
 
@@ -628,6 +688,11 @@ extern "C" __declspec(dllexport) DWORD WINAPI fm_unhook(void *) {
                 InterlockedExchange(&shared->command, 3);
             }
             observations = ObservationStorage{};
+            requestStorage.clear();
+            shared->request = {};
+            shared->action.path = {};
+            shared->worldQuery.source = {};
+            shared->worldQuery.arguments = {};
             shared->result.count = 0;
             shared->result.optionCount = 0;
             shared->result.controlCount = 0;

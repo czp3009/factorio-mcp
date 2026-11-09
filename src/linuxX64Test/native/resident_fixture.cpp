@@ -147,6 +147,7 @@ int main(int argc, char **argv) {
     require(fm_linux_initialize() >= 0 && errno == ENOENT, "initialize failed or changed errno");
     auto *shared = reinterpret_cast<FmLinuxShared *>(fm_linux_resident.mapping);
     require(shared->initialized == 1 && shared->process == static_cast<uint32_t>(getpid()), "invalid IPC");
+    require(shared->frame == 0, "IPC initialization fabricated a frontend witness");
     require(fm_linux_cleanup() == 0, "initial cleanup failed");
     FixtureGui gui;
     FixtureGui *instance = &gui;
@@ -174,6 +175,7 @@ int main(int argc, char **argv) {
     require(fm_linux_attach() == -EBUSY && !shared->attached, "attach overwrote unreconciled result");
     shared->command = FM_LINUX_IDLE;
     require(fm_linux_attach() == 0 && shared->attached && shared->pointerOwned, "attach failed");
+    require(shared->frame == 0, "hook installation fabricated a frontend witness");
     require(fm_linux_attach() == -EBUSY, "duplicate attach lost ownership");
 
     auto request = [&](uint32_t operation, bool canceled) {
@@ -333,6 +335,7 @@ int main(int argc, char **argv) {
     layout.stringSize = sizeof(ReadString);
     layout.stringData = offsetof(ReadString, data);
     layout.stringLength = offsetof(ReadString, size);
+    shared->chatRead.limit = 64;
     request(FM_LINUX_CHAT_READ, false);
     invoke(&gui);
     consume(0);
@@ -449,10 +452,12 @@ int main(int argc, char **argv) {
     delayedRetirement(&retirements);
     require(retirements == 3, "late retirement wrapper lost its original target");
     const auto frame = shared->frame;
+    require(frame > 0, "completed frontend work left no retained readiness witness");
     invoke(&gui);
     require(shared->frame == frame, "callback survived detach");
     require(fm_linux_cleanup() == 0, "repeat cleanup failed");
     require(fm_linux_attach() == 0, "reattach failed");
+    require(shared->frame == frame, "reattachment reset the process-lifetime frontend witness");
     request(FM_LINUX_FRAME, false);
     require(fm_linux_initialize() >= 0 && shared->command == FM_LINUX_PENDING,
             "initialization reset an admitted command");

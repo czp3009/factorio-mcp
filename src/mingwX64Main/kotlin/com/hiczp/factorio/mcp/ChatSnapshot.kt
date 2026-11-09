@@ -25,6 +25,10 @@ internal fun FmChatSnapshot.readChatSnapshot(readMemory: (Long, Int) -> ByteArra
             record.truncated and 2u != 0u,
             record.playerName.readObservationText(readMemory),
             record.truncated and 4u != 0u,
+            record.textRange.takeIf { it.available != 0u }?.let {
+                ObservationTextRange(it.offset.toInt(), it.total.toLong(), it.nextOffset.toInt(), it.hasMore != 0u)
+            },
+            record.textIncluded.also { require(it <= 1u) } != 0u,
         )
     }
     require(records.map { it.identity }.distinct().size == records.size && (0..1).all { stream ->

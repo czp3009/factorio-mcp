@@ -153,6 +153,12 @@ internal actual class GameProcess actual constructor(private val pid: Int) : Gam
     actual override suspend fun query(query: WorldQuery): GameSnapshot =
         withContext(dispatcher) { checkNotNull(client).execute(8, 4096, null, query) }
 
+    actual override suspend fun bindings(request: BindingReadRequest): GameSnapshot =
+        withContext(dispatcher) { checkNotNull(client).execute(7, Int.MAX_VALUE, null, bindingRequest = request) }
+
+    actual override suspend fun readChat(request: ChatReadRequest): GameSnapshot =
+        withContext(dispatcher) { checkNotNull(client).execute(10, request.limit, null, chatRead = request) }
+
     actual override suspend fun sendChat(text: String): GameSnapshot =
         withContext(dispatcher) { checkNotNull(client).execute(11, 4096, null, chatText = validateChatMessage(text)) }
 

@@ -102,8 +102,7 @@ internal data class ControlLayouts(
             source.count <= Int.MAX_VALUE.toUInt() &&
                 source.count <= source.registryCount &&
                 source.registryCount <= Int.MAX_VALUE.toUInt() &&
-                source.truncated <= 1u &&
-                (source.count < source.registryCount) == (source.truncated != 0u)
+                source.truncated <= 1u
         )
         fun identity(value: CPointer<ByteVar>): String {
             val bytes = value.readBytes(FM_LINUX_CONTROL_ID_BYTES)

@@ -2,6 +2,8 @@
 
 package com.hiczp.factorio.mcp.acceptance
 
+import com.hiczp.factorio.mcp.worldQuery
+
 import com.hiczp.factorio.mcp.McpHttpClient
 import com.hiczp.factorio.mcp.toolValue
 import kotlin.test.*
@@ -105,9 +107,7 @@ class TrainUiAcceptanceTest {
 
         suspend fun player() =
             client
-                .tool(
-                    "world_query",
-                    buildJsonObject {
+                .worldQuery(buildJsonObject {
                         putJsonObject("selection") { put("kind", "player") }
                         putJsonArray("fields") {
                             add("controller_type")
@@ -188,9 +188,7 @@ class TrainUiAcceptanceTest {
                 }
                 val train =
                     client
-                        .tool(
-                            "world_query",
-                            buildJsonObject {
+                        .worldQuery(buildJsonObject {
                                 putJsonObject("selection") {
                                     put("kind", "entities")
                                     put("type", "locomotive")

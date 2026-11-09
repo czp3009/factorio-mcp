@@ -10,6 +10,7 @@ internal data class UiStep(
     val enabled: Boolean?,
     val prototype: UiPrototypeMatch? = null,
     val visible: Boolean? = null,
+    val gui: JsonObject? = null,
 )
 
 internal data class UiPrototypeMatch(val name: String, val nativeType: String? = null)
@@ -25,13 +26,18 @@ internal data class UiAction(
     val y: Double = 0.5,
     val text: List<Int> = emptyList(),
     val keys: List<String> = emptyList(),
+    val guiFields: List<String> = defaultGuiFields,
+    val guiDepth: Int = 8,
+    val collection: UiCollection? = null,
+    val maxDepth: Int? = null,
+    val fields: Set<UiField> = defaultUiFields,
 )
 
 internal fun parseSelector(value: JsonElement): List<UiStep> {
     val selector = value.jsonObject
     require(selector.keys == setOf("path")) { "selector requires only path" }
     val path = selector.getValue("path").jsonArray
-    require(path.size in 1..16) { "selector.path must contain 1..16 steps" }
+    require(path.isNotEmpty()) { "selector.path must contain at least one step" }
     return path.map { element ->
         val step = element.jsonObject
         require(step.keys.all { it in setOf("axis", "match", "position") }) {
@@ -41,7 +47,7 @@ internal fun parseSelector(value: JsonElement): List<UiStep> {
         require(axis in setOf("child", "descendant")) { "Unknown selector axis" }
         val match = step.getValue("match").jsonObject
         require(
-            match.keys.all { it in setOf("native_type", "text", "enabled", "prototype", "visible") }
+            match.keys.all { it in setOf("native_type", "text", "enabled", "prototype", "visible", "gui") }
         ) {
             "Unknown selector predicate"
         }
@@ -49,46 +55,45 @@ internal fun parseSelector(value: JsonElement): List<UiStep> {
         require(position >= 0 && ("position" !in step || position > 0)) {
             "position must be positive and one-based"
         }
-        fun string(name: String, maxBytes: Int): String? =
+        fun string(name: String): String? =
             match[name]?.jsonPrimitive?.let {
                 require(
                     it.isString &&
-                            '\u0000' !in it.content &&
-                            it.content.encodeToByteArray().size < maxBytes
+                            '\u0000' !in it.content
                 ) {
                     "Invalid selector $name"
                 }
                 it.content
             }
 
-        val type = string("native_type", 160)
+        val type = string("native_type")
         require(type == null || type.isNotEmpty()) { "native_type must not be empty" }
         UiStep(
             axis == "child",
             position,
             type,
-            string("text", 1024),
+            string("text"),
             match["enabled"]?.booleanArgument(),
             match["prototype"]?.jsonObject?.let { prototype ->
                 require(prototype.keys.all { it in setOf("native_type", "name") }) {
                     "Unknown prototype predicate"
                 }
-                fun identity(name: String, capacity: Int): String =
+                fun identity(name: String): String =
                     prototype.getValue(name).stringArgument().also {
                         require(
                             it.isNotEmpty() &&
-                                    '\u0000' !in it &&
-                                    it.encodeToByteArray().size < capacity
+                                    '\u0000' !in it
                         ) {
                             "Invalid prototype $name"
                         }
                     }
                 UiPrototypeMatch(
-                    identity("name", 256),
-                    if ("native_type" in prototype) identity("native_type", 160) else null,
+                    identity("name"),
+                    if ("native_type" in prototype) identity("native_type") else null,
                 )
             },
             match["visible"]?.booleanArgument(),
+            match["gui"]?.jsonObject?.also(::validateGuiMatch),
         )
     }
 }
@@ -180,6 +185,6 @@ internal fun unicodeScalars(text: String): List<Int> = buildList {
             }
         require(code >= 32 || code == 10) { "Text contains unsupported control characters" }
         add(code)
-        require(size <= 1024) { "Text exceeds 1024 Unicode characters" }
+        require(size <= 16384) { "Text exceeds native command storage of 16384 Unicode characters" }
     }
 }

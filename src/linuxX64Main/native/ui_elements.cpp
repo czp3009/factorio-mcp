@@ -27,7 +27,8 @@ bool validElementLayout(const FmLinuxElementLayout &layout) {
            fm::member(layout.magazine, 4, layout.ammoSize);
 }
 
-int collectElement(uintptr_t widget, const FmLinuxElementLayout &layout, FmLinuxUiElement &output) {
+int collectElement(uintptr_t widget, const FmLinuxElementLayout &layout, FmLinuxUiElement &output,
+                    ObservationStrings &strings) {
     output = {};
     if (!validElementLayout(layout))
         return EINVAL;
@@ -76,7 +77,7 @@ int collectElement(uintptr_t widget, const FmLinuxElementLayout &layout, FmLinux
         if (!fm::addressRange(item, layout.itemSize) || !fm::read(item + layout.health, output.health))
             return EFAULT;
         bool truncated;
-        if (const int error = fm::readTypeName(item, output.type, output.typeSize, truncated))
+        if (const int error = fm::readTypeName(item, output.type, output.typeSize, truncated, strings))
             return error;
         if (truncated)
             output.flags |= 32;

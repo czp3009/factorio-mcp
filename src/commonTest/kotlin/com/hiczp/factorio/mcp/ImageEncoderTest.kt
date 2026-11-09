@@ -55,16 +55,18 @@ class ImageEncoderTest {
     @Test
     fun compressesLargeFramesAndRejectsInvalidStorage() {
         val image = png(2048, 2048, ByteArray(2048 * 2048 * 3))
-        assertTrue(image.size < 100_000 && image.size <= ImageEncoder.MAX_BYTES)
+        assertTrue(image.size < 100_000)
         assertFails { png(0, 1, byteArrayOf()) }
         assertFails { png(8192, 8192, byteArrayOf()) }
         assertFails { png(2, 2, ByteArray(11)) }
     }
 
     @Test
-    fun rejectsEncodedOutputAboveTheLimit() {
+    fun preservesHighEntropyPngAboveSixteenMiB() {
         val noise = Random(82341).nextBytes(4096 * 1536 * 3)
-        assertFailsWith<IllegalStateException> { png(4096, 1536, noise) }
+        val encoded = png(4096, 1536, noise)
+        assertTrue(encoded.size > 16 * 1024 * 1024)
+        assertContentEquals(noise, decodeImage(encoded).pixels)
     }
 
     @Test

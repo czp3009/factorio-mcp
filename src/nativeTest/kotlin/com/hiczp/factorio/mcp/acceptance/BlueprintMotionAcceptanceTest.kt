@@ -2,6 +2,8 @@
 
 package com.hiczp.factorio.mcp.acceptance
 
+import com.hiczp.factorio.mcp.worldQuery
+
 import com.hiczp.factorio.mcp.McpHttpClient
 import com.hiczp.factorio.mcp.toolValue
 import kotlin.test.Test
@@ -115,9 +117,7 @@ class BlueprintMotionAcceptanceTest {
                 suspend fun cursor(): String? {
                     val result =
                         client
-                            .tool(
-                                "world_query",
-                                buildJsonObject {
+                            .worldQuery(buildJsonObject {
                                     putJsonObject("selection") { put("kind", "player") }
                                     putJsonArray("fields") { add("cursor_stack") }
                                 },
@@ -219,9 +219,7 @@ class BlueprintMotionAcceptanceTest {
                 )
                 val observed =
                     client
-                        .tool(
-                            "world_query",
-                            buildJsonObject {
+                        .worldQuery(buildJsonObject {
                                 putJsonObject("selection") {
                                     put("kind", "entities")
                                     put("type", "entity-ghost")

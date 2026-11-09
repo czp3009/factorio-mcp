@@ -16,7 +16,7 @@ internal fun readRuntimeApi(executable: String): RuntimeApi {
     val path = Path(root, "doc-html", "runtime-api.json")
     val size =
         SystemFileSystem.metadataOrNull(path)?.size
-            ?: error("Object inspection requires the installation's doc-html/runtime-api.json")
+            ?: error("Script GUI attributes and object inspection require the installation's doc-html/runtime-api.json")
     require(size in 1..(32L * 1024 * 1024)) { "Runtime API file exceeds bound" }
     val document =
         SystemFileSystem.source(path).buffered().use {

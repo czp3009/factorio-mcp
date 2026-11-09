@@ -2,7 +2,7 @@
 #include <cerrno>
 
 int queryWorld(const FmLinuxWorldQueryConfig &config, const FmLinuxLuaQuery &query, const uint32_t *cancel,
-               LuaResult &result) {
+               LuaResult &result, std::string_view uiIndices) {
     result.size = 0;
     result.errorSize = 0;
     if (config.world.gameSize != config.player.gameSize || config.world.contextSize != config.script.contextSize)
@@ -27,5 +27,5 @@ int queryWorld(const FmLinuxWorldQueryConfig &config, const FmLinuxLuaQuery &que
         }
     }
     return queryLua(reinterpret_cast<void *>(script.state), config.api, config.state, query,
-                    static_cast<double>(player.index) + 1, viewport, cancel, result);
+                    static_cast<double>(player.index) + 1, viewport, cancel, result, uiIndices);
 }

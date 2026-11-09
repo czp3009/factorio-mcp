@@ -2,13 +2,19 @@ package com.hiczp.factorio.mcp
 
 import kotlinx.serialization.json.*
 
+internal fun validateEntitySearchFilters(value: JsonElement) {
+    require(value.jsonObject.keys.none { it in setOf("area", "position", "radius", "name", "type", "limit") }) {
+        "filters must not replace selection geometry, name/type or result count"
+    }
+}
+
 internal fun validateEntityFilter(name: String, value: JsonElement) {
     val values = if (value is JsonArray) value else JsonArray(listOf(value))
     require(values.isNotEmpty()) { "$name requires one or more names" }
     val names = values.map { it.stringArgument() }
     require(
         names.distinct().size == names.size &&
-                names.all { it.isNotBlank() && it.length <= 256 && '\u0000' !in it }
+                names.all { it.isNotBlank() && '\u0000' !in it }
     ) {
         "Invalid or repeated $name filter"
     }
@@ -26,7 +32,6 @@ internal fun entityFilterSchema(name: String) = buildJsonObject {
         addJsonObject {
             put("type", "string")
             put("minLength", 1)
-            put("maxLength", 256)
         }
         addJsonObject {
             put("type", "array")
@@ -35,7 +40,6 @@ internal fun entityFilterSchema(name: String) = buildJsonObject {
             putJsonObject("items") {
                 put("type", "string")
                 put("minLength", 1)
-                put("maxLength", 256)
             }
         }
     }

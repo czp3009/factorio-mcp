@@ -1,4 +1,5 @@
 #pragma once
+#include "observation_buffer.h"
 #include <stdint.h>
 
 #define FM_LINUX_IDENTITY_TEXT 256
@@ -15,7 +16,7 @@ typedef struct FmLinuxPrototypeValue {
     uint32_t flags;
     uint32_t nameSize, typeSize;
     char name[FM_LINUX_IDENTITY_TEXT];
-    char type[FM_LINUX_IDENTITY_TEXT];
+    FmLinuxObservationBuffer type;
 } FmLinuxPrototypeValue;
 
 typedef struct FmLinuxUiIdentity {
@@ -24,8 +25,10 @@ typedef struct FmLinuxUiIdentity {
 } FmLinuxUiIdentity;
 
 #ifdef __cplusplus
+#include "../../nativeMain/native/ui_fields.h"
 bool validIdentityLayout(const FmLinuxIdentityLayout &layout);
 int readPrototypeIdentity(uintptr_t object, bool quality, const FmLinuxIdentityLayout &layout,
-                          FmLinuxPrototypeValue &output);
-int collectIdentity(uintptr_t widget, const FmLinuxIdentityLayout &layout, FmLinuxUiIdentity &output);
+                          FmLinuxPrototypeValue &output, ObservationStrings &strings);
+int collectIdentity(uintptr_t widget, const FmLinuxIdentityLayout &layout, FmLinuxUiIdentity &output,
+                    ObservationStrings &strings, uint32_t fields = FM_UI_ALL_FIELDS);
 #endif

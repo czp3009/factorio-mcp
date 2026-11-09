@@ -1,7 +1,6 @@
 #pragma once
+#include "observation_buffer.h"
 #include <stdint.h>
-
-#define FM_LINUX_ELEMENT_TEXT 256
 
 typedef struct FmLinuxElementLayout {
     uint64_t widgetType, stackProvider, itemProvider, itemType, toolType, ammoType;
@@ -14,10 +13,11 @@ typedef struct FmLinuxUiElement {
     uint32_t available, flags, count, typeSize;
     float health, magazine;
     double durability;
-    char type[FM_LINUX_ELEMENT_TEXT];
+    FmLinuxObservationBuffer type;
 } FmLinuxUiElement;
 
 #ifdef __cplusplus
 bool validElementLayout(const FmLinuxElementLayout &layout);
-int collectElement(uintptr_t widget, const FmLinuxElementLayout &layout, FmLinuxUiElement &output);
+int collectElement(uintptr_t widget, const FmLinuxElementLayout &layout, FmLinuxUiElement &output,
+                    ObservationStrings &strings);
 #endif

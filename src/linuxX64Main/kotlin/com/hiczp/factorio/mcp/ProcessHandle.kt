@@ -154,11 +154,11 @@ internal class ProcessHandle(val pid: Int) : AutoCloseable {
         }
     }
 
-    /** Bootstrap scratch storage only. Never bypass read-only or executable mapping protections. */
+    /** Owned bootstrap/request data only. Never bypass read-only or executable mapping protections. */
     fun writeData(address: Long, data: ByteArray) {
         require(
             address >= 0 &&
-                data.size in 1..(16 * 1024 * 1024) &&
+                data.isNotEmpty() &&
                 address <= Long.MAX_VALUE - data.size
         )
         require(

@@ -2,6 +2,8 @@
 
 package com.hiczp.factorio.mcp.acceptance
 
+import com.hiczp.factorio.mcp.worldQuery
+
 import com.hiczp.factorio.mcp.McpHttpClient
 import com.hiczp.factorio.mcp.toolValue
 import com.hiczp.factorio.mcp.uiSelector
@@ -37,9 +39,7 @@ class PlayerContextAcceptanceTest {
         fun JsonObject.attributes() = getValue("attributes").jsonObject
         suspend fun query(selection: JsonObject, fields: List<String>? = null) =
             client
-                .tool(
-                    "world_query",
-                    buildJsonObject {
+                .worldQuery(buildJsonObject {
                         put("selection", selection)
                         fields?.let { putJsonArray("fields") { it.forEach { add(it) } } }
                     },
@@ -89,9 +89,7 @@ class PlayerContextAcceptanceTest {
             assertEquals("nil", value["availability"]!!.jsonPrimitive.content)
             assertTrue(value.objects().isEmpty())
             val inventory =
-                client.tool(
-                    "world_query",
-                    buildJsonObject { put("selection", selection("inventory", kind)) },
+                client.worldQuery(buildJsonObject { put("selection", selection("inventory", kind)) },
                 )
             assertTrue(inventory["isError"]!!.jsonPrimitive.boolean)
         }
@@ -355,9 +353,7 @@ class PlayerContextAcceptanceTest {
                     query(selection("inventory", "character"), listOf("name", "count", "quality"))
                 assertEquals(inventory["objects"], remoteInventory["objects"])
                 val unavailable =
-                    client.tool(
-                        "world_query",
-                        buildJsonObject { put("selection", selection("inventory")) },
+                    client.worldQuery(buildJsonObject { put("selection", selection("inventory")) },
                     )
                 assertTrue(unavailable["isError"]!!.jsonPrimitive.boolean)
                 val binding =

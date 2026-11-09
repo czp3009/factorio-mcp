@@ -5,6 +5,20 @@ import kotlin.test.*
 
 class UiActionTest {
     @Test
+    fun guiPredicatesPreserveOpaqueNestedValuesAndLongStructuralPaths() {
+        val selector = Json.parseToJsonElement("""{"path":[{"axis":"descendant","match":{"gui":{"sprite":"item/mod-value","tags":{"enabled":false,"ids":[3,3,4]}}}}]}""")
+        val predicate = parseSelector(selector).single().gui!!
+        assertEquals(false, predicate.getValue("tags").jsonObject.getValue("enabled").jsonPrimitive.boolean)
+        assertEquals(listOf(3, 3, 4), predicate.getValue("tags").jsonObject.getValue("ids").jsonArray.map { it.jsonPrimitive.int })
+        val longPath = JsonObject(mapOf("path" to JsonArray(List(256) { selector.jsonObject.getValue("path").jsonArray.single() })))
+        assertEquals(256, parseSelector(longPath).size)
+        parseSelector(Json.parseToJsonElement("""{"path":[{"axis":"descendant","match":{"gui":{"tags":{"":true,"opaque\u0000key":"value\u0000"}}}}]}"""))
+        assertFailsWith<IllegalArgumentException> {
+            parseSelector(Json.parseToJsonElement("""{"path":[{"axis":"descendant","match":{"gui":{"sprite":null}}}]}"""))
+        }
+    }
+
+    @Test
     fun visibilityPredicateRequiresBooleanAndKeepsUnknownDistinct() {
         fun parse(value: String) =
             parseSelector(
@@ -96,6 +110,7 @@ class UiActionTest {
         assertEquals(emptyList(), unicodeScalars(""))
         assertFailsWith<IllegalArgumentException> { unicodeScalars("\uD800") }
         assertFailsWith<IllegalArgumentException> { unicodeScalars("\u0000") }
-        assertFailsWith<IllegalArgumentException> { unicodeScalars("a".repeat(1025)) }
+        assertEquals(4096, unicodeScalars("a".repeat(4096)).size)
+        assertFailsWith<IllegalArgumentException> { unicodeScalars("a".repeat(16385)) }
     }
 }

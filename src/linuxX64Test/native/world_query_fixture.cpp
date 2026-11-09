@@ -120,10 +120,8 @@ void testWorldQuery(void *state, const FmLinuxLuaApi &api, const FmLinuxLuaState
     auto query = std::make_unique<FmLinuxLuaQuery>();
     auto result = std::make_unique<LuaResult>();
     const char source[] = "local p,a=...; assert(p==7 and a=='{}'); return '{\"player\":7}'";
-    query->sourceSize = sizeof(source) - 1;
-    std::memcpy(query->source, source, sizeof(source) - 1);
-    query->argumentsSize = 2;
-    std::memcpy(query->arguments, "{}", 2);
+    query->source = {reinterpret_cast<uintptr_t>(source), sizeof(source) - 1};
+    query->arguments = {reinterpret_cast<uintptr_t>("{}"), 2};
     uint32_t cancel = 0;
     auto run = [&] { return queryWorld(config, *query, &cancel, *result); };
     require(run() == 0 && std::string(result->text.data(), result->text.size()).compare( "{\"player\":7}") == 0,

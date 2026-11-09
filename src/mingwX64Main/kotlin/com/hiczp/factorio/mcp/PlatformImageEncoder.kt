@@ -122,9 +122,7 @@ internal actual object PlatformImageEncoder {
                 s.pointed.lpVtbl!!.pointed.Stat!!(s, stat.ptr, STATFLAG_NONAME.toUInt()),
                 "Cannot read image size",
             )
-            check(stat.cbSize.QuadPart in 1uL..ImageEncoder.MAX_BYTES.toULong()) {
-                "image exceeds output bound"
-            }
+            val encodedSize = ImageEncoder.encodedSize(stat.cbSize.QuadPart)
             val zero = alloc<LARGE_INTEGER>()
             zero.QuadPart = 0
             checked(
@@ -136,7 +134,7 @@ internal actual object PlatformImageEncoder {
                 ),
                 "Cannot seek image stream",
             )
-            val output = ByteArray(stat.cbSize.QuadPart.toInt())
+            val output = ByteArray(encodedSize)
             val read = alloc<ULONGVar>()
             output.usePinned {
                 checked(

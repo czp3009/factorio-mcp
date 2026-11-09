@@ -29,10 +29,11 @@ class InputBindingsAcceptanceTest {
                 assertFalse(client.tool("status").toolValue().getValue("attached").jsonPrimitive.boolean)
                 client.tool("attach", buildJsonObject { put("pid", pid) }).toolValue()
                 attached = true
-                val complete = client.tool("input_bindings", buildJsonObject { put("limit", 1024) }).toolValue()
+                val complete = client.tool("input_bindings").toolValue()
                 val rows = complete.getValue("controls").jsonArray.map { it.jsonObject }
                 assertTrue(rows.size > 1)
                 assertTrue(complete.getValue("snapshot_complete").jsonPrimitive.boolean)
+                assertFalse(complete.getValue("has_more").jsonPrimitive.boolean)
                 assertEquals(rows.size, complete.getValue("registry_count").jsonPrimitive.int)
                 assertEquals(rows.size, complete.getValue("matched_count").jsonPrimitive.int)
                 val ids = rows.map { it.getValue("id").jsonPrimitive.content }

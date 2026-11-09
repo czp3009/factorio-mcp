@@ -136,4 +136,8 @@ void collectControls(const Symbols &symbols, Shared &shared, ObservationStorage 
             row.mouseCodes[button] =
                 read<uint32_t>(reinterpret_cast<void *>(symbols.address[buttons[button]]), layout.mouseValue);
     }
+    if (shared.bindingQuery.size) {
+        storage.bindingSelection = fm::selectBindings(storage.controls, shared.bindingQuery);
+        result.controlCount = static_cast<uint32_t>(storage.controls.size());
+    } else storage.bindingSelection.matchedCount = result.controlCount;
 }

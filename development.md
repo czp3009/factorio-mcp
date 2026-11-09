@@ -55,13 +55,11 @@ Keep each executable with its adjacent library. To build one variant, use `linkR
 | `./gradlew clean build`      | Rebuild and test from a clean output directory.                        |
 
 Stop MCP before rebuilding its executable. Close any game that has loaded a resident library you intend to replace, and
-restart
-Factorio after updating MCP before attaching again. Build tasks do not stop processes. Test/documentation-only changes
+restart Factorio after updating MCP before attaching again. Build tasks do not stop processes. Test/documentation-only changes
 can reuse the running game and installed artifacts.
 
 CMake owns native compilation and fixtures; the native build adapters in `buildSrc` invoke it from Gradle. Product
-output is scoped by
-host and target under `build/native/`, with fixtures under `build/native-tests/`. Product builds do not compile test
+output is scoped by host and target under `build/native/`, with fixtures under `build/native-tests/`. Product builds do not compile test
 fixtures. Ninja checks compiler-discovered dependencies, including SDK headers outside
 the repository, on every native build. Unchanged native output does not overwrite an identical mapped runtime library.
 Use a fresh native build directory when changing the compiler or SDK installation.
@@ -81,10 +79,9 @@ Their cinterop definitions live beside the corresponding platform sources and ar
 explicitly. Both implement the same portable tool contract. Run native widget/property acceptance after changing
 their accessors or dispatch paths.
 Keep current research and acceptance evidence under ignored `temp/`.
-The fixed world-query Lua scripts, argument validation, results and session lifecycle live in `commonMain`;
+The fixed world-query and script-UI Lua readers, argument validation, results and session lifecycle live in `commonMain`;
 both platform adapters reuse those scripts.
-HTTP servers and the
-HTTP-only acceptance clients use CIO through common source sets. HTTP clients are test dependencies only. Host-only
+HTTP servers and the HTTP-only acceptance clients use CIO through common source sets. HTTP clients are test dependencies only. Host-only
 CMake/CTest tasks are registered on each matching host, with task names derived from the target (`buildLinuxX64Native`,
 `buildLinuxX64NativeFixtures`, `testLinuxX64Native`, and the corresponding `MingwX64` tasks) and separate host/target
 output directories. Other hosts do not
@@ -164,7 +161,7 @@ a platform failure prevents launcher publication. Keep the matrix aligned with c
 
 Publication is not atomic across packages or destinations. Existing npm versions are not overwritten, and a later
 failure does not undo packages or a GitHub Release already published. Inspect the logs before retrying; use a new
-Gradle version for changed artifacts. No public publication occurs during ordinary `build` or `check`.
+project version for changed artifacts. No public publication occurs during ordinary `build` or `check`.
 
 `gradle/actions/setup-gradle` manages Gradle user-home caching. A separate `~/.konan` cache holds Kotlin/Native
 compiler distributions and dependencies, with keys separating OS, architecture and Kotlin version. Project build outputs
@@ -175,7 +172,7 @@ change which checks run. No custom token or configuration-cache encryption secre
 
 Node.js 24+ and npm are needed only for npm packaging/publication and npm-based launches. The
 `com.hiczp.kotlin-native-npm-publishing` Gradle plugin owns package staging and local publishing tasks.
-The Gradle version also generates the version reported in the MCP handshake.
+The project version also supplies the version reported in the MCP handshake.
 
 Verify the launcher and the current host's package without publishing:
 
@@ -333,14 +330,19 @@ submitted tool requests are never replayed.
 |------------------|-------|
 | `UiActionAcceptanceTest` | Generic native widget gestures, restricted text, modifiers, offscreen options and recreation. |
 | `UiIconAcceptanceTest`, `UiNumberAcceptanceTest`, `UiIdentityAcceptanceTest` | Structured image references, original script GUI icon names, numbers and native item/quality values in the `ui-actions` scenario. |
-| `UiResourceAcceptanceTest` | Registered HUD icon names, stored tooltip text, lower HUD properties and native Tips and tricks navigation. Uses the `ui-actions` scenario and live widget selectors without hovering. |
+| `UiResourceAcceptanceTest` | Registered HUD icon names, stored tooltip text/slices, lower HUD properties and native Tips and tricks navigation. Uses the `ui-actions` scenario and live widget selectors without hovering. |
+| `UiNativeMetadataAcceptanceTest` | Retained starmap connection prototypes, native graph series/sample pages and achievement card state/identity. Run its focused methods with the corresponding stock/DLC starmap, connection graph or achievement window already open in a disposable world. |
+| `ProgressDirectionAcceptanceTest`, `SwitchStateAcceptanceTest` (Linux) | Native progress direction and left/right/none switch values across selected reads and reattachment. Copy `src/nativeTest/resources/ui-properties` as a separate scenario. |
 | `WorldQueryAcceptanceTest`, `RelatedWorldQueryAcceptanceTest`, `ExpandedQueryAcceptanceTest` | Direct world and related-object reads, inventories, filters, catalogs, metadata and query recovery. |
 | `WorldOverviewAcceptanceTest`, `ViewportAcceptanceTest` | Explicit areas, native viewport observations and bounded spatial results. |
 | `InputAcceptanceTest`, `WheelInputAcceptanceTest` | Finite keyboard/mouse execution, replacement, cancellation, detach and independent authoritative effects. |
 | `InputTimelineAcceptanceTest` | Overlapping and unordered intervals, held belt dragging with rotation, world tile-center paths, point dwell and failure cleanup. |
 | `ChatReadAcceptanceTest`, `ChatSendAcceptanceTest` | Original retained records, repeated content, native paging boundaries, waiting, cancellation and local submission. |
 | `HttpAcceptanceTest` | Shared HTTP sessions, every advertised tool, screenshots and repeated attach/detach. |
+| `ReadLimitAcceptanceTest`, `InputBindingsAcceptanceTest` | Complete default registries, optional pages, inherited member catalogs and exact admission of an unsigned entity ID beyond uint32 into native lookup. The world-query checks require a loaded world. |
 | `QueryCapacityAcceptanceTest` | Large single-safe-point UI/world/chat reads, complete dropdowns and bindings, stable collection pages, a result larger than 16 MiB, and authoritative UI clicks and movement/release with later full CRC progress. Requires the separate `query-capacity` scenario and both peer log paths. |
+| `WorldQueryContractAcceptanceTest` | Complete native attributes and inventory slots, ordinary table structure/depth, native collection pages, spatial completeness and original UTF-8 chat slices/watermarks. Requires the `query-capacity` scenario. |
+| `WorldQueryExpansionAcceptanceTest` | Every native prototype catalog, enum discovery, per-root batch reads, remote exact/range recipes and contents, native filters, quality calculations, fresh chunk iteration, schedule records, blueprint data and passive statistics guards. Requires the complete `ui-actions` scenario directory, including its Lua helper modules. |
 | `PlayerContextAcceptanceTest`, `BlueprintMotionAcceptanceTest`, `TrainUiAcceptanceTest` | Authoritative controller transitions, held mouse blueprint placement and nested native train UI interactions. |
 
 The scenario records authoritative events and forces full CRC every 300 ticks. Compare server and client events,
@@ -351,8 +353,8 @@ Neither a tool-count check nor these selected classes establishes coverage of ev
 
 For query-capacity acceptance, copy `src/nativeTest/resources/query-capacity` as the isolated server's scenario
 and use the same local-server setup above with `--start-server-load-scenario query-capacity`. It creates 1600 chests,
-a large player inventory, 5000 hidden GUI labels, 1200 dropdown options, retained chat messages and a GUI tag payload
-larger than 16 MiB. Join through the normal UI, then run:
+a large player inventory, 5000 hidden GUI labels, 1200 dropdown options, retained chat messages, a GUI tag payload
+larger than 16 MiB and ordinary nested tables for depth/value checks. Join through the normal UI, then run:
 
 ```sh
 export FACTORIO_MCP_ACCEPTANCE_URL=http://127.0.0.1:43871/mcp
@@ -361,6 +363,8 @@ export FACTORIO_MCP_UI_SERVER_LOG="$PWD/temp/query-capacity/factorio-current.log
 export FACTORIO_MCP_UI_CLIENT_LOG="$HOME/.factorio/factorio-current.log"
 build/bin/linuxX64/debugTest/test.kexe \
   --ktest_filter='com.hiczp.factorio.mcp.acceptance.QueryCapacityAcceptanceTest.*'
+build/bin/linuxX64/debugTest/test.kexe \
+  --ktest_filter='com.hiczp.factorio.mcp.acceptance.WorldQueryContractAcceptanceTest.*'
 ```
 
 On Windows, set the same environment variables in PowerShell and run
@@ -371,19 +375,19 @@ verify later CRC progress without desynchronization after the queries. Ordinary 
 
 ### Manual lifecycle and mixed flows
 
-`StopRenderingAcceptanceTest.stopsOnceAndKeepsTheFrontendAvailableAcrossDetach` uses the explicit HTTP endpoint
-and PID. Keep the graphical window unminimized and observe native rendering state and drawing activity separately;
-the test checks dispatch, repeated calls, screenshot rejection, continued reads and detach/reattach. Run it in
-menus, paused worlds and a running disposable world, including with halt-when-minimized disabled. Use a normal
-test-window exposed/restored event for subsequent PNG checks. Compare resource samples separately from tool
-completion, and restore any test configuration afterward.
+`RenderingControlAcceptanceTest.stopsAndResumesWithoutWindowEventsAcrossDetach` uses the explicit HTTP endpoint
+and PID. Keep the graphical window unminimized; the test checks repeated stop/resume, screenshot rejection,
+continued reads and detach/reattach without window events. Run it in menus, paused worlds and a running disposable
+world. Run `enablingPreservesNativeMinimizationPolicy` with the window minimized and MCP rendering enabled initially.
+It records whether the game continues rendering, then checks that disabling rejects captures and enabling preserves
+that native policy. Compare resource samples separately from tool completion, and restore test configuration afterward.
 
 `ScreenshotAcceptanceTest` is shared by both platforms. Run
 `capturesConsecutivePngFramesAndDetaches` with `FACTORIO_MCP_TEST_SCREENSHOT_PREFIX` selecting the PNG output path.
 Run `capturesJpgWithQualityAndHeightLimitedFrames` with the same output prefix to verify default and explicit JPEG
 quality, both resized formats, original dimensions, no enlargement and invalid capture options.
 Run `suspendedRenderingRejectsRepeatedCapturesAndAllowsObservations` while the operator keeps rendering suspended;
-set `FACTORIO_MCP_TEST_SCREENSHOT_WORLD=1` to include a tile query in a loaded world. Both require the explicit HTTP
+set `FACTORIO_MCP_TEST_SCREENSHOT_WORLD=1` to include a tile query in a loaded world. These checks require the explicit HTTP
 endpoint and PID above. Repeat capture checks in menus, rendered paused worlds, after restoration, and with minimized
 rendering permitted by the graphics setting. Window-state control and configuration restoration belong to the test
 operator. A minimized OS window does not by itself establish that the game has suspended rendering.
@@ -401,16 +405,33 @@ verify detached status and local resource release. Restarting an unchanged MCP m
 explicit attach must reconcile outstanding resident work without replaying an uncertain mutation. Product updates
 require restarting Factorio before reattachment. Preserve retained ownership when cleanup fails so detach can retry.
 
+Run `ReadLimitAcceptanceTest` in a loaded vanilla/DLC world to verify complete registry/member defaults, explicit
+continuation and large unsigned entity lookup. The query-capacity scenario additionally checks depth-bounded UI
+frontiers, native sibling selectors, option-label byte slices and large collection continuations. These remain
+explicit acceptance cases outside default Gradle tests.
+
 For blueprint import or held mouse motion, independently inspect resulting cursor/blueprint objects and authoritative
 fixture events, then await full CRC. Queue disappearance and a completed action result do not prove gameplay intent.
 Use focused scenario tests for controller transitions, train schedules and inventory interactions when changing those
 paths. Keep platform fixture, unit, single-player, multiplayer and manual claims separate.
+
+Before launching a graphical test client that shares the normal write directory, back up its configuration and
+set `autosave-interval=0`. Server autosave settings do not disable client single-player autosaves. Restore the
+original configuration after exiting the client.
 
 After acceptance, detach cooperatively and stop only the endpoint/server processes owned by the test operator.
 Remove exactly owned external scenario links and temporary directories. Preserve user saves and original research;
 archive a test autosave only after verifying that it belongs to the disposable scenario.
 
 ## Manual HTTP requests
+
+Automated checks and acceptance use the unmodified game with its DLC and project-owned disposable scenarios;
+they must not require a third-party mod in the client installation. Verify the active set in the main-menu Mods UI
+and retain startup logs; `mod-list.json` alone does not establish the running client's state. Separately validate a complex mod UI, such as
+Factory Planner, through agent-operated manual acceptance. Discover its entry, create a calculator, configure
+products and settings, and read results using live structured selectors. Include native game UI and rich-text help
+in the same manual session. Retain requests, replies and findings under ignored `temp/`; restore temporary mod
+configuration afterward.
 
 Use curl with UTF-8 request files, standard JSON/SSE Accept headers and the negotiated session/protocol headers.
 Initialize first with a request such as:

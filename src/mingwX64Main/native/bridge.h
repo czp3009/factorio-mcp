@@ -7,14 +7,20 @@
 #include "../../nativeMain/native/input_timeline_wire.h"
 #include "../../nativeMain/native/rendering_state.h"
 #include "../../nativeMain/native/rendering_control.h"
+#include "../../nativeMain/native/gui_observation.h"
+#include "../../nativeMain/native/request_storage.h"
+#include "../../nativeMain/native/widget_walk.h"
+#include "../../nativeMain/native/ui_media.h"
+#include "../../nativeMain/native/ui_graph.h"
+#include "../../nativeMain/native/ui_stored_identity.h"
+#include "../../nativeMain/native/text_slice.h"
+#include "../../nativeMain/native/binding_query.h"
+#include "../../nativeMain/native/chat_observation.h"
 #ifdef __cplusplus
 extern "C" {
 #endif
-#define FM_OBSERVATION_TEXT_BYTES (16 * 1024 * 1024)
 #define FM_INPUT_NAME_SIZE 128
-#define FM_MAX_LUA_SOURCE 131072
-#define FM_MAX_QUERY_ARGUMENTS (16 * 1024 * 1024)
-#define FM_MAX_PATH 16
+#define FM_UI_TEXT_CHARACTERS 16384
 
 typedef struct FmObservationBuffer {
     uint64_t address, size;
@@ -24,6 +30,8 @@ typedef struct FmChatRecord {
     uint64_t identity, tick;
     uint32_t stream, playerIndex, truncated;
     FmObservationBuffer text, raw, playerName;
+    FmTextRange textRange;
+    uint32_t textIncluded;
 } FmChatRecord;
 
 typedef struct FmChatSnapshot {
@@ -37,41 +45,43 @@ typedef struct FmChatRequest {
     char text[4097];
 } FmChatRequest;
 
-typedef struct FmStep {
-    int32_t child, position, enabled, hasText;
-    int32_t visible, hasVisible;
-    char type[160], text[1024];
-    char prototypeName[256], prototypeType[160];
-} FmStep;
-
 typedef struct FmAction {
     int32_t count, kind, button, alt, control, shift;
     double x, y;
-    uint32_t textCount, text[1024];
+    uint32_t textCount, text[FM_UI_TEXT_CHARACTERS];
     uint32_t keyCount, keys[8];
-    FmStep path[FM_MAX_PATH];
+    FmRequestBuffer path;
+    uint32_t collection, optionOffset, optionLimit;
+    uint32_t fields;
+    int32_t maxDepth;
+    FmTextSliceRequest textSlice;
+    FmUiGraphRequest graph;
 } FmAction;
 
 typedef struct FmNode {
-    int32_t depth, enabled;
+    int32_t depth, enabled, destroying;
+    uint32_t siblingIndex, childrenTruncated;
     int32_t x, y, width, height;
     int32_t truncated, selected;
-    char type[160];
+    FmObservationBuffer type;
     FmObservationBuffer text;
     uint32_t properties;
-    int32_t checkState, toggled, selectedIndex;
+    int32_t checkState, toggled, selectedIndex, toggleMode;
+    int64_t guiIndex;
     double value, minimum, maximum, valueStep;
-    uint32_t optionFirst, optionCount, optionTotal;
+    uint32_t optionFirst, optionCount, optionTotal, optionOffset;
     uint32_t identityTruncated;
-    char prototypeName[256], prototypeType[160];
+    char prototypeName[256];
+    FmObservationBuffer prototypeType;
     uint32_t numberFlags;
     double numberValue;
     int32_t visible, renderEnabled, hiddenBySearch;
     double progressValue;
     uint32_t progressDirection, progressHasText;
-    char qualityName[256], qualityType[160];
+    char qualityName[256];
+    FmObservationBuffer qualityType;
     uint32_t elementFlags, elementCount;
-    char itemType[160];
+    FmObservationBuffer itemType;
     float itemHealth, magazineLeft;
     double durabilityLeft;
     int32_t iconNormal, iconHovered, iconDisabled;
@@ -83,6 +93,9 @@ typedef struct FmNode {
     uint32_t switchState, switchAllowNone;
     uint32_t tooltipStatus, tooltipTruncated;
     FmObservationBuffer tooltipTitle, tooltipText;
+    FmUiImage image;
+    FmUiGraph graph;
+    FmUiAchievement achievement;
 } FmNode;
 
 typedef struct FmOption {
@@ -114,7 +127,11 @@ typedef struct FmResult {
     FmObservationBuffer framePixels;
     uint32_t worldSize;
     FmObservationBuffer worldJson;
+    uint32_t guiStatus;
+    char guiMessage[512];
     FmChatSnapshot chat;
+    FmTextRange textRange;
+    FmBindingSelection bindingSelection;
 } FmResult;
 
 typedef enum FmSymbol {
@@ -199,6 +216,7 @@ typedef enum FmSymbol {
     ActionDataType,
     StringTypeInfo,
     HeadlessMode,
+    BadFunctionCall,
     SymbolCount
 } FmSymbol;
 
@@ -308,8 +326,8 @@ typedef struct TimedInputLayout {
 } TimedInputLayout;
 
 typedef struct FmWorldQuery {
-    uint32_t sourceSize, argumentsSize, includeViewport;
-    char source[FM_MAX_LUA_SOURCE], arguments[FM_MAX_QUERY_ARGUMENTS];
+    uint32_t includeViewport;
+    FmRequestBuffer source, arguments;
 } FmWorldQuery;
 
 // A task owns its own mapping, so replacement cannot overwrite another caller's terminal result.
@@ -332,7 +350,9 @@ typedef struct ChatLayout {
 typedef struct Symbols {
     uint64_t address[SymbolCount];
     uint64_t prepareEnd, mainEnd;
-    uint32_t guiRootOffset, gameMapOffset, mapPausedOffset, mapStopLevelOffset, pauseSupported, widgetParentOffset;
+    uint32_t guiRootOffset, gameMapOffset, mapPausedOffset, mapStopLevelOffset, pauseSupported, widgetSize,
+        widgetParentOffset;
+    FmUiChildRange widgetChildren[2];
     EventLayout events;
     ControlLayout controls;
     uint64_t processEventsEnd;
@@ -347,7 +367,12 @@ typedef struct Symbols {
     ElementLayout elements;
     IconLayout icons;
     FmTooltipLayout tooltips;
+    FmGuiRegistryLayout guiRegistry;
     FmIconNamesLayout iconNames;
+    FmUiImageLayout images;
+    FmUiGraphLayout graph;
+    FmUiStoredPrototypeLayout connectionPrototype, achievementPrototype;
+    FmUiAchievementLayout achievement;
     WorldLayout world;
     TimedInputLayout timedInput;
     ViewportLayout viewport;
@@ -359,11 +384,15 @@ typedef struct Symbols {
 typedef struct Shared {
     volatile LONG attached, command, cancel, state;
     uint32_t operation, limit, renderingEnabled;
+    uint32_t requestSize;
+    FmRequestBuffer request;
     FmAction action;
     volatile LONG64 frame;
     FmResult result;
     FmWorldQuery worldQuery;
+    FmRequestBuffer bindingQuery;
     FmChatRequest chat;
+    FmChatReadOptions chatRead;
     char inputName[FM_INPUT_NAME_SIZE];
     volatile LONG inputActive, inputCancel;
 } Shared;

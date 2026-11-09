@@ -13,6 +13,8 @@ internal data class ChatRecord(
     val rawTruncated: Boolean = false,
     val playerName: String? = null,
     val playerNameTruncated: Boolean = false,
+    val textRange: ObservationTextRange? = null,
+    val textIncluded: Boolean = true,
 )
 
 internal data class ChatSnapshot(
@@ -32,7 +34,9 @@ internal data class ChatOffset(val tick: ULong, val counts: List<Int> = listOf(0
     }
 }
 
-internal data class ChatReadRequest(val offset: ChatOffset?, val limit: Int, val timeout: Int)
+internal data class TextSlice(val offset: Int, val limit: Int, val field: String = "text")
+
+internal data class ChatReadRequest(val offset: ChatOffset?, val limit: Int, val timeout: Int, val textSlice: TextSlice? = null)
 
 private fun JsonElement.chatTick(): ULong {
     val value = this as? JsonPrimitive ?: error("Chat tick must be an unsigned JSON integer")
@@ -41,7 +45,7 @@ private fun JsonElement.chatTick(): ULong {
 }
 
 internal fun parseChatRead(args: JsonObject): ChatReadRequest {
-    require(args.keys.all { it in setOf("offset", "limit", "timeout") }) { "Unknown chat_read argument" }
+    require(args.keys.all { it in setOf("offset", "limit", "timeout", "text_slice") }) { "Unknown chat_read argument" }
     val offset = args["offset"]?.let { value ->
         if (value is JsonObject) {
             require(value.keys.all { it in setOf("tick", "counts") } && "tick" in value) { "Invalid chat offset" }
@@ -57,7 +61,16 @@ internal fun parseChatRead(args: JsonObject): ChatReadRequest {
     val timeout = args["timeout"]?.intArgument() ?: 0
     require(limit > 0) { "Chat limit must be positive" }
     require(timeout >= 0) { "Chat timeout must be nonnegative seconds" }
-    return ChatReadRequest(offset, limit, timeout)
+    val textSlice = args["text_slice"]?.jsonObject?.let { slice ->
+        require(slice.keys.all { it in setOf("field", "offset", "limit") }) { "Unknown text_slice field" }
+        val field = slice["field"]?.stringArgument() ?: "text"
+        require(field in setOf("text", "raw", "player_name")) { "Unknown text_slice field name" }
+        val start = slice["offset"]?.intArgument() ?: 0
+        val count = slice["limit"]?.intArgument() ?: 4096
+        require(start >= 0 && count > 0) { "Text offset must be nonnegative and limit positive" }
+        TextSlice(start, count, field)
+    }
+    return ChatReadRequest(offset, limit, timeout, textSlice)
 }
 
 internal fun parseChatMessage(args: JsonObject): String {
@@ -68,7 +81,7 @@ internal fun parseChatMessage(args: JsonObject): String {
 internal fun validateChatMessage(text: String): String {
     require(
         text.isNotBlank() &&
-                text.encodeToByteArray().size <= 4096 &&
+                text.encodeToByteArray(throwOnInvalidSequence = true).size <= 4096 &&
                 text.none { it == '\u0000' || it == '\r' || it == '\n' } &&
                 !text.trimStart().startsWith('/')
     ) {
@@ -85,7 +98,7 @@ internal class ChatHistory {
     private data class Entry(val record: ChatRecord, val position: Int)
     private var console: ULong? = null
 
-    fun read(snapshot: ChatSnapshot, offset: ChatOffset?, limit: Int): JsonObject {
+    fun read(snapshot: ChatSnapshot, offset: ChatOffset?, limit: Int, textSlice: TextSlice? = null): JsonObject {
         require(limit > 0)
         require(snapshot.totals.size == 2 &&
                 snapshot.records.all { it.stream in 0..1 }) { "Invalid native chat snapshot" }
@@ -133,6 +146,7 @@ internal class ChatHistory {
         })
         return buildJsonObject {
             put("observation", "local_console_history")
+            textSlice?.let { put("text_field", it.field) }
             put("offset_basis", "native_tick_and_storage_position")
             put("next_offset", progress.json())
             put("boundary_truncated", boundaryTruncated(progress.tick))
@@ -145,17 +159,34 @@ internal class ChatHistory {
                 page.forEachIndexed { index, entry ->
                     addJsonObject {
                         val record = entry.record
+                        check(record.textIncluded) { "Native chat page does not include the selected message text" }
+                        put("read_from", ChatOffset(record.tick, (0..1).map { stream ->
+                            when {
+                                stream < record.stream -> positions[record.tick to stream] ?: 0
+                                stream == record.stream -> entry.position
+                                else -> 0
+                            }
+                        }).json())
                         put("offset", pageOffsets[index].json())
                         put("tick", JsonPrimitive(record.tick))
                         put("position_in_tick", entry.position)
                         put("storage", if (record.stream == 0) "game_state" else "local")
                         put("player_index_raw", record.playerIndexRaw)
-                        put("text", record.text)
-                        put("raw", record.raw)
+                        fun originalText(name: String, text: String) {
+                            if (textSlice != null && name != textSlice.field) return
+                            if (textSlice == null) put(name, text)
+                            else {
+                                val range = checkNotNull(record.textRange) { "Native chat text slice metadata is absent" }.json(text)
+                                put(name, range.getValue("value"))
+                                put("${name}_range", JsonObject(range - "value" - "value_type"))
+                            }
+                        }
+                        originalText("text", record.text)
+                        originalText("raw", record.raw)
                         put("text_truncated", record.textTruncated)
                         put("raw_truncated", record.rawTruncated)
                         record.playerName?.let {
-                            put("player_name", it)
+                            originalText("player_name", it)
                             put("player_name_truncated", record.playerNameTruncated)
                         }
                     }
@@ -166,6 +197,34 @@ internal class ChatHistory {
 }
 
 internal fun chatReadSchema() = buildJsonObject {
+    putJsonObject("text_slice") {
+        put("type", "object")
+        put("additionalProperties", false)
+        putJsonObject("properties") {
+            putJsonObject("field") {
+                put("type", "string")
+                put("default", "text")
+                putJsonArray("enum") {
+                    add("text")
+                    add("raw")
+                    add("player_name")
+                }
+            }
+            putJsonObject("offset") {
+                put("type", "integer")
+                put("minimum", 0)
+                put("maximum", Int.MAX_VALUE)
+                put("default", 0)
+            }
+            putJsonObject("limit") {
+                put("type", "integer")
+                put("minimum", 1)
+                put("maximum", Int.MAX_VALUE)
+                put("default", 4096)
+            }
+        }
+        put("description", "Optional UTF-8 byte range of one text field; other text fields are omitted. Range metadata reports original byte length and continuation. To reread one message, pass its read_from as offset with limit:1; each call observes current retained history.")
+    }
     putJsonObject("offset") {
         putJsonArray("anyOf") {
             addJsonObject {
@@ -190,6 +249,7 @@ internal fun chatReadSchema() = buildJsonObject {
                         putJsonObject("items") {
                             put("type", "integer")
                             put("minimum", 0)
+                            put("maximum", Int.MAX_VALUE)
                         }
                         put("description", "Already-read records at this tick, in game_state and local storage respectively.")
                     }
@@ -212,6 +272,7 @@ internal fun chatReadSchema() = buildJsonObject {
     putJsonObject("limit") {
         put("type", "integer")
         put("minimum", 1)
+        put("maximum", Int.MAX_VALUE)
         put("default", 64)
     }
 }
@@ -223,7 +284,7 @@ internal fun chatSendSchema() = buildJsonObject {
         put("maxLength", 4096)
         put(
             "description",
-            "One plain chat message, at most 4096 UTF-8 bytes. No NUL, newline or slash commands.",
+            "One plain chat message, at most 4096 UTF-8 bytes; multibyte characters consume multiple bytes. maxLength is only a character-count bound. No NUL, newline or slash commands.",
         )
     }
 }

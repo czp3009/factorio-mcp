@@ -184,7 +184,15 @@ internal class GameSession(private val open: (Int) -> GameConnection = ::GamePro
         }
     }
 
-    suspend fun read(limit: Int, bounds: Boolean, selector: List<UiStep>? = null): JsonObject =
+    suspend fun read(
+        bounds: Boolean,
+        selector: List<UiStep>? = null,
+        guiFields: List<String> = defaultGuiFields,
+        guiDepth: Int = 8,
+        collection: UiCollection? = null,
+        maxDepth: Int? = null,
+        fields: Set<UiField> = defaultUiFields,
+    ): JsonObject =
         observe {
             val target =
                 attachment
@@ -194,8 +202,11 @@ internal class GameSession(private val open: (Int) -> GameConnection = ::GamePro
                         } ?: "Call attach before ui_read"
                     )
             useConnection(target) {
-                it.execute(3, limit, selector?.let { path -> UiAction(path) })
-                    .uiJson(bounds, selector != null)
+                val depth = uiDepth(maxDepth)
+                val snapshot = it.execute(3, Int.MAX_VALUE, UiAction(selector.orEmpty(), guiFields = guiFields, guiDepth = guiDepth,
+                    collection = collection, maxDepth = depth, fields = collection?.uiFields() ?: fields))
+                if (collection == null) snapshot.uiJson(bounds, selector != null, depth, fields)
+                else snapshot.uiCollectionJson(collection)
             }
         }
 
@@ -320,7 +331,8 @@ internal class GameSession(private val open: (Int) -> GameConnection = ::GamePro
     suspend fun query(query: WorldQuery): JsonObject = observe {
         val target = attachment ?: error("Call attach before world_query")
         val snapshot = useConnection(target) { it.query(query) }
-        val value = decodeWorldQuery(checkNotNull(snapshot.worldJson))
+        val decoded = decodeWorldQuery(checkNotNull(snapshot.worldJson), query.arguments)
+        val value = snapshot.worldApi?.annotate(decoded) ?: decoded
         buildJsonObject {
             value.forEach { (name, item) -> put(name, item) }
             put("ui_frame", snapshot.frame)
@@ -328,7 +340,7 @@ internal class GameSession(private val open: (Int) -> GameConnection = ::GamePro
         }
     }
 
-    suspend fun readChat(offset: ChatOffset?, limit: Int, timeout: Int = 0): JsonObject = observe(serialized = false) {
+    suspend fun readChat(offset: ChatOffset?, limit: Int, timeout: Int = 0, textSlice: TextSlice? = null): JsonObject = observe(serialized = false) {
         require(limit > 0) { "Chat limit must be positive" }
         require(timeout >= 0) { "Chat timeout must be nonnegative seconds" }
         val start = TimeSource.Monotonic.markNow()
@@ -340,9 +352,9 @@ internal class GameSession(private val open: (Int) -> GameConnection = ::GamePro
                 val target = attachment ?: error("Call attach before chat_read")
                 check(selected == null || selected === target) { "Chat attachment changed while waiting" }
                 selected = target
-                val snapshot = useConnection(target) { it.execute(10) }
+                val snapshot = useConnection(target) { it.readChat(ChatReadRequest(offset, limit, 0, textSlice)) }
                 JsonObject(
-                    target.chat.read(checkNotNull(snapshot.chat), offset, limit) + mapOf(
+                    target.chat.read(checkNotNull(snapshot.chat), offset, limit, textSlice) + mapOf(
                         "ui_frame" to JsonPrimitive(snapshot.frame),
                         "state" to JsonPrimitive(snapshot.state),
                     )
@@ -367,10 +379,11 @@ internal class GameSession(private val open: (Int) -> GameConnection = ::GamePro
         buildJsonObject { put("dispatch", "completed") }
     }
 
-    suspend fun bindings(ids: Set<String>?, search: String?, offset: Int, limit: Int): JsonObject =
+    suspend fun bindings(ids: Set<String>?, search: String?, offset: Int, limit: Int?): JsonObject =
         observe {
             val target = attachment ?: error("Call attach before input_bindings")
-            useConnection(target) { it.execute(7).bindingsJson(ids, search, offset, limit) }
+            val request = BindingReadRequest(ids, search, offset, limit)
+            useConnection(target) { it.bindings(request).bindingsJson(request) }
         }
 
     private suspend fun drain() {

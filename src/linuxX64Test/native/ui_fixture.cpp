@@ -1,4 +1,5 @@
 #include "ui_snapshot.h"
+#include "../../nativeTest/native/selector_fixture.h"
 #include "mouse_event.h"
 #include "ui_capture.h"
 #include "ui_modal.h"
@@ -97,7 +98,11 @@ static void clearReferences(CaptureTarget &target) {
 
 struct Option;
 
-struct Widget {
+struct WidgetBase {
+    virtual ~WidgetBase() = default;
+};
+
+struct Widget : WidgetBase {
     virtual ~Widget() = default;
 
     virtual const Text &getText() const {
@@ -165,6 +170,17 @@ struct Unknown : Widget {
     const Text &getText() const override {
         return text;
     }
+};
+
+struct GraphWidget : Widget {
+    struct Series {
+        Text label;
+        std::vector<float> values;
+    };
+    uint32_t samples = 3;
+    float minimum = 0;
+    float maximum = 2;
+    std::vector<Series> series;
 };
 
 struct InputClock {
@@ -928,11 +944,11 @@ static void checkClicks(const UiGestureContext &context, const FmLinuxModalLayou
             "existing mouse state prevented dispatch or lost MCP release");
     for (unsigned mode = 0; mode < 3; ++mode) {
         reset();
-        auto selected = selector;
+        SelectorFixture<FmLinuxUiSelector> selected(selector);
         if (mode == 0)
             cancel = 1;
         if (mode == 1)
-            selected.path[0].text[0] = 'z';
+            selected.path[0].text = "zabel";
         if (mode == 2)
             root.flags = 0;
         UiClickCommand rejected;
@@ -1300,27 +1316,64 @@ int main() {
     auto output = std::make_unique<UiSnapshot>();
     uint32_t cancel = 0;
     require(snapshotUi(&gui, layout, 10, &cancel, *output) == 0, "snapshot failed");
-    layout.toggle = {(*reinterpret_cast<uintptr_t **>(&root))[3], 3, offset(&root, &root.toggled), sizeof(Widget)};
-    layout.toggle.modeOffset = offset(&root, &root.toggleMode);
-    layout.toggle.tableCount = 2;
-    layout.toggle.tables[0] = *reinterpret_cast<uintptr_t *>(&root);
-    layout.toggle.tables[1] = *reinterpret_cast<uintptr_t *>(&child);
+    {
+        auto graphLayout = layout;
+        // This independent synthetic layout supplies RTTI only; no prototype accessor is invoked.
+        graphLayout.identity = {reinterpret_cast<uintptr_t>(&typeid(Widget)), reinterpret_cast<uintptr_t>(&typeid(Unknown)),
+                                0, 1, 0, 16, 0, 16, 16, 0, 8};
+        GraphWidget graph;
+        graph.series.push_back({{0, "stored label", 12}, {0, 1, 2}});
+        struct Vector { uintptr_t first, last, end; };
+        static_assert(sizeof(std::vector<float>) == sizeof(Vector));
+        auto vector = [](uint32_t at, uint32_t stride) {
+            return FmUiGraphVectorLayout{at, at + 8, at + 16, stride};
+        };
+        graphLayout.graph = {reinterpret_cast<uintptr_t>(&typeid(GraphWidget)), 1, sizeof(graph),
+                             offset(&graph, &graph.samples), offset(&graph, &graph.minimum), offset(&graph, &graph.maximum),
+                             vector(offset(&graph, &graph.series), sizeof(GraphWidget::Series)),
+                             vector(offsetof(GraphWidget::Series, values), sizeof(float)), offsetof(GraphWidget::Series, label)};
+        gui.root = &graph;
+        SelectorFixture<FmLinuxUiSelector> selected;
+        selected.path[0].type = "GraphWidget";
+        selected.path[0].enabled.reset();
+        selected.value.fields = FM_UI_GRAPH;
+        selected.value.collection = 1;
+        selected.value.graph = {2, 0, 1, 1};
+        require(snapshotUi(&gui, graphLayout, 10, &cancel, *output, selected.wire()) == 0 &&
+                    output->nodes.size() == 1 && output->nodes[0].graph.total == 3,
+                "native graph sample page failed at the UI boundary");
+        selected.value.graph = {2, 1, 0, 1};
+        require(snapshotUi(&gui, graphLayout, 10, &cancel, *output, selected.wire()) == EINVAL,
+                "out-of-range graph series escaped the UI error boundary");
+        selected.value.graph = {2, 0, 0, 1};
+        graph.series[0].label.data = reinterpret_cast<const char *>(1);
+        require(snapshotUi(&gui, graphLayout, 10, &cancel, *output, selected.wire()) == EFAULT,
+                "unreadable graph storage escaped the UI error boundary");
+        graph.series[0].label.data = "stored label";
+        require(snapshotUi(&gui, graphLayout, 10, &cancel, *output, selected.wire()) == 0 &&
+                    output->nodes[0].graph.series.size == sizeof(FmUiGraphSeries),
+                "a failed graph page prevented the next observation");
+        gui.root = &root;
+    }
+    layout.toggle = {reinterpret_cast<uintptr_t>(&typeid(WidgetBase)), reinterpret_cast<uintptr_t>(&typeid(Widget)),
+                     sizeof(Widget), offset(&root, &root.toggled), offset(&root, &root.toggleMode)};
     root.toggled = 1;
     require(snapshotUi(&gui, layout, 10, &cancel, *output) == 0 && output->nodes[0].toggledAvailable &&
                 output->nodes[0].toggled == 1 && output->nodes[1].toggledAvailable && !output->nodes[1].toggled,
             "toggle getter did not expose each widget's own byte");
     root.toggleMode = 0;
-    require(snapshotUi(&gui, layout, 10, &cancel, *output) == 0 && !output->nodes[0].toggledAvailable &&
+    require(snapshotUi(&gui, layout, 10, &cancel, *output) == 0 && output->nodes[0].toggledAvailable &&
+                output->nodes[0].toggled && !output->nodes[0].toggleMode &&
                 output->nodes[1].toggledAvailable,
-            "ordinary button exposed toggle state");
+            "manual button state was suppressed by its automatic toggle mode");
     root.toggleMode = 2;
     require(snapshotUi(&gui, layout, 10, &cancel, *output) == EPROTO, "invalid toggle mode was normalized");
     root.toggleMode = 1;
     root.toggled = 2;
     require(snapshotUi(&gui, layout, 10, &cancel, *output) == EPROTO, "invalid boolean byte was normalized");
-    ++layout.toggle.function;
-    require(snapshotUi(&gui, layout, 10, &cancel, *output) == 0 && !output->nodes[0].toggledAvailable,
-            "unknown virtual getter invented toggle state");
+    layout.toggle.widgetType = layout.toggle.buttonType;
+    require(snapshotUi(&gui, layout, 10, &cancel, *output) == EINVAL, "ambiguous source/target RTTI was accepted");
+    layout.toggle.widgetType = reinterpret_cast<uintptr_t>(&typeid(WidgetBase));
     layout.toggle.offset = sizeof(Widget);
     require(snapshotUi(&gui, layout, 10, &cancel, *output) == EINVAL, "toggle member bounds were ignored");
     root.toggled = 0;
@@ -1458,6 +1511,11 @@ int main() {
                 "unknown option getter became an empty label or consumed the snapshot budget");
         entries[1].button = &longLabel;
         root.optionLast = reinterpret_cast<Option *>(reinterpret_cast<uintptr_t>(root.optionFirst) + 1);
+        SelectorFixture<FmLinuxUiSelector> selectedIndexOnly;
+        selectedIndexOnly.value.fields = FM_UI_SELECTED_INDEX;
+        require(snapshotUi(&gui, layout, 10, &cancel, *output, selectedIndexOnly.wire()) == 0 &&
+                    output->nodes[0].selectedIndex == 80 && !output->nodes[0].optionsAvailable && !output->optionCount,
+                "selected-index projection inspected malformed unrequested options");
         require(snapshotUi(&gui, layout, 10, &cancel, *output) == EPROTO, "misaligned option range accepted");
         root.optionLast =
             reinterpret_cast<Option *>(reinterpret_cast<uintptr_t>(root.optionFirst) + sizeof(Option) * (uint64_t(INT32_MAX) + 1));
@@ -1483,16 +1541,30 @@ int main() {
                     output->nodes[16].optionsAvailable && output->nodes[16].optionTotal == 65 &&
                     output->nodes[16].optionCount == 65,
                 "dropdown options were truncated by an unrelated budget");
-        FmLinuxUiSelector chosen{};
-        chosen.count = 1;
-        chosen.path[0].enabled = -1;
-        chosen.path[0].hasText = 1;
-        std::memcpy(chosen.path[0].text, "chosen", 7);
+        SelectorFixture<FmLinuxUiSelector> chosen;
+        chosen.path[0].enabled.reset();
+
+        chosen.path[0].text = "chosen";
         many[0].optionFirst = reinterpret_cast<Option *>(1);
         many[0].optionLast = reinterpret_cast<Option *>(1 + 65 * sizeof(Option));
-        require(snapshotUi(&gui, layout, 32, &cancel, *output, &chosen) == 0 && output->optionCount == 65 &&
-                    output->nodes[17].optionCount == 65 && !output->nodes[0].dropdownAvailable,
+        require(snapshotUi(&gui, layout, 32, &cancel, *output, chosen.wire()) == 0 && output->optionCount == 65 &&
+                    output->count == 1 && output->nodes[0].optionCount == 65 && output->nodes[0].parent == -1 &&
+                    output->nodes[0].siblingIndex == 17,
                 "unrelated dropdowns consumed selected subtree budget or prevented its observation");
+        chosen.value.collection = 1;
+        chosen.value.optionOffset = 64;
+        chosen.value.optionLimit = 10;
+        require(snapshotUi(&gui, layout, 1, &cancel, *output, chosen.wire()) == 0 && output->optionCount == 1 &&
+                    output->count == 1 && output->nodes[0].optionOffset == 64 && output->nodes[0].optionCount == 1 &&
+                    output->nodes[0].optionTotal == 65 && !output->truncated,
+                "selected native option page did not retain its original index or bounded copy");
+        chosen.value.optionOffset = 65;
+        require(snapshotUi(&gui, layout, 1, &cancel, *output, chosen.wire()) == 0 && !output->optionCount &&
+                    output->count == 1 && output->nodes[0].optionsAvailable && output->nodes[0].optionTotal == 65,
+                "native option end page became unavailable");
+        chosen.path[0].text.reset();
+        require(snapshotUi(&gui, layout, 1, &cancel, *output, chosen.wire()) == ENOTUNIQ,
+                "ambiguous collection read consumed optional properties before rejecting its selector");
         gui.root = &root;
         root.optionFirst = root.optionLast = nullptr;
         const auto valid = layout.dropdowns[0];
@@ -1542,12 +1614,15 @@ int main() {
                     output->treeTruncated, "caller-selected UI limit was not enforced");
         require(snapshotUi(&gui, layout, 10000, &cancel, *output) == 0 && output->count == 6000 &&
                     !output->treeTruncated, "UI snapshot retained the old fixed node capacity");
-        FmLinuxUiSelector selected{};
-        selected.count = 1;
-        selected.path[0].enabled = -1;
+        SelectorFixture<FmLinuxUiSelector> selected;
+        selected.path[0].enabled.reset();
         selected.path[0].position = 5500;
-        require(snapshotUi(&gui, layout, 10000, &cancel, *output, &selected) == 0 &&
-                    output->nodes[5499].selected, "large complete selector traversal failed");
+        require(snapshotUi(&gui, layout, 10000, &cancel, *output, selected.wire()) == 0 &&
+                    output->count == 1 && output->nodes[0].selected && output->nodes[0].siblingIndex == 5499,
+                "large complete selector traversal did not retain the selected node and sibling position");
+        require(snapshotUi(&gui, layout, 1, &cancel, *output, selected.wire()) == 0 &&
+                    output->count == 1 && output->nodes[0].selected && !output->treeTruncated,
+                "selected observation did not traverse completely and prune before IPC");
         const auto wire = output->wire();
         require(wire.nodes.size == output->nodes.size() * sizeof(FmLinuxUiNode), "dynamic node wire size is invalid");
         gui.root = &root;
@@ -1569,37 +1644,36 @@ int main() {
                 output->nodes[0].renderEnabled && output->nodes[1].visible,
             "parent render flag propagated to child or changed own visibility");
     root.flags &= ~16;
-    require(std::strcmp(output->nodes[1].type, "Label") == 0, "dynamic type was lost");
+    require(std::string_view(reinterpret_cast<const char *>(output->nodes[1].type.address), output->nodes[1].type.size) == "Label", "dynamic type was lost");
     require(output->nodes[1].textAvailable && output->nodes[1].textSize == 5 &&
                 std::memcmp(reinterpret_cast<const void *>(output->nodes[1].text.address), "label", 5) == 0,
             "derived text getter was ignored");
     require(output->nodes[2].textAvailable && output->nodes[2].textTotal == 0, "empty string became unavailable");
-    FmLinuxUiSelector selector{};
-    selector.count = 1;
-    selector.path[0].enabled = -1;
-    std::memcpy(selector.path[0].type, "Label", 6);
+    SelectorFixture<FmLinuxUiSelector> selector;
+    selector.path[0].enabled.reset();
+    selector.path[0].type = "Label";
     rectangleCalls = 0;
-    require(snapshotUi(&gui, layout, 10, &cancel, *output, &selector) == 0 && output->nodes[1].selected &&
-                !output->nodes[0].selected && !output->nodes[2].selected && rectangleCalls == 1,
+    require(snapshotUi(&gui, layout, 10, &cancel, *output, selector.wire()) == 0 && output->count == 1 &&
+                output->nodes[0].selected && output->nodes[0].depth == 0 && rectangleCalls == 1,
             "selection did not precede optional rectangle reads");
-    selector.path[0].hasVisible = 1;
+
     selector.path[0].visible = 0;
-    require(snapshotUi(&gui, layout, 10, &cancel, *output, &selector) == 0 && !output->nodes[1].selected,
+    require(snapshotUi(&gui, layout, 10, &cancel, *output, selector.wire()) == 0 && output->count == 0,
             "visibility predicate ignored the widget's own flag");
     selector.path[0].visible = 1;
-    require(snapshotUi(&gui, layout, 10, &cancel, *output, &selector) == 0 && output->nodes[1].selected,
+    require(snapshotUi(&gui, layout, 10, &cancel, *output, selector.wire()) == 0 && output->count == 1 && output->nodes[0].selected,
             "search-hidden or parent flags changed visible matching");
     other.parent = &other;
-    require(snapshotUi(&gui, layout, 10, &cancel, *output, &selector) == 0,
+    require(snapshotUi(&gui, layout, 10, &cancel, *output, selector.wire()) == 0,
             "unrelated optional geometry prevented selected observation");
     other.parent = nullptr;
     rectangleCalls = 0;
-    require(snapshotUi(&gui, layout, 1, &cancel, *output, &selector) == EOVERFLOW && output->treeTruncated &&
-                !rectangleCalls,
-            "incomplete selector search collected optional properties");
-    selector.path[0].hasText = 1;
-    std::memcpy(selector.path[0].text, "label", 6);
-    require(snapshotUi(&gui, layout, 10, &cancel, *output, &selector) == 0 && output->nodes[1].selected,
+    require(snapshotUi(&gui, layout, 1, &cancel, *output, selector.wire()) == 0 && !output->treeTruncated &&
+                output->count == 1 && output->nodes[0].selected && rectangleCalls == 1,
+            "selected result limit prevented complete discovery or bounded property collection");
+
+    selector.path[0].text = "label";
+    require(snapshotUi(&gui, layout, 10, &cancel, *output, selector.wire()) == 0 && output->count == 1 && output->nodes[0].selected,
             "selected native text did not match");
     UiTarget target;
     require(selectUiTarget(&gui, layout, selector, &cancel, *output, target) == EACCES && !target.widget,
@@ -1612,9 +1686,9 @@ int main() {
     activeGui = &gui;
     const auto instance = reinterpret_cast<uintptr_t>(&activeGui);
     auto rootSelector = selector;
-    rootSelector.path[0].type[0] = 0;
-    rootSelector.path[0].hasVisible = 0;
-    std::memcpy(rootSelector.path[0].text, "root", 5);
+    rootSelector.path[0].type.reset();
+    rootSelector.path[0].visible.reset();
+    rootSelector.path[0].text = "root";
     UiTarget rootTarget;
     child.parent = &child;
     rectangleCalls = 0;
@@ -2075,16 +2149,16 @@ int main() {
     checkText(gestureContext, modalLayout, selector, *output, root, child);
     checkKeys(gestureContext, modalLayout, selector, *output, root, child);
     auto ambiguous = selector;
-    ambiguous.path[0].type[0] = 0;
-    ambiguous.path[0].hasText = 0;
-    ambiguous.path[0].hasVisible = 0;
+    ambiguous.path[0].type.reset();
+    ambiguous.path[0].text.reset();
+    ambiguous.path[0].visible.reset();
     UiTarget rejected = target;
     require(selectUiTarget(&gui, layout, ambiguous, &cancel, *output, rejected) == ENOTUNIQ && !rejected.widget,
             "ambiguous action retained a target");
-    selector.path[0].text[0] = 'z';
+    selector.path[0].text = "zabel";
     require(selectUiTarget(&gui, layout, selector, &cancel, *output, rejected) == ENOENT && !rejected.widget,
             "missing action target retained an old pointer");
-    selector.path[0].text[0] = 'l';
+    selector.path[0].text = "label";
     cancel = 1;
     require(selectUiTarget(&gui, layout, selector, &cancel, *output, rejected) == ECANCELED && !rejected.widget &&
                 liveUiTarget(instance, layout, target) == 0,
@@ -2115,19 +2189,36 @@ int main() {
     require(snapshotUi(&gui, layout, 10, &cancel, *output) == 0 && output->nodes[1].textSize == sizeof(embedded) &&
                 std::memcmp(reinterpret_cast<const void *>(output->nodes[1].text.address), embedded, sizeof(embedded)) == 0,
             "embedded NUL truncated native text");
-    std::vector<char> longText(FM_LINUX_TEXT_SIZE + 1, 'a');
+    std::vector<char> longText(16 * 1024 * 1024 + 1, 'a');
     child.label = {0, longText.data(), longText.size()};
-    require(snapshotUi(&gui, layout, 10, &cancel, *output) == 0 && output->truncated &&
-                output->nodes[1].textTruncated && output->nodes[1].textTotal == longText.size(),
-            "text bound was not reported");
+    SelectorFixture<FmLinuxUiSelector> structureOnly;
+    structureOnly.value.fields = 0;
+    require(snapshotUi(&gui, layout, 10, &cancel, *output, structureOnly.wire()) == 0 &&
+                !output->nodes[1].textAvailable && !output->nodes[1].text.size,
+            "structure-only observation captured unrequested text");
+    child.label.data = reinterpret_cast<const char *>(1);
+    require(snapshotUi(&gui, layout, 10, &cancel, *output, structureOnly.wire()) == 0,
+            "structure-only observation dereferenced unrequested text");
+    structureOnly.value.fields = FM_UI_TEXT;
+    require(snapshotUi(&gui, layout, 10, &cancel, *output, structureOnly.wire()) == EFAULT,
+            "requested inaccessible text was silently omitted");
+    child.label.data = longText.data();
+    structureOnly.value.fields = 0;
+    structureOnly.path[0].text = std::string_view(longText.data(), longText.size());
+    require(snapshotUi(&gui, layout, 1, &cancel, *output, structureOnly.wire()) == 0 && output->count == 1 &&
+                output->nodes[0].selected && !output->nodes[0].text.size,
+            "text predicate stopped working when text output was omitted");
+    require(snapshotUi(&gui, layout, 10, &cancel, *output) == 0 && !output->truncated &&
+                !output->nodes[1].textTruncated && output->nodes[1].textSize == longText.size(),
+            "native text above sixteen MiB was shortened");
     rectangleCalls = 0;
-    require(snapshotUi(&gui, layout, 10, &cancel, *output, &selector) == 0 && !output->treeTruncated &&
-                !output->truncated && !output->nodes[1].selected && !rectangleCalls,
-            "unmatched truncated text was treated as an incomplete tree or observed geometry");
-    selector.path[0].hasText = 0;
-    require(snapshotUi(&gui, layout, 10, &cancel, *output, &selector) == 0 && output->nodes[1].selected &&
-                output->truncated && !output->treeTruncated,
-            "selected text truncation was lost");
+    require(snapshotUi(&gui, layout, 10, &cancel, *output, selector.wire()) == 0 && !output->treeTruncated &&
+                !output->truncated && output->count == 0 && !rectangleCalls,
+            "unmatched long text changed completeness or observed geometry");
+    selector.path[0].text = std::string_view(longText.data(), longText.size());
+    require(snapshotUi(&gui, layout, 10, &cancel, *output, selector.wire()) == 0 && output->count == 1 && output->nodes[0].selected &&
+                !output->truncated && !output->treeTruncated,
+            "a long exact text predicate failed or changed completeness");
     child.label = {};
     Unknown unknown;
     first[0] = &unknown;
@@ -2139,7 +2230,7 @@ int main() {
             "node budget was not reported");
     gui.root = &child;
     require(snapshotUi(&gui, layout, 10, &cancel, *output) == 0 && output->count == 1 &&
-                std::strcmp(output->nodes[0].type, "Label") == 0,
+                std::string_view(reinterpret_cast<const char *>(output->nodes[0].type.address), output->nodes[0].type.size) == "Label",
             "root was retained across snapshots");
     gui.root = &root;
     first[0] = &root;
@@ -2148,6 +2239,43 @@ int main() {
     cancel = 1;
     require(snapshotUi(&gui, layout, 10, &cancel, *output) == ECANCELED, "cancellation was ignored");
     cancel = 0;
+    {
+        SelectorFixture<FmLinuxUiSelector> probe;
+        probe.path[0].enabled.reset();
+        probe.path[0].type = "Absent";
+        probe.value.fields = 0;
+        for (size_t length : {size_t(3), size_t(257), size_t(4097), size_t(65538)}) {
+            std::vector<Widget> chain(length);
+            std::vector<Widget *> links(length);
+            for (size_t index = 0; index < length; ++index) {
+                links[index] = &chain[(index + 1) % length];
+                chain[index].first = &links[index];
+                chain[index].last = &links[index] + 1;
+            }
+            gui.root = &chain[0];
+            require(snapshotUi(&gui, layout, INT32_MAX, &cancel, *output, probe.wire()) == ELOOP,
+                    "long child cycle was not rejected");
+            chain.back().first = chain.back().last = nullptr;
+            require(snapshotUi(&gui, layout, INT32_MAX, &cancel, *output, probe.wire()) == 0 &&
+                        output->count == 0 && !output->treeTruncated,
+                    "acyclic deep discovery failed or unmatched nodes were retained for transfer");
+        }
+        Widget branch, left, right, shared;
+        Widget *branches[] = {&left, &right};
+        Widget *leftChildren[] = {&shared};
+        Widget *rightChildren[] = {&shared};
+        branch.first = branches;
+        branch.last = branches + 2;
+        left.first = leftChildren;
+        left.last = leftChildren + 1;
+        right.first = rightChildren;
+        right.last = rightChildren + 1;
+        gui.root = &branch;
+        probe.path[0].type.reset();
+        require(snapshotUi(&gui, layout, INT32_MAX, &cancel, *output, probe.wire()) == 0 && output->count == 5,
+                "shared native pointer was classified as a cycle or deduplicated");
+        gui.root = &root;
+    }
     const size_t pageSize = sysconf(_SC_PAGESIZE);
     void *guard = mmap(nullptr, pageSize, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     require(guard != MAP_FAILED, "cannot allocate guard page");

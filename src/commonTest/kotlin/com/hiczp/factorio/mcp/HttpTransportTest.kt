@@ -4,7 +4,6 @@ import io.ktor.server.cio.*
 import io.ktor.server.engine.*
 import io.modelcontextprotocol.kotlin.sdk.server.Server
 import io.modelcontextprotocol.kotlin.sdk.server.ServerOptions
-import io.modelcontextprotocol.kotlin.sdk.server.mcpStreamableHttp
 import io.modelcontextprotocol.kotlin.sdk.types.Implementation
 import io.modelcontextprotocol.kotlin.sdk.types.ServerCapabilities
 import kotlin.test.Test
@@ -22,6 +21,86 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.*
 
 class HttpTransportTest {
+    @Test
+    fun uiFieldSelectionReachesTheAdapterAndCollectionsChooseOnlyTheirSource() = runBlocking {
+        val observed = mutableListOf<Set<UiField>>()
+        val game = GameSession {
+            object : GameConnection {
+                override suspend fun execute(operation: Int, limit: Int, action: UiAction?): GameSnapshot {
+                    if (operation == 3) observed += checkNotNull(action).fields
+                    return GameSnapshot("in_game", operation != 4, 1, nodes = if (operation == 3) listOf(
+                        WidgetSnapshot(0, "Dropdown", "Original", true, 0, 0, 10, 10, false,
+                            selected = true, properties = WidgetProperties(options = WidgetOptions(listOf(WidgetOption("Original option")), 1))),
+                    ) else emptyList())
+                }
+
+                override suspend fun isAlive() = true
+
+                override suspend fun close() = Unit
+            }
+        }
+        val http = embeddedServer(CIO, host = "127.0.0.1", port = 0) { mcpHttp(createServer(game)) }
+        var client: McpHttpClient? = null
+        try {
+            http.startSuspend(wait = false)
+            val connection = McpHttpClient("http://127.0.0.1:${http.engine.resolvedConnectors().single().port}/mcp")
+            client = connection
+            connection.initialize()
+            connection.tool("attach", buildJsonObject { put("pid", 42) }).toolValue()
+            val structure = connection.tool("ui_read", buildJsonObject { putJsonArray("fields") {} }).toolValue()
+            assertTrue(structure.getValue("nodes").jsonArray.single().jsonObject.keys.none { it in setOf("text", "properties") })
+            assertEquals(emptySet(), observed.single())
+            val options = connection.tool("ui_read", Json.parseToJsonElement("""{"selector":{"path":[{"axis":"descendant","match":{}}]},"collection":{"source":"options"}}""").jsonObject).toolValue()
+            assertEquals(setOf(UiField.OPTIONS), observed.last())
+            val collection = options.getValue("collection").jsonObject
+            assertTrue("entries" in collection, options.toString())
+            assertEquals("Original option", collection.getValue("entries").jsonArray.single().jsonObject.getValue("value").stringArgument())
+            val rejected = connection.tool("ui_read", Json.parseToJsonElement("""{"fields":[],"selector":{"path":[{"axis":"descendant","match":{}}]},"collection":{"source":"text"}}""").jsonObject)
+            assertTrue(rejected.getValue("isError").jsonPrimitive.boolean)
+            assertEquals(2, observed.size)
+        } finally {
+            client?.close()
+            game.close()
+            http.stopSuspend(0, 1000)
+        }
+    }
+
+    @Test
+    fun explicitRequestBudgetAdmitsLargeFramesAndPreservesTheSessionAfterRejection() = runBlocking {
+        withTimeout(30000) {
+            val game = GameSession()
+            val http = embeddedServer(CIO, host = "127.0.0.1", port = 0) { mcpHttp(createServer(game)) }
+            var client: McpHttpClient? = null
+            try {
+                http.startSuspend(wait = false)
+                client = McpHttpClient("http://127.0.0.1:${http.engine.resolvedConnectors().single().port}/mcp")
+                client.initialize()
+                fun body(size: Int) = buildJsonObject {
+                    put("jsonrpc", "2.0")
+                    put("id", "budget-probe")
+                    put("method", "tools/call")
+                    putJsonObject("params") {
+                        put("name", "status")
+                        putJsonObject("arguments") { put("padding", "x".repeat(size)) }
+                    }
+                }.toString()
+                val admitted = client.rawPost(body(5 * 1024 * 1024))
+                assertEquals(200, admitted.first)
+                assertTrue(admitted.second.contains("Unknown argument"))
+                val rejected = client.rawPost(body(MCP_REQUEST_BYTES + 1))
+                assertEquals(413, rejected.first)
+                val state = client.tool("status").toolValue()
+                assertFalse(state.getValue("attached").jsonPrimitive.boolean)
+            } finally {
+                withContext(NonCancellable) {
+                    client?.close()
+                    game.close()
+                    http.stopSuspend(0, 1000)
+                }
+            }
+        }
+    }
+
     @Test
     fun screenshotCancellationBypassesTheQueueAcrossHttpSessions() = runBlocking {
         withTimeout(15000) {
@@ -67,7 +146,7 @@ class HttpTransportTest {
             }
             val http =
                 embeddedServer(CIO, host = "127.0.0.1", port = 0) {
-                    mcpStreamableHttp { createServer(game) }
+                    mcpHttp(createServer(game))
                 }
             val clients = mutableListOf<McpHttpClient>()
             try {
@@ -117,9 +196,7 @@ class HttpTransportTest {
                 assertEquals(attached.toolValue(), attached.getValue("structuredContent"))
                 val world =
                     first
-                        .tool(
-                            "world_query",
-                            buildJsonObject { putJsonObject("selection") { put("kind", "player") } },
+                        .worldQuery(buildJsonObject { putJsonObject("selection") { put("kind", "player") } },
                         )
                         .toolValue()
                 assertEquals(
@@ -190,7 +267,7 @@ class HttpTransportTest {
                     ),
                 )
             val http =
-                embeddedServer(CIO, host = "127.0.0.1", port = 0) { mcpStreamableHttp { protocol } }
+                embeddedServer(CIO, host = "127.0.0.1", port = 0) { mcpHttp(protocol) }
             try {
                 http.startSuspend(wait = false)
                 val port = http.engine.resolvedConnectors().single().port

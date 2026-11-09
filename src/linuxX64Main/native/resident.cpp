@@ -55,6 +55,7 @@ static UiSnapshot uiObservation;
 static ControlsSnapshot controlsObservation;
 static ChatSnapshot chatObservation;
 static LuaResult queryObservation;
+static fm::RequestStorage requestStorage;
 
 // Kotlin holds command ownership while transferring these copies in chunks. They contain no borrowed game objects.
 static void releaseObservations(FmLinuxShared *shared) noexcept {
@@ -381,6 +382,13 @@ extern "C" void fm_abort_input_evaluation(void *receiver, uint64_t cookie) noexc
 }
 
 static void complete(FmLinuxShared *shared, int result, uint64_t frame) {
+    if (shared->operation != FM_LINUX_RESERVE_REQUEST && !fm_ipc_load(&shared->actionOwned)) {
+        requestStorage.clear();
+        shared->request = {};
+        shared->selector.path = {};
+        shared->query.source = {};
+        shared->query.arguments = {};
+    }
     shared->result = -result;
     shared->resultFrame = frame;
     fm_ipc_store(&shared->command, FM_LINUX_COMPLETE);
@@ -478,6 +486,9 @@ extern "C" void fm_after_gui_logic(void *receiver, uintptr_t caller) noexcept {
                                      ? readGameState(shared->gameStateConfig, &shared->cancel, shared->gameState)
                                      : 0;
     }
+    uiObservation.guiWorld = shared->guiEnabled ? &shared->worldConfig : nullptr;
+    uiObservation.guiQuery = shared->guiEnabled ? &shared->query : nullptr;
+    uiObservation.guiRegistry = shared->guiEnabled ? &shared->guiRegistry : nullptr;
     int result;
     if (shared->operation == FM_LINUX_DETACH) {
         // Cleanup must finish even when the requesting session was canceled.
@@ -502,6 +513,18 @@ extern "C" void fm_after_gui_logic(void *receiver, uintptr_t caller) noexcept {
         result = EBUSY;
     } else if (fm_ipc_load(&shared->cancel)) {
         result = ECANCELED;
+    } else if (shared->operation == FM_LINUX_RESERVE_REQUEST) {
+        try {
+            shared->request = requestStorage.reserve(shared->requestSize);
+            result = 0;
+        } catch (const std::bad_alloc &) {
+            result = ENOMEM;
+        } catch (...) {
+            result = EINVAL;
+        }
+    } else if (!requestStorage.owns(shared->selector.path) || !requestStorage.owns(shared->query.source) ||
+               !requestStorage.owns(shared->query.arguments) || !requestStorage.owns(shared->bindingQuery)) {
+        result = EINVAL;
     } else if (shared->operation == FM_LINUX_FRAME) {
         result = shared->gameStateError;
     } else if (shared->operation == FM_LINUX_SET_RENDERING) {
@@ -541,6 +564,16 @@ extern "C" void fm_after_gui_logic(void *receiver, uintptr_t caller) noexcept {
         shared->snapshot = uiObservation.wire();
     } else if (shared->operation == FM_LINUX_CONTROLS) {
         result = snapshotControls(shared->controlsLayout, &shared->cancel, controlsObservation);
+        if (!result) {
+            try {
+                controlsObservation.selection = fm::selectBindings(controlsObservation.controls, shared->bindingQuery);
+                controlsObservation.count = static_cast<uint32_t>(controlsObservation.controls.size());
+            } catch (const std::bad_alloc &) {
+                result = ENOMEM;
+            } catch (...) {
+                result = EINVAL;
+            }
+        }
         shared->controlsSnapshot = controlsObservation.wire();
     } else if (shared->operation == FM_LINUX_WORKER) {
         result = installWorker(shared);
@@ -601,6 +634,20 @@ extern "C" void fm_after_gui_logic(void *receiver, uintptr_t caller) noexcept {
                                   reinterpret_cast<void (*)(void *)>(wire.destroyString)};
             chatRead.emplace();
             result = chatRead->start(config, console, player.player, &shared->cancel, chatObservation);
+            if (!result) {
+                try {
+                    selectChatText(chatObservation.records, shared->chatRead, chatObservation.strings);
+                    for (auto &record : chatObservation.records) {
+                        record.textSize = record.text.size;
+                        record.rawSize = record.raw.size;
+                        record.playerNameSize = record.playerName.size;
+                    }
+                } catch (const std::bad_alloc &) {
+                    result = ENOMEM;
+                } catch (...) {
+                    result = EINVAL;
+                }
+            }
             shared->chatSnapshot = chatObservation.wire();
             publishAction(shared);
         }

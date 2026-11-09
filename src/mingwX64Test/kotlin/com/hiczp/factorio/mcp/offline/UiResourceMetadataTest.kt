@@ -12,7 +12,7 @@ import platform.windows.GetCurrentProcess
 
 class UiResourceMetadataTest {
     @Test
-    fun resolvesStoredNamesAndTooltips() = memScoped {
+    fun resolvesStoredNamesTooltipsAndIterativeTraversal() = memScoped {
         val path = checkNotNull(getenv("FACTORIO_MCP_TEST_EXE")).toKString()
         val image = PeImage(path)
         val process = checkNotNull(GetCurrentProcess())
@@ -20,6 +20,8 @@ class UiResourceMetadataTest {
             (SYMOPT_EXACT_SYMBOLS or SYMOPT_FAIL_CRITICAL_ERRORS or SYMOPT_PUBLICS_ONLY).toUInt()
         )
         check(SymInitializeW(process, null, 0) != 0)
+        var graphLayout: GraphLayout? = null
+        var storedLayout: StoredWidgetLayouts? = null
         try {
             val base =
                 SymLoadModuleExW(process, null, path.wcstr.ptr, null, 0x180000000uL, 0u, null, 0u)
@@ -47,8 +49,17 @@ class UiResourceMetadataTest {
                             val name = info!!.pointed.Name.toKString()
                             if (
                                 name.startsWith("?getNameForSprite@UtilitySprites@@") ||
+                                    name.startsWith("?callRecursively@Widget@agui@@") ||
+                                    name.startsWith("?_Xbad_function_call@std@@") ||
                                     name == "??_R0?AVToolTipCreatorBase@agui@@@8" ||
                                     name == "??_R0?AVPlainToolTipCreator@agui@@@8"
+                                    || name == "??_R0?AVImageWidget@agui@@@8"
+                                    || name == "??_R0?AVImage@agui@@@8"
+                                    || name == "??_R0?AVGuiImage@@@8"
+                                    || name == "??_R0?AVGraph@agui@@@8"
+                                    || name == "??_R0?AVAchievementCard@@@8"
+                                    || name == "??_R0?AVSpaceConnectionWidget@UniverseWidget@@@8"
+                                    || name.startsWith("?indexToPrototype@?\$PrototypeList@VSpaceConnectionPrototype@@")
                             ) {
                                 context!!
                                     .asStableRef<MutableMap<String, MutableList<ULong>>>()
@@ -65,6 +76,30 @@ class UiResourceMetadataTest {
                 reference.dispose()
             }
             val types = DebugTypes(process, base)
+            val images = alloc<FmUiImageLayout>()
+            ImageLayout(types, names).write(images)
+            val graph = alloc<FmUiGraphLayout>()
+            graphLayout = GraphLayout(types, names)
+            graphLayout.write(graph)
+            assertTrue(graph.supported == 1u && graph.sampleCount + 4u <= graph.size && graph.values.stride == 4u)
+            val connection = alloc<FmUiStoredPrototypeLayout>()
+            val card = alloc<FmUiStoredPrototypeLayout>()
+            val achievement = alloc<FmUiAchievementLayout>()
+            storedLayout = StoredWidgetLayouts(types, names,
+                names.filterKeys { it.startsWith("?indexToPrototype@?\$PrototypeList@VSpaceConnectionPrototype@@") }.values.flatten())
+            storedLayout.write(connection, card, achievement)
+            assertTrue(connection.indirect == 1u && card.field + 8u <= card.size && achievement.state != achievement.shownState)
+            println("Graph samples=${graph.sampleCount}, series=${graph.series.first}, values=${graph.values.first}; achievement=${types.enumValues("AchievementState")}")
+            assertTrue(images.supported == 1u && images.image + 8u <= images.widgetSize && images.sprite + 8u <= images.staticSize)
+            val walk = names.filterKeys { it.startsWith("?callRecursively@Widget@agui@@") }.values.flatten().single()
+            val bad = names.filterKeys { it.startsWith("?_Xbad_function_call@std@@") }.values.flatten().single()
+            val rva = (walk - base).toLong()
+            val length = image.functionEnd(rva) - rva
+            val traversal = alloc<Symbols>()
+            WidgetTraversalLayout(types, BinaryView(image.readonlyBytes(rva.toInt(), length.toInt())),
+                walk.toLong(), bad.toLong()).write(traversal)
+            assertTrue(traversal.widgetSize > 0u)
+            assertTrue(traversal.widgetChildren[0].begin != traversal.widgetChildren[1].begin)
             val icons = alloc<FmIconNamesLayout>()
             IconNamesLayout(
                     types,
@@ -88,5 +123,13 @@ class UiResourceMetadataTest {
         } finally {
             SymCleanup(process)
         }
+        // Attachment publishes layouts after its PDB session is retired. Publication must perform no new queries.
+        val graph = alloc<FmUiGraphLayout>()
+        checkNotNull(graphLayout).write(graph)
+        val connection = alloc<FmUiStoredPrototypeLayout>()
+        val card = alloc<FmUiStoredPrototypeLayout>()
+        val achievement = alloc<FmUiAchievementLayout>()
+        checkNotNull(storedLayout).write(connection, card, achievement)
+        assertTrue(graph.supported == 1u && connection.supported == 1u && achievement.state != achievement.shownState)
     }
 }

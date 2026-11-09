@@ -5,136 +5,8 @@ import kotlinx.serialization.json.*
 internal val relatedWorldKinds =
     setOf("inventories", "inventory", "prototypes", "recipes", "technologies", "quickbar")
 
-private val prototypeBaseFields =
-    listOf(
-        "name",
-        "type",
-        "order",
-        "hidden",
-        "localised_name",
-        "localised_description",
-        "group",
-        "subgroup",
-        "hidden_in_factoriopedia",
-        "factoriopedia_description",
-        "factoriopedia_alternative",
-    )
-
-internal val prototypeFields =
-    mapOf(
-        "item" to
-                prototypeBaseFields +
-                listOf("stack_size", "place_result", "fuel_value", "fuel_category", "spoil_result"),
-        "recipe" to
-                prototypeBaseFields +
-                listOf(
-                    "enabled",
-                    "category",
-                    "additional_categories",
-                    "energy",
-                    "ingredients",
-                    "products",
-                    "main_product",
-                    "surface_conditions",
-                    "allow_decomposition",
-                ),
-        "entity" to
-                prototypeBaseFields +
-                listOf(
-                    "items_to_place_this",
-                    "selection_box",
-                    "collision_box",
-                    "tile_width",
-                    "tile_height",
-                    "crafting_categories",
-                    "resource_categories",
-                    "mining_speed",
-                    "mineable_properties",
-                    "fixed_recipe",
-                ),
-        "fluid" to
-                prototypeBaseFields +
-                listOf("default_temperature", "max_temperature", "fuel_value", "heat_capacity"),
-        "technology" to
-                prototypeBaseFields +
-                listOf(
-                    "enabled",
-                    "level",
-                    "max_level",
-                    "prerequisites",
-                    "effects",
-                    "research_unit_count",
-                    "research_unit_count_formula",
-                    "research_unit_energy",
-                    "research_unit_ingredients",
-                    "research_trigger",
-                ),
-        "quality" to
-                (prototypeBaseFields - "factoriopedia_alternative") +
-                listOf("level", "next", "next_probability", "default_multiplier"),
-        "item_group" to listOf("name", "type", "order", "localised_name", "subgroups"),
-        "item_subgroup" to
-                listOf("name", "type", "order", "order_in_recipe", "localised_name", "group"),
-    )
-
-private val recipeFields =
-    listOf(
-        "name",
-        "enabled",
-        "hidden",
-        "category",
-        "additional_categories",
-        "energy",
-        "ingredients",
-        "products",
-        "force",
-        "prototype",
-        "productivity_bonus",
-        "localised_name",
-        "localised_description",
-        "group",
-        "subgroup",
-        "order",
-    )
-private val stackFields =
-    listOf(
-        "name",
-        "type",
-        "count",
-        "quality",
-        "health",
-        "spoil_percent",
-        "spoil_tick",
-        "prototype",
-        "is_module",
-        "ammo",
-        "durability",
-    )
-
-private val technologyFields =
-    listOf(
-        "name",
-        "enabled",
-        "researched",
-        "level",
-        "saved_progress",
-        "prerequisites",
-        "successors",
-        "research_unit_count",
-        "research_unit_count_formula",
-        "research_unit_energy",
-        "research_unit_ingredients",
-        "force",
-        "prototype",
-        "upgrade",
-        "visible_when_disabled",
-        "localised_name",
-        "localised_description",
-        "order",
-    )
-
 internal fun parseRelatedWorldQuery(args: JsonObject): WorldQuery {
-    require(args.keys.all { it in setOf("selection", "fields", "limit", "offset", "surface") }) {
+    require(args.keys.all { it in setOf("selection", "fields", "limit", "offset", "surface", "depth", "reads") }) {
         "Unknown world query argument"
     }
     val selection = args.getValue("selection").jsonObject
@@ -143,14 +15,13 @@ internal fun parseRelatedWorldQuery(args: JsonObject): WorldQuery {
     val inventory = kind == "inventory" || kind == "inventories"
     val allowedSelection =
         if (inventory) setOf("kind", "owner", "inventory")
-        else setOf("kind", "type", "names", "search", "product", "ingredient")
+        else setOf("kind", "type", "names", "search", "product", "ingredient", "force")
     require(selection.keys.all { it in allowedSelection }) { "Unknown $kind selection field" }
-    val limit = args["limit"]?.intArgument() ?: 64
-    require(limit > 0) { "limit must be positive" }
+    val limit = args["limit"]?.intArgument() ?: if (inventory || "names" in selection) null else 64
+    require(limit == null || limit > 0) { "limit must be positive" }
     val offset = args["offset"]?.intArgument() ?: 0
     require(offset >= 0) { "offset must be nonnegative" }
     var defaults: List<String>
-    val allowed: List<String>
     if (inventory) {
         val owner = selection["owner"]?.jsonObject ?: buildJsonObject { put("kind", "player") }
         require(owner["kind"]?.stringArgument() in setOf("player", "entities") + localEntityKinds) {
@@ -164,32 +35,31 @@ internal fun parseRelatedWorldQuery(args: JsonObject): WorldQuery {
             }
         )
         if (kind == "inventories") {
-            require("inventory" !in selection && "fields" !in args) {
-                "Inventory discovery does not accept inventory or fields"
+            require("inventory" !in selection && "fields" !in args && "depth" !in args) {
+                "Inventory discovery does not accept inventory, fields or depth"
             }
             defaults = emptyList()
         } else {
             val name = selection["inventory"]?.stringArgument() ?: "main"
             require(
-                name.length in 1..128 && name.all { it in 'a'..'z' || it in '0'..'9' || it == '_' }
+                name.isNotEmpty() && '\u0000' !in name
             ) {
                 "Use main or an inventory name returned by discovery"
             }
             defaults = listOf("name", "count", "quality", "health", "spoil_percent")
         }
-        allowed = stackFields
     } else {
         require("surface" !in args) { "Catalog queries do not select a surface" }
         if (kind == "recipes" || kind == "technologies") {
             require("type" !in selection) { "$kind selects the local force's live objects" }
-            allowed = if (kind == "recipes") recipeFields else technologyFields
+            selection["force"]?.let(::validateSurfaceSelector)
             defaults =
                 if (kind == "recipes")
                     listOf(
                         "name",
                         "enabled",
                         "hidden",
-                        "category",
+                        "categories",
                         "energy",
                         "ingredients",
                         "products",
@@ -205,11 +75,12 @@ internal fun parseRelatedWorldQuery(args: JsonObject): WorldQuery {
                     )
         } else {
             val type = selection.getValue("type").stringArgument()
-            allowed = requireNotNull(prototypeFields[type]) { "Unsupported prototype type: $type" }
+            require(type.matches(nativeMemberPattern)) { "Invalid prototype catalog name" }
+            require("force" !in selection) { "force requires recipes or technologies" }
             defaults =
                 when (type) {
                     "recipe" ->
-                        listOf("name", "category", "energy", "ingredients", "products", "enabled")
+                        listOf("name", "categories", "energy", "ingredients", "products", "enabled")
 
                     "item" -> listOf("name", "type", "stack_size", "place_result")
                     "entity" -> listOf("name", "type", "items_to_place_this", "selection_box")
@@ -225,7 +96,8 @@ internal fun parseRelatedWorldQuery(args: JsonObject): WorldQuery {
 
                     "item_group" -> listOf("name", "type", "order", "localised_name", "subgroups")
                     "item_subgroup" -> listOf("name", "type", "order", "localised_name", "group")
-                    else -> listOf("name", "level", "next", "next_probability")
+                    "quality" -> listOf("name", "level", "next", "next_probability")
+                    else -> listOf("name", "type", "localised_name")
                 }
         }
         selection["names"]?.let {
@@ -233,15 +105,15 @@ internal fun parseRelatedWorldQuery(args: JsonObject): WorldQuery {
             require(
                 names.isNotEmpty() &&
                         names.distinct().size == names.size &&
-                        names.all { name -> name.length in 1..256 && '\u0000' !in name }
+                        names.all { name -> name.isNotEmpty() && '\u0000' !in name }
             ) {
                 "names requires distinct nonempty prototype names"
             }
         }
         selection["search"]?.let {
             val search = it.stringArgument()
-            require(search.length in 1..128 && '\u0000' !in search) {
-                "search requires 1..128 characters"
+            require(search.isNotEmpty() && '\u0000' !in search) {
+                "search requires a nonempty string without NUL"
             }
         }
         for (field in listOf("product", "ingredient")) selection[field]?.let { value ->
@@ -259,62 +131,24 @@ internal fun parseRelatedWorldQuery(args: JsonObject): WorldQuery {
                 "$field requires type:item|fluid and name"
             }
             val name = filter.getValue("name").stringArgument()
-            require(name.length in 1..256 && '\u0000' !in name) { "Invalid $field name" }
+            require(name.isNotEmpty() && '\u0000' !in name) { "Invalid $field name" }
         }
     }
-    val fields = args["fields"]?.jsonArray?.map { it.stringArgument() } ?: defaults
-    if (kind != "inventories")
-        require(
-            fields.isNotEmpty() &&
-                    fields.distinct().size == fields.size &&
-                    fields.all { it in allowed }
-        ) {
-            "Unsupported $kind fields; choose from ${allowed.joinToString()}"
-        }
+    val fields = args["fields"]?.let(::nativeFields) ?: defaults
     return WorldQuery(
         buildJsonObject {
             args.forEach { (key, value) -> put(key, value) }
-            put("limit", limit)
+            limit?.let { put("limit", it) }
             put("offset", offset)
+            if (kind != "inventories") put("depth", observationDepth(args["depth"]?.intArgument()))
+            args["reads"]?.let { put("reads", observationReads(it)) }
             putJsonArray("fields") { fields.forEach { add(it) } }
+            put("fields_explicit", "fields" in args)
         }
     )
 }
 
-internal fun relatedSelectionProperties() = buildJsonObject {
-    putJsonObject("owner") {
-        put("type", "object")
-        put(
-            "description",
-            "inventory/inventories only. Defaults to {kind:'player'}. player/character/vehicle/physical_vehicle owners accept optional player name/index; character follows the physical character even in remote view. Missing references are errors. Otherwise use an entities selector resolving exactly one entity.",
-        )
-    }
-    putJsonObject("inventory") {
-        put("type", "string")
-        put(
-            "description",
-            "For inventory only. Defaults to main (character/player main inventory); otherwise use a name returned by inventories. Rejects names belonging to a different owner inventory.",
-        )
-    }
-    putJsonObject("names") {
-        put("type", "array")
-        put("minItems", 1)
-        put("uniqueItems", true)
-        putJsonObject("items") { put("type", "string") }
-        put(
-            "description",
-            "Exact names for prototypes or force recipes/technologies (missing names reported), or players (matches only).",
-        )
-    }
-    putJsonObject("search") {
-        put("type", "string")
-        put("minLength", 1)
-        put("maxLength", 128)
-        put(
-            "description",
-            "Case-insensitive substring of internal names for catalogs; may combine with names.",
-        )
-    }
+internal fun quickbarSelectionProperties() = buildJsonObject {
     putJsonObject("slots") {
         put("type", "array")
         put("minItems", 1)
@@ -346,49 +180,17 @@ internal fun relatedSelectionProperties() = buildJsonObject {
         putJsonObject("items") {
             put("type", "integer")
             put("minimum", 1)
-            put("maximum", 65536)
+            put("maximum", 4294967295L)
         }
         put(
             "description",
             "quickbar only. One-based screen-row indices returning active page numbers. Per-index nil/error results remain explicit.",
         )
     }
-    for (name in listOf("product", "ingredient")) putJsonObject(name) {
-        put("type", "object")
-        put("additionalProperties", false)
-        putJsonArray("required") {
-            add("type")
-            add("name")
-        }
-        putJsonObject("properties") {
-            putJsonObject("type") {
-                put("type", "string")
-                putJsonArray("enum") {
-                    add("item")
-                    add("fluid")
-                }
-            }
-            putJsonObject("name") {
-                put("type", "string")
-                put("minLength", 1)
-                put("maxLength", 256)
-            }
-        }
-        put(
-            "description",
-            "Recipes or recipe prototypes only: match at least one raw $name entry by exact type/name. Combines with other filters. No assumption that recipe and product names match; no craftability inference.",
-        )
-    }
 }
 
-internal fun relatedFieldsDescription(): String =
-    "Inventory stack fields: ${stackFields.joinToString()}. Force recipes: ${recipeFields.joinToString()}. Force technologies: ${technologyFields.joinToString()}. Prototype fields: " +
-            prototypeFields.entries.joinToString("; ") { (kind, fields) ->
-                "$kind: ${fields.joinToString()}"
-            }
-
 private fun parseQuickbarQuery(args: JsonObject, selection: JsonObject): WorldQuery {
-    require(args.keys == setOf("selection")) { "quickbar accepts only selection" }
+    require(args.keys.all { it in setOf("selection", "depth") }) { "quickbar accepts selection and optional depth" }
     require(selection.keys.all { it in setOf("kind", "slots", "screen_pages") }) {
         "Unknown quickbar field"
     }
@@ -411,19 +213,23 @@ private fun parseQuickbarQuery(args: JsonObject, selection: JsonObject): WorldQu
         }
     }
     selection["screen_pages"]?.let { value ->
-        val indices = value.jsonArray.map { it.intArgument() }
+        val indices = value.jsonArray.map { index ->
+            val number = index.jsonPrimitive
+            require(!number.isString) { "screen_pages requires unsigned API indices" }
+            requireNotNull(number.longOrNull) { "screen_pages requires integer indices" }
+        }
         require(
             indices.isNotEmpty() &&
                     indices.distinct().size == indices.size &&
-                    indices.all { it in 1..65536 }
+                    indices.all { it in 1..4294967295L }
         ) {
-            "screen_pages requires distinct indices in 1..65536"
+            "screen_pages requires distinct unsigned 32-bit indices"
         }
     }
     return WorldQuery(
         buildJsonObject {
             put("selection", selection)
-            put("limit", selection["slots"]?.jsonArray?.size ?: 0)
+            put("depth", observationDepth(args["depth"]?.intArgument()))
             putJsonArray("fields") {}
         }
     )

@@ -30,6 +30,19 @@ internal class McpHttpClient(private val url: String) {
     private var session: String? = null
     private var sequence = 0
 
+    suspend fun rawPost(payload: String): Pair<Int, String> {
+        val response = withCioTestConnection(address) {
+            client.post(url) {
+                contentType(ContentType.Application.Json)
+                header(HttpHeaders.Accept, "application/json, text/event-stream")
+                header("MCP-Protocol-Version", "2025-11-25")
+                session?.let { header("Mcp-Session-Id", it) }
+                setBody(payload)
+            }
+        }
+        return response.status.value to response.bodyAsText()
+    }
+
     suspend fun initialize() {
         request(
             "initialize",
@@ -163,3 +176,8 @@ internal fun JsonObject.toolValue(): JsonObject {
         )
         .jsonObject
 }
+
+internal suspend fun McpHttpClient.worldQuery(
+    query: JsonObject = buildJsonObject {},
+    requestId: Int? = null,
+): JsonObject = tool("world_query", buildJsonObject { put("query", query) }, requestId)

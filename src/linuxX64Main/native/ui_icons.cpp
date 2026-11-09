@@ -1,5 +1,6 @@
 #include "ui_icons.h"
 #include "memory_read.h"
+#include "native_type.h"
 #include "ui_stored_text.h"
 #include <algorithm>
 #include <cerrno>
@@ -58,9 +59,29 @@ int UiIcons::collect(uintptr_t widget, FmLinuxUiNode &node, const FmLinuxIconNam
     node.iconNormal = observe(normal);
     node.iconHovered = observe(hovered);
     node.iconDisabled = observe(disabled);
-    if (!namesLayout || !namesLayout->lookup || !storage)
+    const uintptr_t sprites[] = {normal, hovered, disabled};
+    for (size_t i = 0; i < 3; ++i) {
+        bool truncated = false;
+        if (const int error = name(sprites[i], namesLayout, storage, node.iconNames[i], truncated))
+            return error;
+        if (truncated)
+            node.iconNameTruncated |= 1u << i;
+    }
+    return 0;
+}
+
+int UiIcons::name(uintptr_t sprite, const FmLinuxIconNamesLayout *layout, UiSnapshot *storage,
+                  FmLinuxObservationBuffer &output, bool &truncated) {
+    output = {};
+    truncated = false;
+    if (!sprite || !layout || !layout->lookup || !storage)
         return 0;
-    const auto &nl = *namesLayout;
+    if (const auto found = names.find(sprite); found != names.end()) {
+        output = found->second.first;
+        truncated = found->second.second;
+        return 0;
+    }
+    const auto &nl = *layout;
     if (!nl.global || !nl.destroy || !nl.stringSize || nl.stringSize > 256 ||
         !fm::member(nl.stringData, 8, nl.stringSize) || !fm::member(nl.stringLength, 8, nl.stringSize))
         return EINVAL;
@@ -70,32 +91,68 @@ int UiIcons::collect(uintptr_t widget, FmLinuxUiNode &node, const FmLinuxIconNam
         return EFAULT;
     if (!registry)
         return 0;
-    const uintptr_t sprites[] = {normal, hovered, disabled};
-    for (size_t i = 0; i < 3; ++i) {
-        if (!sprites[i])
-            continue;
-        auto found = names.find(sprites[i]);
-        if (found == names.end()) {
-            alignas(16) unsigned char result[256]{};
-            reinterpret_cast<void (*)(void *, uintptr_t, uintptr_t)>(nl.lookup)(result, registry, sprites[i]);
-            auto destroy = reinterpret_cast<void (*)(void *)>(nl.destroy);
-            std::pair<FmLinuxObservationBuffer, bool> copy{};
-            bool copied = false;
-            try {
-                copied = copyStoredText(reinterpret_cast<uintptr_t>(result), nl.stringData, nl.stringLength,
-                                        *storage, copy.first, copy.second);
-            } catch (...) {
-                destroy(result);
-                throw;
-            }
-            destroy(result);
-            if (!copied)
-                return EFAULT;
-            found = names.emplace(sprites[i], copy).first;
-        }
-        node.iconNames[i] = found->second.first;
-        if (found->second.second)
-            node.iconNameTruncated |= 1u << i;
+    alignas(16) unsigned char result[256]{};
+    reinterpret_cast<void (*)(void *, uintptr_t, uintptr_t)>(nl.lookup)(result, registry, sprite);
+    auto destroy = reinterpret_cast<void (*)(void *)>(nl.destroy);
+    bool copied = false;
+    try {
+        copied = copyStoredText(reinterpret_cast<uintptr_t>(result), nl.stringData, nl.stringLength,
+                                *storage, output, truncated);
+    } catch (...) {
+        destroy(result);
+        throw;
+    }
+    destroy(result);
+    if (!copied)
+        return EFAULT;
+    names.emplace(sprite, std::make_pair(output, truncated));
+    return 0;
+}
+
+int UiIcons::collectImage(uintptr_t widget, uintptr_t widgetType, const FmUiImageLayout &images, FmLinuxUiNode &node,
+                          const FmLinuxIconNamesLayout &names, UiSnapshot &storage) {
+    if (!validUiImageLayout(images))
+        return EINVAL;
+    if (!images.supported)
+        return 0;
+    if (!widgetType || !fm::addressRange(widget, 8))
+        return EFAULT;
+    auto cast = [](uintptr_t object, uintptr_t source, uintptr_t target) {
+        return reinterpret_cast<uintptr_t>(abi::__dynamic_cast(reinterpret_cast<const void *>(object),
+            reinterpret_cast<const abi::__class_type_info *>(source),
+            reinterpret_cast<const abi::__class_type_info *>(target), -1));
+    };
+    const auto receiver = cast(widget, widgetType, images.type);
+    if (!receiver)
+        return 0;
+    if (!fm::addressRange(receiver, images.widgetSize))
+        return EFAULT;
+    auto &output = node.image;
+    output.status = 1;
+    uintptr_t image;
+    if (!fm::read(receiver + images.image, image))
+        return EFAULT;
+    if (!image)
+        return 0;
+    output.status = 2;
+    FmLinuxObservationBuffer type{};
+    uint32_t size = 0;
+    bool truncated = false;
+    if (const int error = fm::readTypeName(image, type, size, truncated, storage.strings))
+        return error;
+    output.type = {type.address, type.size};
+    if (const auto plain = cast(image, images.imageType, images.staticType)) {
+        // Observe the stored static sprite, never an animation's selected frame.
+        uintptr_t sprite;
+        if (!fm::addressRange(plain, images.staticSize) || !fm::read(plain + images.sprite, sprite))
+            return EFAULT;
+        output.spriteObserved = 1;
+        output.reference = observe(sprite);
+        FmLinuxObservationBuffer copied{};
+        if (const int error = name(sprite, &names, &storage, copied, truncated))
+            return error;
+        output.name = {copied.address, copied.size};
+        output.nameTruncated = truncated;
     }
     return 0;
 }

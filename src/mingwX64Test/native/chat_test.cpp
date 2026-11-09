@@ -162,19 +162,19 @@ int main() {
     assert(result->count == 5000 && result->totals[0] == 5000);
     assert(storage.chatRecords[0].tick == 4999 && storage.chatRecords[4999].tick == 0);
     assert(storage.chatRecords[0].playerIndex == 42 && observationText(storage.chatRecords[0].raw) == "message");
-    entries.back()->value.text = std::string(FM_OBSERVATION_TEXT_BYTES + 7, 'a');
+    entries.back()->value.text = std::string((16 * 1024 * 1024) + 7, 'a');
     readChat(adapter, &player, *result, storage);
-    assert(storage.chatRecords[0].truncated == 3 && storage.chatRecords[0].text.size == FM_OBSERVATION_TEXT_BYTES);
+    assert(storage.chatRecords[0].truncated == 0 && storage.chatRecords[0].text.size == entries.back()->value.text.size());
     entries.back()->value.text = "[item=iron-plate] body";
     entries.back()->value.playerName = "[color=red]sender[/color]";
     readChat(adapter, &player, *result, storage);
     assert(storage.chatRecords[0].truncated == 0);
     assert(observationText(storage.chatRecords[0].text) == "[item=iron-plate] body");
     assert(observationText(storage.chatRecords[0].playerName) == "[color=red]sender[/color]");
-    entries.back()->value.playerName = std::string(FM_OBSERVATION_TEXT_BYTES - 1, 'a') + "\xe4\xb8\xad";
+    entries.back()->value.playerName = std::string((16 * 1024 * 1024) - 1, 'a') + "\xe4\xb8\xad";
     readChat(adapter, &player, *result, storage);
-    assert(storage.chatRecords[0].truncated == 4 &&
-           storage.chatRecords[0].playerName.size == FM_OBSERVATION_TEXT_BYTES - 1);
+    assert(storage.chatRecords[0].truncated == 0 &&
+           storage.chatRecords[0].playerName.size == entries.back()->value.playerName.size());
     volatile LONG cancel = 1;
     try {
         readChat(adapter, &player, *result, storage, &cancel);

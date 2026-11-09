@@ -50,15 +50,13 @@ int copyString(uintptr_t object, const FmLinuxChatReadLayout &l, FmLinuxObservat
         return EFAULT;
     if (size && !fm::addressRange(data, size))
         return EFAULT;
-    auto count = static_cast<size_t>(std::min(size, uint64_t(FM_LINUX_CHAT_RECORD_BYTES)));
-    truncated = count < size;
-    auto &copied = snapshot.strings.emplace_back(count + (truncated ? 1 : 0));
+    if (size > INT32_MAX)
+        return EOVERFLOW;
+    const auto count = static_cast<size_t>(size);
+    truncated = false;
+    auto &copied = snapshot.strings.emplace_back(count);
     if (!copied.empty() && !fm::readBytes(data, copied.data(), copied.size()))
         return EFAULT;
-    if (truncated)
-        while (count && (static_cast<unsigned char>(copied[count]) & 0xc0) == 0x80)
-            --count;
-    copied.resize(count);
     output = observationBuffer(copied);
     written = static_cast<uint32_t>(count);
     return 0;

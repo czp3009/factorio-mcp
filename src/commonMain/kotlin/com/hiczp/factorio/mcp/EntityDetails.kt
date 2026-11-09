@@ -46,7 +46,7 @@ internal val entityDetailsLua =
             return {recipe=identity(recipe),quality=quality and identity(quality) or nil,
               quality_availability=quality and "present" or "nil"}
           elseif name=="fluids" then
-            return project(entity.get_fluid_contents(),0)
+            return project(entity.get_fluid_contents())
           elseif name=="filters" then
             local count=entity.filter_slot_count
             if count==nil then return nil end
@@ -55,14 +55,14 @@ internal val entityDetailsLua =
               local valid,mode=pcall(function() return entity[field] end)
               if not valid then result.read_status[field]={status="error",message=tostring(mode)}
               elseif mode==nil then result.read_status[field]={status="nil"}
-              else result.attributes[field]=project(mode,0) end
+              else result.attributes[field]=project(mode) end
             end
             for index=1,count do
               local slot={index=index}
               local valid,filter=pcall(function() return entity.get_filter(index) end)
               if not valid then slot.read_status={status="error",message=tostring(filter)}
               elseif filter==nil then slot.read_status={status="nil"}
-              else slot.filter=project(filter,0) end
+              else slot.filter=project(filter) end
               result.slots[#result.slots+1]=slot
             end
             return result

@@ -3,9 +3,8 @@
 #include <stdint.h>
 #include "lua_state.h"
 #include "observation_buffer.h"
+#include "../../nativeMain/native/request_storage.h"
 
-#define FM_LINUX_LUA_SOURCE 131072
-#define FM_LINUX_QUERY_ARGUMENTS (16 * 1024 * 1024)
 #define FM_LINUX_QUERY_ERROR 1024
 
 // All addresses require matching executable, live code and System V ABI validation before use.
@@ -22,11 +21,9 @@ typedef struct FmLinuxLuaApi {
 } FmLinuxLuaApi;
 
 typedef struct FmLinuxLuaQuery {
-    uint32_t sourceSize;
-    uint32_t argumentsSize;
     uint32_t includeViewport;
-    char source[FM_LINUX_LUA_SOURCE];
-    char arguments[FM_LINUX_QUERY_ARGUMENTS];
+    FmRequestBuffer source;
+    FmRequestBuffer arguments;
 } FmLinuxLuaQuery;
 
 typedef struct FmLinuxLuaResult {
@@ -38,6 +35,7 @@ typedef struct FmLinuxLuaResult {
 
 #ifdef __cplusplus
 #include <algorithm>
+#include <string_view>
 struct LuaResult {
     uint32_t size = 0, errorSize = 0;
     std::vector<char> text;
@@ -66,5 +64,5 @@ struct QueryViewport {
 // This adapter checks state identity, protected ownership and stack progress/capacity throughout execution.
 // The player index is already the native-observed index converted to Lua's one-based numbering.
 int queryLua(void *state, const FmLinuxLuaApi &api, const FmLinuxLuaStateLayout &layout, const FmLinuxLuaQuery &query, double playerIndex,
-             const QueryViewport &viewport, const uint32_t *cancel, LuaResult &result);
+             const QueryViewport &viewport, const uint32_t *cancel, LuaResult &result, std::string_view uiIndices = {});
 #endif

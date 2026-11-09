@@ -2,6 +2,8 @@ local function record(kind, player, data)
   log("UI_ACTION_ACCEPTANCE " .. helpers.table_to_json{kind=kind,tick=game.tick,player=player and player.index,admin=player and player.admin,data=data})
 end
 
+local query_expansion=require("query-expansion")
+
 local function build(player)
   if player.gui.screen.mcp_actions then player.gui.screen.mcp_actions.destroy() end
   local frame=player.gui.screen.add{type="frame",name="mcp_actions",caption="MCP action fixture",direction="vertical"}
@@ -57,6 +59,7 @@ local function build(player)
 end
 
 script.on_init(function()
+  query_expansion.create(record)
   game.surfaces[1].request_to_generate_chunks({0,0},1)
   game.surfaces[1].force_generate_chunk_requests()
   game.forces.player.technologies["electronics"].researched=true
@@ -146,6 +149,7 @@ script.on_event(defines.events.on_player_created,function(event)
     end
     record("train_fixture",player,{unit=storage.train_locomotive.unit_number,position=storage.train_locomotive.position,surface=storage.train_surface.name})
   end
+  query_expansion.prepare_player(player,record)
   record("world_fixture",player,{contents=player.get_main_inventory().get_contents(),chest=storage.query_chest.unit_number,
     empty_chest=storage.empty_chest.unit_number,chest_contents=storage.query_chest.get_inventory(defines.inventory.chest).get_contents()})
   player.gui.top.add{type="button",name="mcp_top",caption="MCP top tool"}

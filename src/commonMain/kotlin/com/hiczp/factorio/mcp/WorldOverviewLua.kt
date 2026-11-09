@@ -14,14 +14,23 @@ internal val worldOverviewLua =
       extra.render_mode=player.render_mode
       extra.observation="live_world_entities"
       extra.entity_assignment="collision_in_area"
-      local found=surface.find_entities_filtered{area=area,name=selection.name,type=selection.type,limit=limit+1}
+      local found=entities({area=area,name=selection.name,type=selection.type,filters=selection.filters},limit+1)
       candidates=#found
       truncated=#found>limit
       for index=1,math.min(#found,limit) do objects[#objects+1]=describe(found[index]) end
     else
     local cell=args.cell_size or math.max(32,math.ceil(width/16),math.ceil(height/16))
     local columns,rows=math.ceil(width/cell),math.ceil(height/cell)
-    assert(columns*rows<=2147483647, "Overview cell count exceeds integer representation")
+    local start=args.start_cell or {row=0,column=0}
+    assert(start.row<rows and start.column<columns,"Grid continuation is outside the selected grid")
+    local first=start.row*columns+start.column
+    local finish=math.min(columns*rows,first+args.cell_limit)
+    extra.total_cells=columns*rows
+    extra.start_cell=start
+    if finish<columns*rows then
+      extra.next_cell={row=math.floor(finish/columns),column=finish%columns}
+      truncated=true
+    end
     extra.area=area
     extra.cell_size=cell
     extra.columns=columns
@@ -58,8 +67,8 @@ internal val worldOverviewLua =
       end
       return table.concat(parts)
     end
-    for row=0,rows-1 do
-      for column=0,columns-1 do
+    for cell_index=first,finish-1 do
+        local row,column=math.floor(cell_index/columns),cell_index%columns
         local x,y=left+column*cell,top+row*cell
         local x2,y2=math.min(right,x+cell),math.min(bottom,y+cell)
         local bounds={left_top={x=x,y=y},right_bottom={x=x2,y=y2}}
@@ -82,7 +91,7 @@ internal val worldOverviewLua =
         end
         do
           local maximum=limit
-          local found=surface.find_entities_filtered{area=bounds,name=selection.name,type=selection.type,limit=maximum+1}
+          local found=entities({area=bounds,name=selection.name,type=selection.type,filters=selection.filters},maximum+1)
           record.candidates_observed=#found
           candidates=candidates+#found
           record.truncated=#found>maximum
@@ -94,11 +103,15 @@ internal val worldOverviewLua =
             if p.x>=x and p.x<x2 and p.y>=y and p.y<y2 then
               local values,statuses={},{}
               for _,field in ipairs(requested) do
-                local ok,value=pcall(function() return project(entity[field],0) end)
+                local ok,value=pcall(read_property,entity,field)
                 if not ok then statuses[field]={status="error",message=tostring(value)}
                 elseif value==nil then statuses[field]={status="nil"}
                 elseif type(value)=="number" and not finite(value) then statuses[field]={status="non_finite"}
-                else values[field]=value end
+                else
+                  ok,value=pcall(project,value)
+                  if ok then values[field]=value
+                  else statuses[field]={status="error",message=tostring(value)} end
+                end
               end
               local attributes,read_status={},{}
               for _,field in ipairs(group_fields) do
@@ -149,7 +162,6 @@ internal val worldOverviewLua =
         end
         truncated=truncated or record.truncated
         objects[#objects+1]=record
-      end
     end
     end
     """

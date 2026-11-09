@@ -57,31 +57,27 @@ internal data class ControlSnapshot(
 }
 
 internal fun GameSnapshot.bindingsJson(
-    ids: Set<String>?,
-    search: String?,
-    offset: Int,
-    limit: Int,
+    request: BindingReadRequest,
 ): JsonObject {
-    val matches =
-        controls
-            .filter { control ->
-                (ids == null || control.id in ids) &&
-                        (search == null || control.id.contains(search, ignoreCase = true))
-            }
-            .sortedBy { it.id }
+    val page = checkNotNull(bindingPage) { "Native control selection metadata is absent" }
+    require(page.matchedCount in controls.size..registryCount && page.presence.size == (request.ids?.size ?: 0))
+    require(controls.size <= (request.limit ?: Int.MAX_VALUE))
+    val expectedSize = minOf((page.matchedCount.toLong() - request.offset).coerceAtLeast(0),
+        (request.limit ?: Int.MAX_VALUE).toLong()).toInt()
+    require(controls.size == expectedSize && page.hasMore == (request.offset.toLong() + controls.size < page.matchedCount))
     return buildJsonObject {
         put("state", state)
         put("ui_frame", frame)
         put("registry_count", registryCount)
         put("snapshot_complete", !truncated)
-        put("matched_count", matches.size)
-        put("offset", offset)
-        val page = matches.drop(offset).take(limit)
-        if (offset + page.size < matches.size) put("next_offset", offset + page.size)
-        putJsonArray("controls") { page.forEach { add(it.json()) } }
-        if (ids != null)
+        put("matched_count", page.matchedCount)
+        put("offset", request.offset)
+        put("has_more", page.hasMore)
+        if (page.hasMore) put("next_offset", request.offset + controls.size)
+        putJsonArray("controls") { controls.forEach { add(it.json()) } }
+        if (request.ids != null)
             putJsonArray(if (truncated) "unobserved_ids" else "missing_ids") {
-                (ids - controls.map { it.id }.toSet()).sorted().forEach { add(it) }
+                request.ids.filterIndexed { index, _ -> !page.presence[index] }.sorted().forEach { add(it) }
             }
     }
 }

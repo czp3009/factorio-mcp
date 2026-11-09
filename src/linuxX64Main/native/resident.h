@@ -49,7 +49,8 @@ enum FmLinuxOperation {
     FM_LINUX_INPUT_CANCEL = 16,
     FM_LINUX_INPUT_PREPARE = 17,
     FM_LINUX_INPUT_DISCARD = 18,
-    FM_LINUX_SET_RENDERING = 19
+    FM_LINUX_SET_RENDERING = 19,
+    FM_LINUX_RESERVE_REQUEST = 20
 };
 
 enum { FM_LINUX_SCREENSHOT_SUSPENDED = FM_RENDERING_SUSPENDED };
@@ -105,8 +106,12 @@ typedef struct FmLinuxShared {
     FmLinuxHookConfig config;
     FmLinuxUiLayout ui;
     uint32_t nodeLimit;
+    uint32_t requestSize;
+    FmRequestBuffer request;
     FmLinuxUiSelector selector;
     FmLinuxUiSnapshot snapshot;
+    FmGuiRegistryLayout guiRegistry;
+    uint32_t guiEnabled;
     FmLinuxWorldQueryConfig worldConfig;
     FmLinuxLuaQuery query;
     FmLinuxLuaResult queryResult;
@@ -119,6 +124,7 @@ typedef struct FmLinuxShared {
     FmLinuxUiKeyRequest keyRequest;
     FmLinuxControlsLayout controlsLayout;
     FmLinuxControlsSnapshot controlsSnapshot;
+    FmRequestBuffer bindingQuery;
     FmLinuxInputContextConfig inputContextConfig;
     FmLinuxInputContextSnapshot inputContextSnapshot;
     FmLinuxRetirementConfig retirementConfig;
@@ -132,6 +138,7 @@ typedef struct FmLinuxShared {
     uint32_t inputOwned;
     FmLinuxChatConfig chatConfig;
     FmLinuxChatRequest chatRequest;
+    FmChatReadOptions chatRead;
     FmLinuxChatProgress chatProgress;
     FmLinuxChatReadConfig chatReadConfig;
     FmLinuxChatSnapshot chatSnapshot;

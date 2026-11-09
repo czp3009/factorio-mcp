@@ -30,7 +30,18 @@ script.on_event(defines.events.on_player_created, function(event)
   player.character_inventory_slots_bonus = 2000
   local frame = player.gui.screen.add{type = "frame", name = "factorio_mcp_query_capacity", caption = "MCP query capacity fixture", direction = "vertical"}
   frame.visible = false
-  frame.tags = {payload = string.rep("x", 17 * 1024 * 1024 + 7)}
+  local observed = {object_name = "ordinary-tag", empty = {}, branch = {child = {value = "retained"}}, entries = {}}
+  for index = 1, 1000 do
+    observed.entries[index] = {index = index}
+  end
+  local chain = {}
+  local current = chain
+  for index = 1, 24 do
+    current.child = {}
+    current = current.child
+  end
+  observed.chain = chain
+  frame.tags = {payload = string.rep("x", 17 * 1024 * 1024 + 7), observation = observed}
   for index = 1, 5000 do
     frame.add{type = "label", name = "entry_" .. index, caption = "MCP bulk label " .. index}
   end

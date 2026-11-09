@@ -2,6 +2,8 @@
 
 package com.hiczp.factorio.mcp.acceptance
 
+import com.hiczp.factorio.mcp.worldQuery
+
 import com.hiczp.factorio.mcp.McpHttpClient
 import com.hiczp.factorio.mcp.toolValue
 import com.hiczp.factorio.mcp.uiSelector
@@ -108,7 +110,7 @@ class HttpAcceptanceTest {
                 }
                 assertTrue(
                     client
-                        .tool("world_query", playerQuery)
+                        .worldQuery(playerQuery)
                         .getValue("isError")
                         .jsonPrimitive
                         .boolean
@@ -144,7 +146,7 @@ class HttpAcceptanceTest {
                         other.tool("status").toolValue().getValue("pid").jsonPrimitive.int,
                     )
                     val full = client.tool("ui_read").toolValue()
-                    val world = client.tool("world_query", playerQuery)
+                    val world = client.worldQuery(playerQuery)
                     if (full["state"]!!.jsonPrimitive.content == "main_menu") {
                         assertTrue(world["isError"]!!.jsonPrimitive.boolean)
                     } else {
@@ -232,12 +234,12 @@ class HttpAcceptanceTest {
                         }
                     )
                     val bounded =
-                        client.tool("ui_read", buildJsonObject { put("max_nodes", 1) }).toolValue()
+                        client.tool("ui_read", buildJsonObject { put("max_depth", 0) }).toolValue()
                     assertEquals(1, bounded.getValue("nodes").jsonArray.size)
                     assertTrue(bounded.getValue("truncated").jsonPrimitive.boolean)
                     assertTrue(
                         client
-                            .tool("ui_read", buildJsonObject { put("max_nodes", 0) })
+                            .tool("ui_read", buildJsonObject { put("max_depth", -1) })
                             .getValue("isError")
                             .jsonPrimitive
                             .boolean

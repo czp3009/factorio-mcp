@@ -5,14 +5,13 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertTrue
 
 class WidgetTextTest {
     private fun node(text: String?) = WidgetSnapshot(0, "agui::Widget", text, true, 0, 0, 1, 1, false)
 
     @Test
-    fun observedEmptyTextRetainsItsExistingProjection() {
-        assertTrue(buildJsonObject { widgetText(node("")) }.isEmpty())
+    fun observedEmptyTextRemainsAnExplicitEmptyString() {
+        assertEquals("", buildJsonObject { widgetText(node("")) }.getValue("text").jsonPrimitive.content)
     }
 
     @Test

@@ -2,6 +2,8 @@
 
 package com.hiczp.factorio.mcp.acceptance
 
+import com.hiczp.factorio.mcp.worldQuery
+
 import com.hiczp.factorio.mcp.McpHttpClient
 import com.hiczp.factorio.mcp.toolValue
 import kotlinx.cinterop.toKString
@@ -44,7 +46,7 @@ class ExpandedQueryAcceptanceTest {
         val client = McpHttpClient(checkNotNull(environment("FACTORIO_MCP_ACCEPTANCE_URL")))
         val pid = checkNotNull(environment("FACTORIO_MCP_TEST_PID")).toInt()
 
-        suspend fun query(request: String) = client.tool("world_query", json(request)).toolValue()
+        suspend fun query(request: String) = client.worldQuery(json(request)).toolValue()
 
         suspend fun inspect(
             target: JsonObject,
@@ -56,17 +58,17 @@ class ExpandedQueryAcceptanceTest {
             offset: Int = 0,
         ): JsonObject {
             return client
-                .tool(
-                    "world_query",
-                    buildJsonObject {
+                .worldQuery(buildJsonObject {
                         putJsonObject("selection") {
                             put("kind", "inspect")
                             put("target", target)
                             put("path", path)
                         }
                         put("mode", mode)
-                        put("limit", limit)
-                        put("offset", offset)
+                        if (mode != "values") {
+                            put("limit", limit)
+                            put("offset", offset)
+                        }
                         surface?.let { put("surface", it) }
                         fields?.let { putJsonArray("fields") { it.forEach { add(it) } } }
                     },
@@ -100,9 +102,7 @@ class ExpandedQueryAcceptanceTest {
                 val types = JsonArray(listOf("transport-belt", "mining-drill").map(::JsonPrimitive))
                 val selected =
                     client
-                        .tool(
-                            "world_query",
-                            buildJsonObject {
+                        .worldQuery(buildJsonObject {
                                 putJsonObject("selection") {
                                     put("kind", "entities")
                                     put("area", area)
@@ -144,9 +144,7 @@ class ExpandedQueryAcceptanceTest {
                 assertEquals(listOf("electric-mining-drill"), names)
                 suspend fun details(name: String) =
                     client
-                        .tool(
-                            "world_query",
-                            buildJsonObject {
+                        .worldQuery(buildJsonObject {
                                 put("selection", target(name))
                                 put("surface", surface)
                                 putJsonArray("include") {
@@ -227,9 +225,7 @@ class ExpandedQueryAcceptanceTest {
                     val attributes = entry.getValue("attributes").jsonObject
                     val named =
                         client
-                            .tool(
-                                "world_query",
-                                buildJsonObject {
+                            .worldQuery(buildJsonObject {
                                     putJsonObject("selection") {
                                         put("kind", "player")
                                         put("player", attributes.getValue("name"))
@@ -265,9 +261,7 @@ class ExpandedQueryAcceptanceTest {
 
                 val machineInspection =
                     client
-                        .tool(
-                            "world_query",
-                            buildJsonObject {
+                        .worldQuery(buildJsonObject {
                                 put("surface", surface)
                                 putJsonObject("selection") {
                                     put("kind", "inspect")
@@ -338,9 +332,7 @@ class ExpandedQueryAcceptanceTest {
                     )
                 }
                 val fluidPath = JsonArray(listOf(json("""{"method":"get_fluid","arguments":[1]}""")))
-                val fluid = inspect(tank, fluidPath, surface = surface).getValue("entries").jsonArray.associate {
-                    it.jsonObject.getValue("key").jsonPrimitive.content to it.jsonObject.getValue("value")
-                }
+                val fluid = inspect(tank, fluidPath, surface = surface).getValue("value").jsonObject
                 assertEquals("water", fluid.getValue("name").jsonPrimitive.content)
                 assertEquals(1234.0, fluid.getValue("amount").jsonPrimitive.double)
                 assertEquals(25.0, fluid.getValue("temperature").jsonPrimitive.double)

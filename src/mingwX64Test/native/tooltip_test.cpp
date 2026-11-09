@@ -52,10 +52,10 @@ int main() {
     assert(observationText(observed.tooltipTitle) == provider.title && observationText(observed.tooltipText) == provider.text);
     provider.title = "changed";
     assert(observationText(observed.tooltipTitle) == "[item=iron-plate] title");
-    provider.text.assign(FM_OBSERVATION_TEXT_BYTES + 9, 'x');
+    provider.text.assign((16 * 1024 * 1024) + 9, 'x');
     FmNode bounded{};
     collectTooltip(symbols, &widget, bounded, storage);
-    assert(bounded.tooltipTruncated == 2 && bounded.tooltipText.size == FM_OBSERVATION_TEXT_BYTES);
+    assert(bounded.tooltipTruncated == 0 && bounded.tooltipText.size == provider.text.size());
     symbols.tooltips = {};
     FmNode unavailable{};
     collectTooltip(symbols, &widget, unavailable, storage);

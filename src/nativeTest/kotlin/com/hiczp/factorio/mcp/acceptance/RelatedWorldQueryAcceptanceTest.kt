@@ -2,6 +2,8 @@
 
 package com.hiczp.factorio.mcp.acceptance
 
+import com.hiczp.factorio.mcp.worldQuery
+
 import com.hiczp.factorio.mcp.McpHttpClient
 import com.hiczp.factorio.mcp.relatedWorldKinds
 import com.hiczp.factorio.mcp.toolValue
@@ -38,9 +40,7 @@ class RelatedWorldQueryAcceptanceTest {
             limit: Int = 64,
         ) =
             client
-                .tool(
-                    "world_query",
-                    buildJsonObject {
+                .worldQuery(buildJsonObject {
                         put("selection", selection)
                         if (selection["kind"]!!.jsonPrimitive.content in relatedWorldKinds)
                             put("offset", offset)
@@ -143,9 +143,7 @@ class RelatedWorldQueryAcceptanceTest {
 
                 val chest = fixture.getValue("chest")
                 val unindexed =
-                    client.tool(
-                        "world_query",
-                        buildJsonObject {
+                    client.worldQuery(buildJsonObject {
                             putJsonObject("selection") {
                                 put("kind", "entities")
                                 put("unit_number", chest)
@@ -168,17 +166,13 @@ class RelatedWorldQueryAcceptanceTest {
                         .all { !it["valid_for_read"]!!.jsonPrimitive.boolean }
                 )
                 val wrong =
-                    client.tool(
-                        "world_query",
-                        buildJsonObject {
+                    client.worldQuery(buildJsonObject {
                             put("selection", owned("inventory", chest, "character_main"))
                         },
                     )
                 assertTrue(wrong["isError"]!!.jsonPrimitive.boolean)
                 val ambiguous =
-                    client.tool(
-                        "world_query",
-                        buildJsonObject {
+                    client.worldQuery(buildJsonObject {
                             putJsonObject("selection") {
                                 put("kind", "inventories")
                                 putJsonObject("owner") {

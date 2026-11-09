@@ -4,7 +4,7 @@
 #include "ui_modal.h"
 
 #define FM_LINUX_KEY_EVENT_BYTES 256
-#define FM_LINUX_TEXT_SCALARS 1024
+#define FM_LINUX_TEXT_SCALARS 16384
 
 typedef struct FmLinuxKeyEventLayout {
     uint32_t extent;

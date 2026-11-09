@@ -2,37 +2,32 @@
 
 package com.hiczp.factorio.mcp
 
-import com.hiczp.factorio.mcp.linuxbridge.FM_LINUX_UI_PATH
 import com.hiczp.factorio.mcp.linuxbridge.FmLinuxUiSelector
-import kotlinx.cinterop.ByteVar
-import kotlinx.cinterop.CPointer
-import kotlinx.cinterop.get
-import kotlinx.cinterop.set
+import com.hiczp.factorio.mcp.linuxbridge.FmRequestBuffer
 
-/** Writes only typed selector data while the caller owns the resident command payload. */
-internal fun FmLinuxUiSelector.writePath(path: List<UiStep>?) {
-    count = 0u
-    if (path.isNullOrEmpty()) return
-    require(path.size in 1..FM_LINUX_UI_PATH)
-    fun text(destination: CPointer<ByteVar>, capacity: Int, value: String?) {
-        val bytes = value.orEmpty().encodeToByteArray()
-        require(bytes.size < capacity && '\u0000' !in value.orEmpty()) { "Selector string exceeds native bounds" }
-        bytes.forEachIndexed { index, byte -> destination[index] = byte }
-        destination[bytes.size] = 0
-    }
-    path.forEachIndexed { index, step ->
-        require(step.position >= 0)
-        val output = this.path[index]
-        output.child = if (step.child) 1 else 0
-        output.position = step.position
-        output.enabled = step.enabled?.let { if (it) 1 else 0 } ?: -1
-        output.hasText = if (step.text == null) 0u else 1u
-        output.hasVisible = if (step.visible == null) 0u else 1u
-        output.visible = if (step.visible == true) 1u else 0u
-        text(output.type, 160, step.type)
-        text(output.text, 1024, step.text)
-        text(output.prototypeName, 256, step.prototype?.name)
-        text(output.prototypeType, 160, step.prototype?.nativeType)
-    }
-    count = path.size.toUInt()
+internal fun FmRequestBuffer.bindRequest(root: FmRequestBuffer, slice: RequestSlice) {
+    require(slice.offset >= 0 && slice.size >= 0 && slice.offset.toLong() + slice.size <= root.size.toLong())
+    require(root.size == 0uL || root.address >= 4096uL)
+    require(root.address <= Long.MAX_VALUE.toULong() - root.size)
+    address = if (slice.size == 0) 0uL else root.address + slice.offset.toULong()
+    size = slice.size.toULong()
+}
+
+/** Writes only typed request views while the caller owns the resident command payload. */
+internal fun FmLinuxUiSelector.writePath(action: UiAction?, payload: RequestPayload, root: FmRequestBuffer) {
+    require(action?.maxDepth == null || action.maxDepth >= 0) { "UI depth must be nonnegative" }
+    count = action?.path?.size?.toUInt() ?: 0u
+    maxDepth = uiDepth(action?.maxDepth).toUInt()
+    path.bindRequest(root, payload.selector)
+    collection = if (action?.collection == null) 0u else 1u
+    optionOffset = action?.collection?.optionOffset?.toUInt() ?: 0u
+    optionLimit = action?.collection?.optionLimit?.toUInt() ?: 0u
+    fields = action?.fields?.uiFieldMask() ?: defaultUiFields.uiFieldMask()
+    textSlice.source = action?.collection?.textSource ?: 0u
+    textSlice.offset = action?.collection?.offset?.toUInt() ?: 0u
+    textSlice.limit = action?.collection?.limit?.toUInt() ?: 0u
+    graph.collection = action?.collection?.graphCollection?.toUInt() ?: 0u
+    graph.series = action?.collection?.graphSeries?.toUInt() ?: 0u
+    graph.offset = action?.collection?.offset?.toUInt() ?: 0u
+    graph.limit = action?.collection?.limit?.toUInt() ?: 0u
 }

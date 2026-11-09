@@ -6,28 +6,16 @@ internal fun validatePlayerSelector(value: JsonElement) {
     val player = value as? JsonPrimitive ?: error("player must be a name or positive index")
     require(
         if (player.isString)
-            player.content.isNotBlank() &&
-                    player.content.length <= 256 &&
+            player.content.isNotEmpty() &&
                     '\u0000' !in player.content
-        else player.intOrNull?.let { it > 0 } == true
+        else player.longOrNull?.let { it in 1..4294967295L } == true
     ) {
         "player must be a name or positive index"
     }
 }
 
-internal fun playerSelectorSchema() = buildJsonObject {
-    putJsonArray("type") {
-        add("string")
-        add("integer")
-    }
-    put(
-        "description",
-        "Player name or positive API index in the current world. Omit for the attached client's local player. Available for player/character/vehicle/physical_vehicle/force and inventory owners.",
-    )
-}
-
 internal fun parsePlayersQuery(args: JsonObject): WorldQuery {
-    require(args.keys.all { it in setOf("selection", "fields", "offset", "limit") }) {
+    require(args.keys.all { it in setOf("selection", "fields", "offset", "limit", "depth", "reads") }) {
         "Unknown players query argument"
     }
     val selection = args.getValue("selection").jsonObject
@@ -46,7 +34,7 @@ internal fun parsePlayersQuery(args: JsonObject): WorldQuery {
         }
     }
     val fields =
-        args["fields"]?.jsonArray?.map { it.stringArgument() }
+        args["fields"]?.let(::nativeFields)
             ?: listOf(
                 "index",
                 "name",
@@ -59,24 +47,19 @@ internal fun parsePlayersQuery(args: JsonObject): WorldQuery {
                 "physical_surface",
                 "character",
             )
-    require(
-        fields.isNotEmpty() &&
-                fields.distinct().size == fields.size &&
-                fields.all { it in playerFields }
-    ) {
-        "Unsupported player fields: choose from ${playerFields.joinToString()}"
-    }
-    val limit = args["limit"]?.intArgument() ?: 64
+    val limit = args["limit"]?.intArgument()
     val offset = args["offset"]?.intArgument() ?: 0
-    require(limit > 0 && offset >= 0) {
+    require((limit == null || limit > 0) && offset >= 0) {
         "Players limit must be positive and offset nonnegative"
     }
     return WorldQuery(
         buildJsonObject {
             args.forEach { (name, value) -> put(name, value) }
             putJsonArray("fields") { fields.forEach { add(it) } }
-            put("limit", limit)
+            limit?.let { put("limit", it) }
             put("offset", offset)
+            put("depth", observationDepth(args["depth"]?.intArgument()))
+            args["reads"]?.let { put("reads", observationReads(it)) }
         }
     )
 }

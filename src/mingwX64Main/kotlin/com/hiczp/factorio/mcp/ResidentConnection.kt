@@ -326,6 +326,8 @@ internal class ResidentConnection(private val pid: UInt) {
         inputName: String? = null,
         chatText: String? = null,
         renderingEnabled: Boolean? = null,
+        bindingRequest: BindingReadRequest? = null,
+        chatRead: ChatReadRequest? = null,
     ): GameSnapshot {
         if (operation == 6) symbols.rendering.getOrThrow()
         if (operation == 12) symbols.renderingControl.getOrThrow()
@@ -340,6 +342,7 @@ internal class ResidentConnection(private val pid: UInt) {
             symbols.world.getOrThrow()
             require(symbols.pauseOffsets != null) { "Timed input requires a pause adapter" }
         }
+        var guiPreparationFailure: String? = null
         while (true) {
             currentCoroutineContext().ensureActive()
             check(alive()) { "Factorio process exited" }
@@ -379,15 +382,11 @@ internal class ResidentConnection(private val pid: UInt) {
             }
             val state = mapResident() ?: error("Resident is absent; call attach")
             check(state.pointed.attached != 0) { "Resident is detached; call attach" }
-            state.pointed.operation = if (operation == 1) 2u else operation.toUInt()
             state.pointed.limit = limit.toUInt()
             if (operation == 12) {
                 state.pointed.renderingEnabled = if (checkNotNull(renderingEnabled)) 1u else 0u
             }
-            writeAction(
-                state.pointed.action,
-                action,
-                when (action?.kind) {
+            val actionKeys = when (action?.kind) {
                     3 -> symbols.input.getOrThrow().keys(action.keys)
                     1 ->
                         symbols.input
@@ -401,8 +400,9 @@ internal class ResidentConnection(private val pid: UInt) {
                             )
 
                     else -> emptyList()
-                },
-            )
+                }
+            var payload = RequestPayload(selectorPayload(action?.path.orEmpty()),
+                arguments = bindingRequest?.payload() ?: byteArrayOf())
             if (chatText != null) {
                 val bytes = chatText.encodeToByteArray()
                 require(bytes.size in 1..4096)
@@ -410,30 +410,53 @@ internal class ResidentConnection(private val pid: UInt) {
                 bytes.forEachIndexed { index, byte -> state.pointed.chat.text[index] = byte }
                 state.pointed.chat.text[bytes.size] = 0
             }
-            if (query != null) {
-                state.pointed.worldQuery.includeViewport = if (query.includeViewport) 1u else 0u
-                val source = worldQueryLua.encodeToByteArray()
+            val guiRead = operation == 3 || action?.path?.any { it.gui != null } == true
+            if (query != null || guiRead) {
+                state.pointed.worldQuery.includeViewport = if (query?.includeViewport == true) 1u else 0u
+                val source = (if (guiRead) guiObservationLua else worldQueryLua).encodeToByteArray()
+                val api = if (guiRead) {
+                    val loaded = runCatching {
+                        runtimeApi ?: readRuntimeApi(executablePath).also { runtimeApi = it }
+                    }
+                    if (action?.path?.any { it.gui != null } == true) loaded.getOrThrow()
+                    guiPreparationFailure = loaded.exceptionOrNull()?.message
+                    loaded.getOrNull()
+                } else if (query != null)
+                    runtimeApi ?: readRuntimeApi(executablePath).also { runtimeApi = it }
+                else null
                 val prepared =
-                    if ("inspection" in query.arguments) {
-                        val api =
-                            runtimeApi ?: readRuntimeApi(executablePath).also { runtimeApi = it }
-                        api.prepare(query)
-                    } else query
-                val arguments = prepared.arguments.toString().encodeToByteArray()
-                require(
-                    source.size < FM_MAX_LUA_SOURCE && arguments.size < FM_MAX_QUERY_ARGUMENTS
-                ) {
-                    "World query payload exceeds bound"
-                }
-                state.pointed.worldQuery.sourceSize = source.size.toUInt()
-                state.pointed.worldQuery.argumentsSize = arguments.size.toUInt()
-                source.forEachIndexed { index, byte ->
-                    state.pointed.worldQuery.source[index] = byte
-                }
-                arguments.forEachIndexed { index, byte ->
-                    state.pointed.worldQuery.arguments[index] = byte
-                }
+                    if (guiRead) api?.let { guiArguments(action, it) }
+                    else if (api != null) api.prepare(checkNotNull(query)).arguments
+                    else checkNotNull(query).arguments
+                val arguments = prepared?.toString()?.encodeToByteArray() ?: byteArrayOf()
+                payload = RequestPayload(
+                    selectorPayload(action?.path.orEmpty()),
+                    if (prepared == null) byteArrayOf() else source,
+                    arguments,
+                )
             }
+            if (payload.bytes.isNotEmpty()) reserveRequest(state, payload.bytes)
+            state.pointed.worldQuery.source.bindRequest(state.pointed.request, payload.source)
+            state.pointed.worldQuery.arguments.bindRequest(state.pointed.request, payload.arguments)
+            state.pointed.bindingQuery.bindRequest(state.pointed.request,
+                if (bindingRequest == null) RequestSlice(0, 0) else payload.arguments)
+            writeAction(state.pointed.action, action, actionKeys, payload, state.pointed.request)
+            if (operation == 10) state.pointed.chatRead.apply {
+                val request = chatRead ?: ChatReadRequest(null, limit, 0)
+                tick = request.offset?.tick ?: 0uL
+                hasOffset = if (request.offset == null) 0u else 1u
+                repeat(2) { counts[it] = request.offset?.counts?.get(it)?.toUInt() ?: 0u }
+                this.limit = request.limit.toUInt()
+                textSlice.source = when (request.textSlice?.field) {
+                    "text" -> 1u
+                    "raw" -> 2u
+                    "player_name" -> 3u
+                    else -> 0u
+                }
+                textSlice.offset = request.textSlice?.offset?.toUInt() ?: 0u
+                textSlice.limit = request.textSlice?.limit?.toUInt() ?: 0u
+            }
+            state.pointed.operation = if (operation == 1) 2u else operation.toUInt()
             if (inputName != null) {
                 val bytes = inputName.encodeToByteArray()
                 require(bytes.size < FM_INPUT_NAME_SIZE && '\u0000' !in inputName)
@@ -521,7 +544,7 @@ internal class ResidentConnection(private val pid: UInt) {
                             )
                     WidgetSnapshot(
                         node.depth,
-                        node.type.toKString(),
+                        node.type.readObservationText(readObservation),
                         node.text.readObservationText(readObservation),
                         node.enabled != 0,
                         node.x,
@@ -557,6 +580,7 @@ internal class ResidentConnection(private val pid: UInt) {
                                             (node.optionFirst + node.optionCount).toInt(),
                                         ),
                                         node.optionTotal.toInt(),
+                                        node.optionOffset.toInt().also { require(it >= 0) },
                                     )
                                 } else null,
                                 if (node.properties and 4u != 0u)
@@ -573,7 +597,7 @@ internal class ResidentConnection(private val pid: UInt) {
                                                 it.isNotEmpty()
                                             },
                                             node.prototypeType
-                                                .toKString()
+                                                .readObservationText(readObservation)
                                                 .takeIf { it.isNotEmpty() }
                                                 ?.removePrefix("class "),
                                             node.identityTruncated and 1u != 0u,
@@ -590,7 +614,7 @@ internal class ResidentConnection(private val pid: UInt) {
                                             if (node.elementFlags and 4u != 0u)
                                                 WidgetItem(
                                                     node.itemType
-                                                        .toKString()
+                                                        .readObservationText(readObservation)
                                                         .removePrefix("class "),
                                                     node.elementFlags and 32u != 0u,
                                                     node.itemHealth.toDouble(),
@@ -609,7 +633,7 @@ internal class ResidentConnection(private val pid: UInt) {
                                         WidgetPrototype(
                                             node.qualityName.toKString().takeIf { it.isNotEmpty() },
                                             node.qualityType
-                                                .toKString()
+                                                .readObservationText(readObservation)
                                                 .takeIf { it.isNotEmpty() }
                                                 ?.removePrefix("class "),
                                             node.identityTruncated and 4u != 0u,
@@ -631,6 +655,14 @@ internal class ResidentConnection(private val pid: UInt) {
                                         { node.tooltipTitle.readObservationText(readObservation) },
                                         { node.tooltipText.readObservationText(readObservation) },
                                     ),
+                                image = widgetImage(
+                                    node.image.status,
+                                    node.image.spriteObserved,
+                                    node.image.reference,
+                                    node.image.nameTruncated,
+                                    { node.image.type.readObservationText(readObservation) },
+                                    { node.image.name.readObservationText(readObservation) },
+                                ),
                                 qualityCondition =
                                     if (node.properties and 4096u != 0u)
                                         WidgetQualityCondition(
@@ -690,6 +722,11 @@ internal class ResidentConnection(private val pid: UInt) {
                                             },
                                         )
                                     else null,
+                                toggleMode = if (node.properties and 2u != 0u) node.toggleMode != 0 else null,
+                                graph = node.graph.readGraph(readObservation),
+                                achievement = if (node.achievement.available == 1u) WidgetAchievement(
+                                    node.achievement.state, node.achievement.shownState, node.achievement.inSidebar != 0u,
+                                ) else null,
                             )
                             .takeUnless { it == emptyWidgetProperties },
                         visible = if (node.properties and 128u != 0u) node.visible != 0 else null,
@@ -697,6 +734,10 @@ internal class ResidentConnection(private val pid: UInt) {
                             if (node.properties and 128u != 0u) node.renderEnabled != 0 else null,
                         hiddenBySearch =
                             if (node.properties and 128u != 0u) node.hiddenBySearch != 0 else null,
+                        guiIndex = node.guiIndex.takeIf { it >= 0 },
+                        flaggedForDestruction = node.destroying != 0,
+                        siblingIndex = node.siblingIndex.toInt().also { require(it >= 0) },
+                        childrenTruncated = node.childrenTruncated != 0u,
                     )
                 },
                 result.truncated != 0,
@@ -731,10 +772,9 @@ internal class ResidentConnection(private val pid: UInt) {
                             .also { it.validateObservationBuffer(result.worldSize.toLong()) }
                             .readObservationBytes(readObservation)
                             .decodeToString()
-                    if (query != null && "inspection" in query.arguments) {
-                        checkNotNull(runtimeApi).annotate(decodeWorldQuery(text)).toString()
-                    } else text
+                    text
                 } else null,
+                worldApi = if (query != null) runtimeApi else null,
                 slotIdentityUnavailableReason = symbols.slots.exceptionOrNull()?.message,
                 numberUnavailableReason = symbols.numbers.exceptionOrNull()?.message,
                 visibilityUnavailableReason = symbols.visibility.exceptionOrNull()?.message,
@@ -743,15 +783,72 @@ internal class ResidentConnection(private val pid: UInt) {
                 iconsUnavailableReason = symbols.icons.exceptionOrNull()?.message,
                 tooltipsUnavailableReason = symbols.tooltips.exceptionOrNull()?.message,
                 iconNamesUnavailableReason = symbols.iconNames.exceptionOrNull()?.message,
+                imageUnavailableReason = symbols.images.exceptionOrNull()?.message,
+                graphUnavailableReason = symbols.graph.exceptionOrNull()?.message,
+                storedIdentityUnavailableReason = symbols.storedWidgets.exceptionOrNull()?.message,
                 qualityConditionUnavailableReason = symbols.conditions.exceptionOrNull()?.message,
                 switchUnavailableReason = symbols.switches.exceptionOrNull()?.message,
+                guiJson = if (operation == 3 && result.guiStatus == 1u) {
+                    check(result.worldSize in 1u..Int.MAX_VALUE.toUInt()) { "Invalid GUI observation size" }
+                    result.worldJson.also { it.validateObservationBuffer(result.worldSize.toLong()) }
+                        .readObservationBytes(readObservation).decodeToString()
+                } else null,
+                guiUnavailableReason = if (operation == 3 && result.guiStatus != 1u)
+                    guiPreparationFailure ?: symbols.guiRegistry.exceptionOrNull()?.message ?: result.guiMessage.toKString()
+                else null,
                 chat =
                     if (operation == 10) {
                         result.chat.readChatSnapshot(readObservation)
                     } else null,
+                textRange = result.textRange.takeIf { it.available != 0u }?.let {
+                    ObservationTextRange(it.offset.toInt(), it.total.toLong(), it.nextOffset.toInt(), it.hasMore != 0u)
+                },
+                bindingPage = if (operation == 7) result.bindingSelection.let { page ->
+                    require(page.matchedCount <= result.registryCount && page.hasMore <= 1u &&
+                        page.presenceSize == (bindingRequest?.ids?.size ?: 0).toUInt())
+                    val presence = if (page.presenceSize == 0u) byteArrayOf()
+                        else readObservation(page.presenceAddress.toLong(), page.presenceSize.toInt())
+                    BindingPage(page.matchedCount.toInt(), page.hasMore != 0u,
+                        presence.map { require(it in 0..1); it != 0.toByte() })
+                } else null,
             )
         } finally {
             ReleaseMutex(resources.gate)
+        }
+    }
+
+    private suspend fun reserveRequest(state: CPointer<Shared>, bytes: ByteArray) {
+        state.pointed.requestSize = bytes.size.toUInt()
+        state.pointed.operation = 13u
+        state.pointed.cancel = 0
+        fm_submit(state)
+        try {
+            while (fm_take_result(state) == 0) {
+                check(alive()) { "Factorio exited while preparing request storage" }
+                delay(10)
+            }
+        } catch (canceled: CancellationException) {
+            withContext(NonCancellable) {
+                fm_cancel_request(state)
+                while (fm_take_result(state) == 0) {
+                    check(alive()) { "Factorio exited while cleaning request storage" }
+                    delay(10)
+                }
+            }
+            throw canceled
+        }
+        check(state.pointed.result.error == 0 && state.pointed.request.size == bytes.size.toULong()) {
+            state.pointed.result.message.toKString().ifEmpty { "Cannot reserve resident request storage" }
+        }
+        val buffer = state.pointed.request
+        check(buffer.address >= 4096uL && buffer.address <= Long.MAX_VALUE.toULong() - buffer.size)
+        currentCoroutineContext().ensureActive()
+        memScoped {
+            val written = alloc<ULongVar>()
+            check(bytes.usePinned {
+                WriteProcessMemory(process, buffer.address.toLong().toCPointer<ByteVar>(), it.addressOf(0),
+                    bytes.size.toULong(), written.ptr)
+            } != 0 && written.value == bytes.size.toULong()) { "Cannot copy resident request bytes" }
         }
     }
 

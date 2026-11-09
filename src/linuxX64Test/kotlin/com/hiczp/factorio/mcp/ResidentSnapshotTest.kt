@@ -9,6 +9,36 @@ import kotlinx.cinterop.*
 
 class ResidentSnapshotTest {
     @Test
+    fun nativeIdentityTypesUseOwnedObservationsBeyondTheFormerFieldCapacities() {
+        memScoped {
+            val snapshot = alloc<FmLinuxUiSnapshot>()
+            memset(snapshot.ptr, 0, sizeOf<FmLinuxUiSnapshot>().toULong())
+            snapshot.count = 1u
+            val node = observationArray<FmLinuxUiNode>(snapshot.nodes, 1)[0]
+            node.parent = -1
+            node.identity.available = 1u
+            node.element.available = 1u
+            node.element.flags = 6u
+            val name = "T".repeat(8192)
+            for (value in listOf(node.identity.prototype, node.identity.quality)) {
+                value.flags = 1u
+                value.typeSize = name.length.toUInt()
+                val text = observationArray<ByteVar>(value.type, name.length)
+                name.forEachIndexed { index, character -> text[index] = character.code.toByte() }
+            }
+            node.element.typeSize = name.length.toUInt()
+            val itemText = observationArray<ByteVar>(node.element.type, name.length)
+            name.forEachIndexed { index, character -> itemText[index] = character.code.toByte() }
+            val result = assertNotNull(snapshot.readWidgets(::readFixtureObservation).single().properties)
+            assertEquals(name, result.prototype?.nativeType)
+            assertEquals(name, result.quality?.nativeType)
+            assertEquals(name, result.element?.item?.nativeType)
+            itemText[0] = 0
+            assertEquals(name, result.element?.item?.nativeType)
+        }
+    }
+
+    @Test
     fun copiesRawQualityConditionsAndKeepsMissingRegistryValuesDistinct() {
         memScoped {
             val snapshot = alloc<FmLinuxUiSnapshot>()
@@ -66,9 +96,10 @@ class ResidentSnapshotTest {
             assertEquals(WidgetElement(true, UInt.MAX_VALUE.toLong(), null), copied())
             element.flags = 63u
             element.typeSize = 4u
+            val elementType = observationArray<ByteVar>(element.type, 4)
             "Tool"
                 .forEachIndexed { index, character ->
-                    element.type[index] = character.code.toByte()
+                    elementType[index] = character.code.toByte()
                 }
             element.health = Float.NaN
             element.durability = -0.0
@@ -79,7 +110,7 @@ class ResidentSnapshotTest {
             assertTrue(item.typeTruncated && item.health.isNaN())
             assertEquals((-0.0).toBits(), assertNotNull(item.durabilityLeft).toBits())
             assertEquals(Double.POSITIVE_INFINITY, item.magazineLeft)
-            element.type[0] = 'X'.code.toByte()
+            elementType[0] = 'X'.code.toByte()
             assertEquals("Tool", item.nativeType)
             element.typeSize = 256u
             assertFails { copied() }
@@ -110,7 +141,7 @@ class ResidentSnapshotTest {
             prototype.name[1] = 0
             prototype.name[2] = 'y'.code.toByte()
             prototype.typeSize = 1u
-            prototype.type[0] = 'T'.code.toByte()
+            observationArray<ByteVar>(prototype.type, 1)[0] = 'T'.code.toByte()
             val properties = assertNotNull(snapshot.readWidgets(::readFixtureObservation, ).single().properties)
             assertEquals(WidgetPrototype("x\u0000y", "T", true, false), properties.prototype)
             assertEquals(WidgetPrototype(null, null), properties.quality)
@@ -210,12 +241,17 @@ class ResidentSnapshotTest {
                 WidgetOptions(listOf(WidgetOption(""), WidgetOption("x\u0000y", true)), 5),
                 properties.options,
             )
+            node.dropdownAvailable = 0u
+            val optionsOnly = assertNotNull(snapshot.readWidgets(::readFixtureObservation).single().properties)
+            assertNull(optionsOnly.selectedIndex)
+            assertEquals(properties.options, optionsOnly.options)
+            node.dropdownAvailable = 1u
             optionText[0] = 0
             assertEquals("x\u0000y", properties.options?.values?.get(1)?.text)
             node.optionFirst = 1u
             assertFails { snapshot.readWidgets(::readFixtureObservation, ) }
             node.optionFirst = 0u
-            nativeOptions[1].size = (FM_LINUX_OPTION_TEXT + 1).toUInt()
+            nativeOptions[1].size = Int.MAX_VALUE.toUInt() + 1u
             assertFails { snapshot.readWidgets(::readFixtureObservation, ) }
             nativeOptions[1].size = 0u
             nativeOptions[1].text.address = 0uL
@@ -242,8 +278,7 @@ class ResidentSnapshotTest {
             val child = nativeNodes[1]
             child.parent = 0
             child.depth = 1u
-            child.type[0] = 'T'.code.toByte()
-            child.type[1] = 0
+            observationArray<ByteVar>(child.type, 1)[0] = 'T'.code.toByte()
             child.enabled = 1u
             child.destroying = 1u
             child.selected = 1u
@@ -342,8 +377,8 @@ class ResidentSnapshotTest {
             child.parent = 1
             assertFails { snapshot.readWidgets(::readFixtureObservation, ) }
             child.parent = 0
-            child.textSize = (FM_LINUX_TEXT_SIZE + 1).toUInt()
-            child.textTotal = (FM_LINUX_TEXT_SIZE + 1).toULong()
+            child.textSize = Int.MAX_VALUE.toUInt() + 1u
+            child.textTotal = Int.MAX_VALUE.toULong() + 1uL
             assertFails { snapshot.readWidgets(::readFixtureObservation, ) }
         }
     }

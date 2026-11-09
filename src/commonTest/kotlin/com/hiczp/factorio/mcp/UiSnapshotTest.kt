@@ -5,6 +5,60 @@ import kotlinx.serialization.json.*
 
 class UiSnapshotTest {
     @Test
+    fun structureOnlyAndSelectedFieldsPreserveIdentityWithoutLargeContents() {
+        val snapshot = GameSnapshot("in_game", true, 1, listOf(node(0).copy(
+            guiIndex = 9,
+            text = "Original rich text [item=iron-plate]",
+            properties = WidgetProperties(
+                toggled = false,
+                options = WidgetOptions(listOf(WidgetOption("Original option")), 1),
+                tooltip = WidgetTooltip("stored", "Title", "Original tooltip"),
+                slider = SliderProperties(1.0, -5.0, 8.0, 0.5),
+            ),
+        )), guiJson = """{"fields":[],"depth":8,"elements":{"9":{"index":9,"name":"opaque","type":"button","parent":7,"children":[11,12],"properties":{"tags":{"opaque":"large"}},"read_status":{}}}}""")
+        val structure = snapshot.uiJson(false, fields = emptySet()).getValue("nodes").jsonArray.single().jsonObject
+        assertNull(structure["text"])
+        assertNull(structure["properties"])
+        assertEquals("opaque", structure.getValue("gui").jsonObject.getValue("name").stringArgument())
+        assertNull(structure.getValue("gui").jsonObject["children"])
+        assertNull(structure.getValue("gui").jsonObject["properties"])
+        assertNotNull(structure["enabled"])
+        val selected = snapshot.uiJson(false, fields = setOf(UiField.TEXT, UiField.TOGGLED, UiField.MAXIMUM))
+            .getValue("nodes").jsonArray.single().jsonObject
+        assertEquals("Original rich text [item=iron-plate]", selected.getValue("text").stringArgument())
+        assertEquals(setOf("toggled", "maximum"), selected.getValue("properties").jsonObject.keys)
+        assertEquals(false, selected.getValue("properties").jsonObject.getValue("toggled").booleanArgument())
+    }
+
+    @Test
+    fun fieldSelectionRejectsUnknownAndRepeatedPaths() {
+        assertEquals(emptySet(), parseUiFields(JsonArray(emptyList())))
+        assertEquals(defaultUiFields, parseUiFields(null))
+        assertFailsWith<IllegalArgumentException> { parseUiFields(Json.parseToJsonElement("""["unknown"]""")) }
+        assertFailsWith<IllegalArgumentException> { parseUiFields(Json.parseToJsonElement("""["text","text"]""")) }
+    }
+
+    @Test
+    fun selectedProjectionRetainsRawGuiValuesAndCompleteParents() {
+        val snapshot = GameSnapshot("in_game", true, 1, listOf(
+            node(2).copy(guiIndex = 9, properties = WidgetProperties(toggled = true, toggleMode = false)),
+            node(2), node(1).copy(selected = true), node(1), node(0),
+        ), guiJson = """{"fields":{},"depth":8,"elements":{"9":{"index":9,"name":"opaque","type":"sprite-button","children":{},"parent":7,"properties":{"tags":{"enabled":false},"sprite":"item/mod-item","tooltip":["mod.dynamic"]},"read_status":{}}}}""")
+        val result = snapshot.uiJson(false, true, maxDepth = 1)
+        assertFalse(result.getValue("truncated").jsonPrimitive.boolean)
+        assertEquals(3, result.getValue("nodes").jsonArray.size)
+        assertEquals(JsonArray(emptyList()), result["gui_fields"])
+        val row = result.getValue("nodes").jsonArray[1].jsonObject
+        assertEquals(0, row.getValue("parent").jsonPrimitive.int)
+        val gui = row.getValue("gui").jsonObject
+        assertEquals(JsonArray(emptyList()), gui["children"])
+        assertEquals(7, gui.getValue("parent").jsonPrimitive.int)
+        assertEquals(false, gui.getValue("properties").jsonObject.getValue("tags").jsonObject.getValue("enabled").jsonPrimitive.boolean)
+        assertEquals(true, row.getValue("properties").jsonObject.getValue("toggled").jsonPrimitive.boolean)
+        assertEquals(false, row.getValue("properties").jsonObject.getValue("toggle_mode").jsonPrimitive.boolean)
+    }
+
+    @Test
     fun switchIdentifiersAgreeAcrossNativeEnumAndLuaNameSources() {
         val snapshots =
             listOf("Right", "right").map { name ->
@@ -484,18 +538,22 @@ class UiSnapshotTest {
                 )
                 .uiJson(false)
         val nodes = result.getValue("nodes").jsonArray
-        assertEquals(1, nodes[0].jsonObject.getValue("parent").jsonPrimitive.int)
-        assertEquals(3, nodes[2].jsonObject.getValue("parent").jsonPrimitive.int)
-        assertEquals(4, nodes[1].jsonObject.getValue("parent").jsonPrimitive.int)
-        assertNull(nodes[4].jsonObject["parent"])
+        assertNull(nodes[0].jsonObject["parent"])
+        assertEquals(0, nodes[1].jsonObject.getValue("parent").jsonPrimitive.int)
+        assertEquals(1, nodes[2].jsonObject.getValue("parent").jsonPrimitive.int)
+        assertEquals(0, nodes[3].jsonObject.getValue("parent").jsonPrimitive.int)
+        assertEquals(3, nodes[4].jsonObject.getValue("parent").jsonPrimitive.int)
         assertNull(nodes[0].jsonObject["bounds"])
     }
 
     @Test
-    fun truncatedTraversalDoesNotInventAnAncestor() {
-        val result = GameSnapshot("in_game", true, 8, listOf(node(3)), true).uiJson(true)
-        assertTrue(result.getValue("truncated").jsonPrimitive.boolean)
-        assertNull(result.getValue("nodes").jsonArray[0].jsonObject["parent"])
+    fun incompleteTraversalCannotProduceAnApparentlyUsableTree() {
+        assertFailsWith<IllegalStateException> {
+            GameSnapshot("in_game", true, 8, listOf(node(3)), true).uiJson(true)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            GameSnapshot("in_game", true, 8, listOf(node(3))).uiJson(true)
+        }
     }
 
     @Test
@@ -524,11 +582,9 @@ class UiSnapshotTest {
             true,
             json["nodes"]!!.jsonArray[0].jsonObject["visible"]!!.jsonPrimitive.boolean,
         )
-        val partial = snapshot.copy(nodes = snapshot.nodes.take(1), truncated = true).uiJson(false)
-        assertEquals(
-            true,
-            partial["nodes"]!!.jsonArray[0].jsonObject["visible"]!!.jsonPrimitive.boolean,
-        )
+        assertFailsWith<IllegalStateException> {
+            snapshot.copy(nodes = snapshot.nodes.take(1), truncated = true).uiJson(false)
+        }
         val unavailable =
             GameSnapshot(
                     "main_menu",
@@ -563,13 +619,14 @@ class UiSnapshotTest {
         val nodes = json.getValue("nodes").jsonArray
         assertEquals(3, nodes.size)
         assertEquals(0, nodes[0].jsonObject.getValue("id").jsonPrimitive.int)
-        assertEquals(1, nodes[0].jsonObject.getValue("parent").jsonPrimitive.int)
-        assertEquals(2, nodes[1].jsonObject.getValue("parent").jsonPrimitive.int)
+        assertNull(nodes[0].jsonObject["parent"])
+        assertEquals(0, nodes[1].jsonObject.getValue("parent").jsonPrimitive.int)
+        assertEquals(1, nodes[2].jsonObject.getValue("parent").jsonPrimitive.int)
         assertTrue(nodes.all { it.jsonObject["role"] == null })
     }
 
     @Test
-    fun selectionRetainsEveryDescendantAndReportsOmissionCount() {
+    fun selectionRetainsEveryDescendantUnderItsRelativeRoot() {
         val snapshot =
             GameSnapshot(
                 "in_game",
@@ -584,12 +641,41 @@ class UiSnapshotTest {
                 ),
             )
         val selected = snapshot.uiJson(false, filtered = true)
-        assertEquals(2, selected.getValue("selector_nodes_omitted").jsonPrimitive.int)
         val nodes = selected.getValue("nodes").jsonArray
         assertEquals(3, nodes.size)
-        assertEquals(1, nodes[0].jsonObject.getValue("parent").jsonPrimitive.int)
-        assertEquals(2, nodes[1].jsonObject.getValue("parent").jsonPrimitive.int)
-        assertTrue(nodes[2].jsonObject.getValue("matched").jsonPrimitive.boolean)
-        assertNull(nodes[2].jsonObject["parent"])
+        assertNull(nodes[0].jsonObject["parent"])
+        assertTrue(nodes[0].jsonObject.getValue("matched").jsonPrimitive.boolean)
+        assertEquals(listOf(0, 1, 2), nodes.map { it.jsonObject.getValue("depth").jsonPrimitive.int })
+        assertEquals(0, nodes[1].jsonObject.getValue("parent").jsonPrimitive.int)
+        assertEquals(1, nodes[2].jsonObject.getValue("parent").jsonPrimitive.int)
+    }
+
+    @Test
+    fun boundedSubtreesExposeTheirChildFrontierAndNativeSiblingPositions() {
+        val snapshot = GameSnapshot(
+            "in_game", true, 1,
+            listOf(
+                node(3, "Leaf"), node(2, "Branch"), node(2, "Sibling"),
+                node(1, "Panel").copy(selected = true), node(1, "Outside"), node(0, "Root"),
+            ),
+        )
+        val rootOnly = snapshot.uiJson(false, filtered = true, maxDepth = 0)
+        val root = rootOnly.getValue("nodes").jsonArray.single().jsonObject
+        assertTrue(root.getValue("children_truncated").jsonPrimitive.boolean)
+        assertEquals(0, root.getValue("depth").jsonPrimitive.int)
+        assertEquals(1, root.getValue("sibling_index").jsonPrimitive.int)
+        val page = snapshot.uiJson(false, filtered = true, maxDepth = 1)
+        val children = page.getValue("nodes").jsonArray.map { it.jsonObject }
+        assertEquals(listOf(0, 1, 2), children.map { it.getValue("id").jsonPrimitive.int })
+        assertEquals(listOf(1, 2), children.drop(1).map { it.getValue("sibling_index").jsonPrimitive.int })
+        assertTrue(children[1].getValue("children_truncated").jsonPrimitive.boolean)
+        assertNull(children[2]["children_truncated"])
+        assertTrue(page.getValue("truncated").jsonPrimitive.boolean)
+        val overlapping = snapshot.copy(nodes = snapshot.nodes.mapIndexed { index, value ->
+            value.copy(selected = value.selected || index == 1)
+        }).uiJson(false, filtered = true, maxDepth = 0)
+        assertEquals(listOf(0, 0), overlapping.getValue("nodes").jsonArray.map { it.jsonObject.getValue("depth").jsonPrimitive.int })
+        assertEquals(listOf("Panel", "Branch"), overlapping.getValue("nodes").jsonArray.map { it.jsonObject.getValue("text").jsonPrimitive.content })
+        assertEquals(Json.parseToJsonElement("[0,1]"), overlapping["roots"])
     }
 }

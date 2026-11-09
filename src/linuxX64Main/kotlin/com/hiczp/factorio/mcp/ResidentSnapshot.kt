@@ -2,11 +2,7 @@
 
 package com.hiczp.factorio.mcp
 
-import com.hiczp.factorio.mcp.linuxbridge.FM_LINUX_ELEMENT_TEXT
 import com.hiczp.factorio.mcp.linuxbridge.FM_LINUX_IDENTITY_TEXT
-import com.hiczp.factorio.mcp.linuxbridge.FM_LINUX_OPTION_TEXT
-import com.hiczp.factorio.mcp.linuxbridge.FM_LINUX_TEXT_SIZE
-import com.hiczp.factorio.mcp.linuxbridge.FM_LINUX_TYPE_NAME
 import com.hiczp.factorio.mcp.linuxbridge.FmLinuxPrototypeValue
 import com.hiczp.factorio.mcp.linuxbridge.FmLinuxUiElement
 import com.hiczp.factorio.mcp.linuxbridge.FmLinuxUiNode
@@ -25,7 +21,7 @@ internal fun FmLinuxUiSnapshot.readWidgets(
     val copiedOptions =
         options.readObservationRecords<FmLinuxUiOption, WidgetOption>(optionCount, readMemory) {
             option ->
-            require(option.size <= FM_LINUX_OPTION_TEXT.toUInt())
+            require(option.size <= Int.MAX_VALUE.toUInt())
             WidgetOption(
                 option.text
                     .also { it.validateObservationBuffer(option.size.toLong()) }
@@ -49,20 +45,17 @@ internal fun FmLinuxUiSnapshot.readWidgets(
                     )
             require(
                 node.depth < count &&
-                    node.textSize <= FM_LINUX_TEXT_SIZE.toUInt() &&
+                    node.textSize <= Int.MAX_VALUE.toUInt() &&
                     node.textSize.toULong() <= node.textTotal
             ) {
                 "Resident widget fields exceed their bounds"
             }
-            val typeBytes = node.type.readBytes(FM_LINUX_TYPE_NAME)
-            val typeEnd = typeBytes.indexOf(0)
-            require(typeEnd >= 0) { "Resident widget type is not terminated" }
+            val typeName = node.type.readObservationBytes(readMemory).decodeToString()
             parents += node.parent
             val widgetOptions =
                 if (node.optionsAvailable != 0u) {
                     require(
-                        node.dropdownAvailable != 0u &&
-                            node.optionFirst <= optionCount &&
+                        node.optionFirst <= optionCount &&
                             node.optionCount <= optionCount - node.optionFirst &&
                             node.optionCount <= node.optionTotal &&
                             node.optionTotal <= Int.MAX_VALUE.toUInt()
@@ -73,11 +66,12 @@ internal fun FmLinuxUiSnapshot.readWidgets(
                             (node.optionFirst + node.optionCount).toInt(),
                         ),
                         node.optionTotal.toInt(),
+                        node.optionOffset.toInt().also { require(it >= 0) },
                     )
                 } else null
             WidgetSnapshot(
                 depth = node.depth.toInt(),
-                type = typeBytes.decodeToString(0, typeEnd),
+                type = typeName,
                 text =
                     if (node.textAvailable != 0u)
                         node.text
@@ -99,6 +93,9 @@ internal fun FmLinuxUiSnapshot.readWidgets(
                 visible = node.visible != 0u,
                 hiddenBySearch = node.hiddenBySearch != 0u,
                 renderEnabled = node.renderEnabled != 0u,
+                guiIndex = node.guiIndex.takeIf { it >= 0 },
+                siblingIndex = node.siblingIndex.toInt().also { require(it >= 0) },
+                childrenTruncated = node.childrenTruncated != 0u,
                 properties =
                     if (
                         node.toggledAvailable != 0u ||
@@ -106,15 +103,24 @@ internal fun FmLinuxUiSnapshot.readWidgets(
                             node.sliderAvailable != 0u ||
                             node.progressAvailable != 0u ||
                             node.dropdownAvailable != 0u ||
+                            node.optionsAvailable != 0u ||
                             node.switchAvailable != 0u ||
                             node.numberAvailable != 0u ||
                             node.iconsAvailable != 0u ||
                             node.tooltipStatus != 0u ||
+                            node.image.status != 0u ||
+                            node.graph.available != 0u ||
+                            node.achievement.available != 0u ||
                             node.identity.available != 0u ||
                             node.element.available != 0u ||
                             node.quality.available != 0u
                     )
                         WidgetProperties(
+                            graph = node.graph.readGraph(readMemory),
+                            achievement = if (node.achievement.available == 1u) WidgetAchievement(
+                                node.achievement.state, node.achievement.shownState, node.achievement.inSidebar != 0u,
+                            ) else null,
+                            toggleMode = if (node.toggledAvailable != 0u) node.toggleMode != 0u else null,
                             qualityCondition =
                                 if (node.quality.available != 0u)
                                     node.quality.let { condition ->
@@ -151,14 +157,14 @@ internal fun FmLinuxUiSnapshot.readWidgets(
                                 else null,
                             prototype =
                                 if (node.identity.available != 0u)
-                                    node.identity.prototype.readPrototype()
+                                    node.identity.prototype.readPrototype(readMemory)
                                 else null,
                             quality =
-                                if (node.identity.available != 0u)
-                                    node.identity.quality.readPrototype()
+                                if (node.identity.available == 1u)
+                                    node.identity.quality.readPrototype(readMemory)
                                 else null,
                             element =
-                                if (node.element.available != 0u) node.element.readElement()
+                                if (node.element.available != 0u) node.element.readElement(readMemory)
                                 else null,
                             icons =
                                 if (node.iconsAvailable != 0u)
@@ -183,6 +189,14 @@ internal fun FmLinuxUiSnapshot.readWidgets(
                                             .decodeToString()
                                     },
                                 ),
+                            image = widgetImage(
+                                node.image.status,
+                                node.image.spriteObserved,
+                                node.image.reference,
+                                node.image.nameTruncated,
+                                { node.image.type.readObservationText(readMemory) },
+                                { node.image.name.readObservationText(readMemory) },
+                            ),
                             selectedIndex =
                                 if (node.dropdownAvailable != 0u) node.selectedIndex else null,
                             number =
@@ -242,25 +256,27 @@ internal fun FmLinuxUiSnapshot.readWidgets(
     return widgetsInPostorder(widgets, parents)
 }
 
-private fun FmLinuxPrototypeValue.readPrototype(): WidgetPrototype {
+private fun FmLinuxPrototypeValue.readPrototype(readMemory: (Long, Int) -> ByteArray): WidgetPrototype {
     require(
         flags and 7u == flags &&
             nameSize < FM_LINUX_IDENTITY_TEXT.toUInt() &&
-            typeSize < FM_LINUX_IDENTITY_TEXT.toUInt()
+            typeSize <= Int.MAX_VALUE.toUInt()
     ) {
         "Resident prototype identity exceeds wire storage"
     }
     require(flags and 1u != 0u || flags == 0u && nameSize == 0u && typeSize == 0u)
     return WidgetPrototype(
         if (flags and 1u != 0u) name.readBytes(nameSize.toInt()).decodeToString() else null,
-        if (flags and 1u != 0u) type.readBytes(typeSize.toInt()).decodeToString() else null,
+        if (flags and 1u != 0u)
+            type.also { it.validateObservationBuffer(typeSize.toLong()) }.readObservationBytes(readMemory).decodeToString()
+        else null,
         flags and 2u != 0u,
         flags and 4u != 0u,
     )
 }
 
-private fun FmLinuxUiElement.readElement(): WidgetElement {
-    require(flags and 63u == flags && typeSize < FM_LINUX_ELEMENT_TEXT.toUInt()) {
+private fun FmLinuxUiElement.readElement(readMemory: (Long, Int) -> ByteArray): WidgetElement {
+    require(flags and 63u == flags && typeSize <= Int.MAX_VALUE.toUInt()) {
         "Resident element exceeds wire storage"
     }
     require(flags and 4u == 0u || flags and 2u != 0u)
@@ -270,7 +286,7 @@ private fun FmLinuxUiElement.readElement(): WidgetElement {
         count.toLong().takeIf { flags and 3u == 3u },
         if (flags and 4u != 0u)
             WidgetItem(
-                type.readBytes(typeSize.toInt()).decodeToString(),
+                type.also { it.validateObservationBuffer(typeSize.toLong()) }.readObservationBytes(readMemory).decodeToString(),
                 flags and 32u != 0u,
                 health.toDouble(),
                 durability.takeIf { flags and 8u != 0u },

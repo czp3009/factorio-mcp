@@ -72,7 +72,9 @@ int main() {
     object.checked = 2;
     assert(collect().properties == 1 && collect().checkState == 2);
     recognized = &buttonType;
-    assert(collect().properties == 0);
+    object.toggled = true;
+    assert(collect().properties == 2 && collect().toggled && !collect().toggleMode);
+    object.toggled = false;
     object.toggleMode = true;
     assert(collect().properties == 2 && !collect().toggled);
     object.toggled = true;
@@ -106,12 +108,23 @@ int main() {
     assert(observationText(storage.options[1].text) == unicode.text && !storage.options[1].truncated);
     collectWidgetProperties(symbols, object.prefix, options, result.get(), &storage);
     assert(options.optionFirst == 1200 && options.optionCount == 1200 && storage.options.size() == 2400);
-    unicode.text = std::string(FM_OBSERVATION_TEXT_BYTES - 1, 'x') + "\xe4\xb8\xad";
+    ObservationStorage paged;
+    auto pageResult = std::make_unique<FmResult>();
+    FmNode page{};
+    paged.optionOffset = 1198;
+    paged.optionLimit = 7;
+    collectWidgetProperties(symbols, object.prefix, page, pageResult.get(), &paged);
+    assert(page.optionOffset == 1198 && page.optionCount == 2 && page.optionTotal == 1200);
+    assert(paged.options.size() == 2 && observationText(paged.options[0].text) == unicode.text);
+    paged.optionOffset = 1200;
+    collectWidgetProperties(symbols, object.prefix, page, pageResult.get(), &paged);
+    assert(page.optionOffset == 1200 && page.optionCount == 0 && page.optionTotal == 1200);
+    unicode.text = std::string((16 * 1024 * 1024) - 1, 'x') + "\xe4\xb8\xad";
     object.first = entries.data() + 1;
     object.last = object.first + 1;
     collectWidgetProperties(symbols, object.prefix, options, result.get(), &storage);
     assert(options.optionFirst == 2400 && options.optionCount == 1);
-    assert(storage.options.back().text.size == FM_OBSERVATION_TEXT_BYTES - 1 && storage.options.back().truncated);
+    assert(storage.options.back().text.size == unicode.text.size() && !storage.options.back().truncated);
     volatile LONG cancel = 1;
     try {
         collectWidgetProperties(symbols, object.prefix, options, result.get(), &storage, &cancel);
@@ -119,6 +132,15 @@ int main() {
     } catch (const std::exception &) {
     }
     object.last = reinterpret_cast<OptionEntry *>(reinterpret_cast<uintptr_t>(object.first) + 1);
+    FmNode selectedOnly{};
+    ObservationStorage omitted;
+    auto omittedResult = std::make_unique<FmResult>();
+    collectWidgetProperties(symbols, object.prefix, selectedOnly, omittedResult.get(), &omitted, nullptr,
+                            FM_UI_SELECTED_INDEX);
+    assert(selectedOnly.properties == 4 && selectedOnly.selectedIndex == object.selected && omitted.options.empty());
+    FmNode structureOnly{};
+    collectWidgetProperties(symbols, object.prefix, structureOnly, omittedResult.get(), &omitted, nullptr, 0);
+    assert(!structureOnly.properties && omitted.options.empty());
     bool rejected = false;
     try {
         collectWidgetProperties(symbols, object.prefix, options, result.get(), &storage);

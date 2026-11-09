@@ -18,12 +18,11 @@ template <class T> T read(void *object, unsigned offset) {
 } // namespace
 
 void queryWorld(const Symbols &symbols, void *game, const FmWorldQuery &query, FmResult &result,
-                ObservationStorage &storage) {
+                ObservationStorage &storage, std::string_view uiIndices) {
     const auto &layout = symbols.world;
     require(layout.supported && game, "World query requires an initialized world adapter");
-    require(query.sourceSize && query.sourceSize < FM_MAX_LUA_SOURCE && query.argumentsSize &&
-                query.argumentsSize < FM_MAX_QUERY_ARGUMENTS,
-            "Invalid world query payload size");
+    const auto source = fm::requestView(query.source), arguments = fm::requestView(query.arguments);
+    require(!source.empty() && !arguments.empty(), "Invalid world query payload size");
     void *player = function<void *(*)(void *)>(symbols, LocalPlayer)(game);
     require(player, "The injected client has no local player");
     void *scenario = read<void *>(game, layout.scenario);
@@ -53,13 +52,18 @@ void queryWorld(const Symbols &symbols, void *game, const FmWorldQuery &query, F
     } restore{state, top, function<void (*)(void *, int)>(symbols, LuaSetTop)};
 
     int status = function<int (*)(void *, const char *, size_t, const char *, const char *)>(symbols, LuaLoadBuffer)(
-        state, query.source, query.sourceSize, "=factorio-mcp-world-query", "t");
+        state, source.data(), source.size(), "=factorio-mcp-world-query", "t");
     if (!status) {
         // The game's LuaPlayer index reader maps the native zero-based uint16 index to Lua's one-based index.
         function<void (*)(void *, double)>(symbols, LuaPushNumber)(
             state, double(read<uint16_t>(player, layout.playerIndex)) + 1);
-        function<const char *(*)(void *, const char *, size_t)>(symbols, LuaPushString)(state, query.arguments,
-                                                                                        query.argumentsSize);
+        function<const char *(*)(void *, const char *, size_t)>(symbols, LuaPushString)(state, arguments.data(),
+                                                                                        arguments.size());
+        if (!uiIndices.empty()) {
+            require(!query.includeViewport, "GUI reads cannot include a viewport payload");
+            function<const char *(*)(void *, const char *, size_t)>(symbols, LuaPushString)(
+                state, uiIndices.data(), uiIndices.size());
+        }
         if (query.includeViewport) {
             ViewportSnapshot view{};
             std::string failure;
@@ -75,7 +79,7 @@ void queryWorld(const Symbols &symbols, void *game, const FmWorldQuery &query, F
                                                                                             failure.size());
         }
         status = function<int (*)(void *, int, int, int, int, void *)>(symbols, LuaProtectedCall)(
-            state, query.includeViewport ? 10 : 2, 1, 0, 0, nullptr);
+            state, query.includeViewport ? 10 : uiIndices.empty() ? 2 : 3, 1, 0, 0, nullptr);
     }
     size_t size{};
     const char *text = function<const char *(*)(void *, int, size_t *)>(symbols, LuaToString)(state, -1, &size);

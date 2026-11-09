@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <limits>
 #include <stdexcept>
+#include <string>
 
 namespace {
 struct Item {
@@ -33,6 +34,7 @@ struct Receiver {
 
 int widget, widgetType, stackType, providerType, itemType, toolType, ammoType;
 bool supported = true, stackMode = true, present = true, isTool = false, isAmmo = false;
+std::string itemTypeName = "class FixtureItem";
 
 void *cast(const void *value, long, const void *source, const void *target, int) {
     if (value == &widget) {
@@ -68,7 +70,7 @@ const void *typeId(const void *value) {
 
 const char *typeName(const void *value) {
     assert(value == &item);
-    return "class FixtureItem";
+    return itemTypeName.c_str();
 }
 } // namespace
 
@@ -89,9 +91,10 @@ int main() {
     layout.health = offsetof(Item, health);
     layout.durability = offsetof(Tool, durability);
     layout.magazine = offsetof(Ammo, magazine);
+    ObservationStorage storage;
     auto collect = [&] {
         FmNode node{};
-        collectElement(symbols, &widget, node);
+        collectElement(symbols, &widget, node, storage);
         return node;
     };
     assert(collect().properties == 0);
@@ -117,8 +120,10 @@ int main() {
         isTool = true;
         isAmmo = false;
         tool.durability = -0.25;
+        itemTypeName = std::string(4096, 'T');
         node = collect();
         assert(node.elementFlags == 15 && node.itemHealth == 0.375f && node.durabilityLeft == -0.25);
+        assert(observationText(node.itemType) == itemTypeName);
         stackMode = false;
         isTool = false;
         isAmmo = true;

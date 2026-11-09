@@ -38,8 +38,12 @@ internal data class ScreenshotResult(val snapshot: GameSnapshot, val image: Enco
 
 /** Portable resizing and platform encoding outside the game's rendering callback. */
 internal object ImageEncoder {
-    const val MAX_BYTES = 16 * 1024 * 1024
     const val DEFAULT_JPEG_QUALITY = 85
+
+    fun encodedSize(size: ULong): Int {
+        check(size in 1uL..Int.MAX_VALUE.toULong()) { "Encoded image exceeds byte-array representation" }
+        return size.toInt()
+    }
 
     fun validateQuality(format: ImageFormat, quality: Int?) {
         require(quality == null || quality in 1..100) { "quality must be an integer from 1 to 100" }
@@ -62,7 +66,7 @@ internal object ImageEncoder {
             format,
             jpegQuality.takeIf { format == ImageFormat.JPG },
             PlatformImageEncoder.encode(image, format, jpegQuality).also {
-                check(it.size in 1..MAX_BYTES) { "Encoded image exceeds output bound" }
+                check(it.isNotEmpty()) { "Encoded image is empty" }
             },
         )
     }

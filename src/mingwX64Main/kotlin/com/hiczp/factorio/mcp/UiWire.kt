@@ -2,43 +2,36 @@
 
 package com.hiczp.factorio.mcp
 
-import com.hiczp.factorio.mcp.nativebridge.FM_MAX_PATH
 import com.hiczp.factorio.mcp.nativebridge.FmAction
+import com.hiczp.factorio.mcp.nativebridge.FmRequestBuffer
 import kotlinx.cinterop.*
 import platform.posix.memset
 
-internal fun writeAction(target: FmAction, action: UiAction?, keys: List<UInt> = emptyList()) {
-    // Validate the typed boundary too: callers need not have used the JSON parser.
+internal fun FmRequestBuffer.bindRequest(root: FmRequestBuffer, slice: RequestSlice) {
+    require(slice.offset >= 0 && slice.size >= 0 && slice.offset.toLong() + slice.size <= root.size.toLong())
+    require(root.size == 0uL || root.address >= 4096uL)
+    require(root.address <= Long.MAX_VALUE.toULong() - root.size)
+    address = if (slice.size == 0) 0uL else root.address + slice.offset.toULong()
+    size = slice.size.toULong()
+}
+
+internal fun writeAction(
+    target: FmAction,
+    action: UiAction?,
+    keys: List<UInt> = emptyList(),
+    payload: RequestPayload = RequestPayload(),
+    root: FmRequestBuffer? = null,
+) {
     require(keys.size <= 8) { "UI key chord exceeds wire capacity" }
     require(action != null || keys.isEmpty()) { "Keys require a UI action" }
-    require(action == null || action.path.size <= FM_MAX_PATH) { "UI path exceeds wire capacity" }
-    require(action == null || action.text.size <= 1024) { "UI text exceeds wire capacity" }
-    val predicates =
-        action?.path?.map { step ->
-            fun encode(value: String?, capacity: Int): ByteArray? =
-                value?.let {
-                    require('\u0000' !in it) { "UI predicate contains a null character" }
-                    it.encodeToByteArray().also { bytes ->
-                        require(bytes.size < capacity) { "UI predicate exceeds wire capacity" }
-                    }
-                }
-            step.prototype?.let {
-                require(
-                    it.name.isNotEmpty() && (it.nativeType == null || it.nativeType.isNotEmpty())
-                ) {
-                    "Empty prototype predicate"
-                }
-            }
-            listOf(
-                encode(step.type, 160),
-                encode(step.text, 1024),
-                encode(step.prototype?.name, 256),
-                encode(step.prototype?.nativeType, 160),
-            )
-        }
+    require(action == null || action.text.size <= 16384) { "UI text exceeds dispatch budget" }
+    require(action?.maxDepth == null || action.maxDepth >= 0) { "UI depth must be nonnegative" }
     memset(target.ptr, 0, sizeOf<FmAction>().toULong())
     if (action == null) return
+    target.fields = action.fields.uiFieldMask()
+    target.maxDepth = uiDepth(action.maxDepth)
     target.count = action.path.size
+    if (action.path.isNotEmpty()) target.path.bindRequest(checkNotNull(root), payload.selector)
     target.kind = action.kind
     target.button = action.button
     target.alt = if (action.alt) 1 else 0
@@ -50,17 +43,14 @@ internal fun writeAction(target: FmAction, action: UiAction?, keys: List<UInt> =
     target.keyCount = keys.size.toUInt()
     keys.forEachIndexed { index, key -> target.keys[index] = key }
     action.text.forEachIndexed { index, value -> target.text[index] = value.toUInt() }
-    action.path.forEachIndexed { index, step ->
-        val wire = target.path[index]
-        wire.child = if (step.child) 1 else 0
-        wire.position = step.position
-        wire.enabled = step.enabled?.let { if (it) 1 else 0 } ?: -1
-        wire.hasVisible = if (step.visible == null) 0 else 1
-        wire.visible = if (step.visible == true) 1 else 0
-        wire.hasText = if (step.text == null) 0 else 1
-        predicates!![index][0]?.forEachIndexed { offset, value -> wire.type[offset] = value }
-        predicates[index][1]?.forEachIndexed { offset, value -> wire.text[offset] = value }
-        predicates[index][2]?.forEachIndexed { offset, value -> wire.prototypeName[offset] = value }
-        predicates[index][3]?.forEachIndexed { offset, value -> wire.prototypeType[offset] = value }
-    }
+    target.collection = if (action.collection == null) 0u else 1u
+    target.optionOffset = action.collection?.optionOffset?.toUInt() ?: 0u
+    target.optionLimit = action.collection?.optionLimit?.toUInt() ?: 0u
+    target.textSlice.source = action.collection?.textSource ?: 0u
+    target.textSlice.offset = action.collection?.offset?.toUInt() ?: 0u
+    target.textSlice.limit = action.collection?.limit?.toUInt() ?: 0u
+    target.graph.collection = action.collection?.graphCollection?.toUInt() ?: 0u
+    target.graph.series = action.collection?.graphSeries?.toUInt() ?: 0u
+    target.graph.offset = action.collection?.offset?.toUInt() ?: 0u
+    target.graph.limit = action.collection?.limit?.toUInt() ?: 0u
 }

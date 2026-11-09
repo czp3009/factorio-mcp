@@ -25,10 +25,10 @@ int main() {
     const auto *nodes = reinterpret_cast<const FmNode *>(result->nodes.address);
     for (int index = 0; index < result->count; ++index)
         assert(observationText(nodes[index].text) == std::to_string(index));
-    std::string boundary(FM_OBSERVATION_TEXT_BYTES - 1, 'x');
+    std::string boundary((16 * 1024 * 1024) - 1, 'x');
     boundary += "\xe4\xb8\xad";
     const auto clipped = storage.copyText(boundary.data(), boundary.size(), truncated);
-    assert(truncated && clipped.size == FM_OBSERVATION_TEXT_BYTES - 1);
+    assert(!truncated && clipped.size == boundary.size() && observationText(clipped) == boundary);
     boundary[0] = 'y';
     assert(observationText(clipped).front() == 'x');
     const auto empty = storage.copyText("", 0, truncated);

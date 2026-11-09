@@ -193,5 +193,6 @@ class ChatTest {
             }
         }
         assertEquals("你好", parseChatMessage(buildJsonObject { put("text", "你好") }))
+        assertFails { parseChatMessage(buildJsonObject { put("text", "\uD800") }) }
     }
 }

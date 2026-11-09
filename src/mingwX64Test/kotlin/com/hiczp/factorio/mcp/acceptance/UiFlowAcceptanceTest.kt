@@ -173,9 +173,7 @@ class UiFlowAcceptanceTest {
                     assertEquals(JsonNull, icon.getValue("disabled"))
                     val configured =
                         client
-                            .tool(
-                                "world_query",
-                                buildJsonObject {
+                            .worldQuery(buildJsonObject {
                                     putJsonObject("selection") {
                                         put("kind", "inspect")
                                         putJsonObject("target") { put("kind", "player") }
@@ -491,9 +489,7 @@ class UiFlowAcceptanceTest {
 
                 suspend fun cursor() =
                     client
-                        .tool(
-                            "world_query",
-                            buildJsonObject {
+                        .worldQuery(buildJsonObject {
                                 putJsonObject("selection") { put("kind", "player") }
                                 putJsonArray("fields") { add("cursor_stack") }
                             },
@@ -731,9 +727,7 @@ class UiFlowAcceptanceTest {
                 }
                 val afterIdentityTick =
                     client
-                        .tool(
-                            "world_query",
-                            buildJsonObject { putJsonObject("selection") { put("kind", "player") } },
+                        .worldQuery(buildJsonObject { putJsonObject("selection") { put("kind", "player") } },
                         )
                         .toolValue()
                         .getValue("tick")

@@ -2,6 +2,8 @@
 
 package com.hiczp.factorio.mcp.acceptance
 
+import com.hiczp.factorio.mcp.worldQuery
+
 import com.hiczp.factorio.mcp.McpHttpClient
 import com.hiczp.factorio.mcp.toolValue
 import kotlinx.cinterop.toKString
@@ -41,7 +43,36 @@ class WorldQueryAcceptanceTest {
                 val playerRequest = buildJsonObject {
                     putJsonObject("selection") { put("kind", "player") }
                 }
-                val before = client.tool("world_query", playerRequest).toolValue()
+                val before = client.worldQuery(playerRequest).toolValue()
+                for (method in listOf(
+                    "get_item_production_statistics",
+                    "get_fluid_production_statistics",
+                    "get_entity_build_count_statistics",
+                    "get_kill_count_statistics",
+                    "get_capacity",
+                    "get_connections",
+                    "get_pipe_connections",
+                    "get_fluid_segment_contents",
+                    "get_locked_fluid",
+                    "get_prototype",
+                    "get_vehicle_logistic_point",
+                    "get_personal_logistic_slot",
+                )) {
+                    val rejected = client.worldQuery(buildJsonObject {
+                        putJsonObject("selection") {
+                            put("kind", "inspect")
+                            putJsonObject("target") { put("kind", "force") }
+                            putJsonArray("path") {
+                                addJsonObject {
+                                    put("method", method)
+                                    putJsonArray("arguments") { add("nauvis") }
+                                }
+                            }
+                        }
+                    })
+                    assertTrue(rejected["isError"]?.jsonPrimitive?.boolean == true,
+                        "$method must be rejected before execution")
+                }
                 val player = before["player"]!!.jsonObject
                 val position = player["position"]!!.jsonObject
                 val entityRequest = buildJsonObject {
@@ -54,7 +85,7 @@ class WorldQueryAcceptanceTest {
                             .forEach { add(it) }
                     }
                 }
-                val entities = client.tool("world_query", entityRequest).toolValue()
+                val entities = client.worldQuery(entityRequest).toolValue()
                 val character =
                     entities["objects"]!!
                         .jsonArray
@@ -91,9 +122,7 @@ class WorldQueryAcceptanceTest {
                 if (unit != null) {
                     val found =
                         client
-                            .tool(
-                                "world_query",
-                                buildJsonObject {
+                            .worldQuery(buildJsonObject {
                                     putJsonObject("selection") {
                                         put("kind", "entities")
                                         put("unit_number", unit)
@@ -112,9 +141,7 @@ class WorldQueryAcceptanceTest {
                 }
                 val tiles =
                     client
-                        .tool(
-                            "world_query",
-                            buildJsonObject {
+                        .worldQuery(buildJsonObject {
                                 putJsonObject("selection") {
                                     put("kind", "tiles")
                                     putJsonObject("area") {
@@ -133,7 +160,10 @@ class WorldQueryAcceptanceTest {
                         )
                         .toolValue()
                 assertTrue(tiles["truncated"]!!.jsonPrimitive.boolean)
-                assertEquals(4, tiles["candidates_observed"]!!.jsonPrimitive.int)
+                assertEquals(1, tiles["candidates_observed"]!!.jsonPrimitive.int)
+                assertEquals(4, tiles.getValue("total").jsonPrimitive.int)
+                assertFalse(tiles.getValue("selection_complete").jsonPrimitive.boolean)
+                assertTrue("has_more" !in tiles && "next_position" !in tiles)
                 assertEquals(
                     -1.0,
                     tiles["objects"]!!
@@ -147,9 +177,7 @@ class WorldQueryAcceptanceTest {
                 )
                 val boundaryTiles =
                     client
-                        .tool(
-                            "world_query",
-                            buildJsonObject {
+                        .worldQuery(buildJsonObject {
                                 putJsonObject("selection") {
                                     put("kind", "tiles")
                                     putJsonObject("area") {
@@ -173,9 +201,7 @@ class WorldQueryAcceptanceTest {
                     val batch = tile.jsonObject
                     val single =
                         client
-                            .tool(
-                                "world_query",
-                                buildJsonObject {
+                            .worldQuery(buildJsonObject {
                                     putJsonObject("selection") {
                                         put("kind", "tiles")
                                         put(
@@ -201,9 +227,7 @@ class WorldQueryAcceptanceTest {
                 repeat(2) {
                     val remote =
                         client
-                            .tool(
-                                "world_query",
-                                buildJsonObject {
+                            .worldQuery(buildJsonObject {
                                     putJsonObject("selection") {
                                         put("kind", "tiles")
                                         putJsonObject("position") {
@@ -223,9 +247,7 @@ class WorldQueryAcceptanceTest {
                     )
                 }
                 val absentSurface =
-                    client.tool(
-                        "world_query",
-                        buildJsonObject {
+                    client.worldQuery(buildJsonObject {
                             putJsonObject("selection") {
                                 put("kind", "tiles")
                                 put("position", position)
@@ -236,9 +258,7 @@ class WorldQueryAcceptanceTest {
                 assertTrue(absentSurface["isError"]!!.jsonPrimitive.boolean)
                 val empty =
                     client
-                        .tool(
-                            "world_query",
-                            buildJsonObject {
+                        .worldQuery(buildJsonObject {
                                 putJsonObject("selection") {
                                     put("kind", "entities")
                                     putJsonObject("position") {
@@ -251,10 +271,10 @@ class WorldQueryAcceptanceTest {
                         .toolValue()
                 assertTrue(empty.getValue("objects").jsonArray.isEmpty())
                 repeat(20) {
-                    client.tool("world_query", entityRequest).toolValue()
+                    client.worldQuery(entityRequest).toolValue()
                     if (it % 5 == 0) client.tool("ui_read").toolValue()
                 }
-                val after = client.tool("world_query", playerRequest).toolValue()
+                val after = client.worldQuery(playerRequest).toolValue()
                 assertEquals(position, after["player"]!!.jsonObject["position"])
                 assertEquals(player["index"], after["player"]!!.jsonObject["index"])
                 val initialClientCrc = crcCount(clientLog)

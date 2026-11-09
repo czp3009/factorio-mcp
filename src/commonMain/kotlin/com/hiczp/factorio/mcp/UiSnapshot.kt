@@ -2,63 +2,83 @@ package com.hiczp.factorio.mcp
 
 import kotlinx.serialization.json.*
 
-/**
- * The game walker emits descendants before their parent. Never invent missing parents after
- * truncation.
- */
-internal fun GameSnapshot.uiJson(bounds: Boolean, filtered: Boolean = false): JsonObject {
-    val parents = IntArray(nodes.size) { -1 }
-    val pending = mutableListOf<Int>()
-    nodes.forEachIndexed { index, node ->
-        while (pending.isNotEmpty() && nodes[pending.last()].depth > node.depth) {
-            val child = pending.removeAt(pending.lastIndex)
-            if (nodes[child].depth == node.depth + 1) parents[child] = index
-        }
-        pending += index
-    }
-    val selected = BooleanArray(nodes.size)
-    // Postorder guarantees that parents follow children; reverse propagation is linear.
-    for (index in nodes.indices.reversed()) {
-        val node = nodes[index]
-        val parent = parents[index]
-        selected[index] = !filtered || node.selected || (parent >= 0 && selected[parent])
-    }
+/** Flat rooted trees keep JSON nesting independent of native widget depth. */
+internal fun GameSnapshot.uiJson(
+    bounds: Boolean,
+    filtered: Boolean = false,
+    maxDepth: Int? = null,
+    fields: Set<UiField> = defaultUiFields,
+): JsonObject {
+    check(!truncated) { "Incomplete UI observation cannot establish rooted subtrees" }
+    val depth = uiDepth(maxDepth)
+    val visits = UiTree(nodes).project(nodes, filtered, depth)
+    val gui = guiJson?.let(::GuiSnapshot)
+    val propertyKeys = fields.filter { it.path.startsWith("properties.") }
+        .map { it.path.removePrefix("properties.") }.toMutableSet()
+    if (UiField.OPTIONS in fields) propertyKeys += setOf("options_total", "options_truncated", "options_unavailable_reason")
+    if (UiField.SELECTED_INDEX in fields) propertyKeys += "index_base"
     return buildJsonObject {
         put("frame", frame)
         put("state", state)
-        put("truncated", truncated)
-        put("order", "postorder")
+        put("truncated", visits.any { it.childrenTruncated })
+        put("order", "preorder")
         put("identity_scope", "snapshot")
-        propertiesUnavailableReason?.let { put("properties_unavailable_reason", it) }
-        slotIdentityUnavailableReason?.let { put("slot_identity_unavailable_reason", it) }
-        numberUnavailableReason?.let { put("number_unavailable_reason", it) }
+        put("max_depth", depth)
+        putJsonArray("roots") { visits.forEachIndexed { id, visit -> if (visit.parent < 0) add(id) } }
+        putJsonArray("fields") { UiField.entries.filter { it in fields }.forEach { add(it.path) } }
+        if (propertyKeys.isNotEmpty()) propertiesUnavailableReason?.let { put("properties_unavailable_reason", it) }
+        if (UiField.PROTOTYPE in fields || UiField.QUALITY in fields)
+            slotIdentityUnavailableReason?.let { put("slot_identity_unavailable_reason", it) }
+        if (UiField.NUMBER in fields) numberUnavailableReason?.let { put("number_unavailable_reason", it) }
         visibilityUnavailableReason?.let { put("visibility_unavailable_reason", it) }
-        progressUnavailableReason?.let { put("progress_unavailable_reason", it) }
-        elementUnavailableReason?.let { put("element_unavailable_reason", it) }
-        iconsUnavailableReason?.let { put("icons_unavailable_reason", it) }
-        iconNamesUnavailableReason?.let { put("icon_names_unavailable_reason", it) }
-        tooltipsUnavailableReason?.let { put("tooltips_unavailable_reason", it) }
-        qualityConditionUnavailableReason?.let { put("quality_condition_unavailable_reason", it) }
-        switchUnavailableReason?.let { put("switch_unavailable_reason", it) }
+        if (UiField.PROGRESS in fields) progressUnavailableReason?.let { put("progress_unavailable_reason", it) }
+        if (UiField.ELEMENT in fields) elementUnavailableReason?.let { put("element_unavailable_reason", it) }
+        if (UiField.ICONS in fields) iconsUnavailableReason?.let { put("icons_unavailable_reason", it) }
+        if (UiField.ICONS in fields || UiField.IMAGE in fields) {
+            iconNamesUnavailableReason?.let { put("icon_names_unavailable_reason", it) }
+        }
+        if (UiField.IMAGE in fields) imageUnavailableReason?.let { put("image_unavailable_reason", it) }
+        if (UiField.GRAPH in fields) graphUnavailableReason?.let { put("graph_unavailable_reason", it) }
+        if (UiField.PROTOTYPE in fields || UiField.ACHIEVEMENT in fields)
+            storedIdentityUnavailableReason?.let { put("stored_identity_unavailable_reason", it) }
+        if (UiField.TOOLTIP in fields) tooltipsUnavailableReason?.let { put("tooltips_unavailable_reason", it) }
+        guiUnavailableReason?.let { put("gui_unavailable_reason", it) }
+        gui?.fields?.let { put("gui_fields", it) }
+        gui?.depth?.let { put("gui_depth", it) }
+        if (UiField.QUALITY_CONDITION in fields) qualityConditionUnavailableReason?.let { put("quality_condition_unavailable_reason", it) }
+        if (UiField.SWITCH in fields) switchUnavailableReason?.let { put("switch_unavailable_reason", it) }
         if (nodes.any { it.visible != null }) put("visibility_basis", "own_widget_flags")
-        if (filtered) put("selector_nodes_omitted", selected.count { !it })
         putJsonArray("nodes") {
-            nodes.forEachIndexed { index, node ->
-                if (!selected[index]) return@forEachIndexed
+            visits.forEachIndexed { index, visit ->
+                val node = nodes[visit.source]
                 add(
                     buildJsonObject {
                         put("id", index)
-                        put("depth", node.depth)
-                        val parent = parents[index]
-                        if (parent >= 0 && selected[parent]) put("parent", parent)
+                        put("depth", visit.depth)
+                        if (visit.parent >= 0) put("parent", visit.parent)
+                        if (visit.siblingIndex > 0) put("sibling_index", visit.siblingIndex)
+                        if (visit.childrenTruncated) put("children_truncated", true)
                         put("type", node.type.removePrefix("class "))
-                        widgetText(node)
+                        if (UiField.TEXT in fields) widgetText(node)
                         put("enabled", node.enabled)
                         node.flaggedForDestruction?.let { put("flagged_for_destruction", it) }
                         node.visible?.let { put("visible", it) }
                         node.renderEnabled?.let { put("render_enabled", it) }
                         node.hiddenBySearch?.let { put("hidden_by_search", it) }
-                        node.properties?.let { put("properties", it.json()) }
+                        node.properties?.let { properties ->
+                            val value = JsonObject(properties.json().filterKeys { it in propertyKeys })
+                            if (value.isNotEmpty()) put("properties", value)
+                        }
+                        node.guiIndex?.let { guiIndex ->
+                            val identity = gui?.element(guiIndex)?.let { value -> JsonObject(value.filterKeys {
+                                (it != "children" || UiField.GUI_CHILDREN in fields) &&
+                                    (it !in setOf("properties", "read_status") || UiField.GUI_PROPERTIES in fields)
+                            }) }
+                            put("gui", identity ?: buildJsonObject {
+                                put("index", guiIndex)
+                                put("availability", "unavailable")
+                            })
+                        }
                         if (filtered) put("matched", node.selected)
                         if (node.typeTruncated) put("type_truncated", true)
                         if (bounds)
@@ -109,6 +129,16 @@ private fun WidgetProperties.json(): JsonObject = buildJsonObject {
             if (it.textTruncated) put("text_truncated", true)
         }
     }
+    image?.let { put("image", it.json()) }
+    graph?.let { put("graph", it.json()) }
+    achievement?.let {
+        putJsonObject("achievement") {
+            put("state_type", "AchievementState")
+            put("state_value", it.stateValue)
+            put("shown_state_value", it.shownStateValue)
+            put("in_sidebar", it.inSidebar)
+        }
+    }
     element?.let { element ->
         put(
             "element",
@@ -132,6 +162,7 @@ private fun WidgetProperties.json(): JsonObject = buildJsonObject {
     }
     checkState?.let { put("check_state", it) }
     toggled?.let { put("toggled", it) }
+    toggleMode?.let { put("toggle_mode", it) }
     selectedIndex?.let {
         put("selected_index", if (it < 0) JsonNull else JsonPrimitive(it))
         put("index_base", 0)
@@ -181,7 +212,7 @@ private fun WidgetProperties.json(): JsonObject = buildJsonObject {
     }
 }
 
-private fun WidgetIcon.json(): JsonObject = buildJsonObject {
+internal fun WidgetIcon.json(): JsonObject = buildJsonObject {
     put("reference", reference?.let(::JsonPrimitive) ?: JsonNull)
     if (reference != null) put("identity_scope", "snapshot")
     if (truncated) put("truncated", true)

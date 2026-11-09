@@ -121,7 +121,7 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libpng-dev libturbojpeg0-dev pkg-config
 
-      - name: Build and test on Linux or macOS
+      - name: Build and test on Linux
         if: runner.os != 'Windows'
         shell: bash
         env:

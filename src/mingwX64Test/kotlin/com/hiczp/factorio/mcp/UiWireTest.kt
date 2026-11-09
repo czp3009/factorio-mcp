@@ -3,6 +3,7 @@
 package com.hiczp.factorio.mcp
 
 import com.hiczp.factorio.mcp.nativebridge.FmAction
+import com.hiczp.factorio.mcp.nativebridge.FmRequestBuffer
 import kotlinx.cinterop.*
 import platform.posix.memset
 import kotlin.test.*
@@ -11,74 +12,52 @@ class UiWireTest {
     private val step = UiStep(false, 0, null, null, null)
 
     @Test
-    fun visibilityPredicateDoesNotLeakBetweenRequests() = memScoped {
+    fun largeSelectorsBindOwnedBytesAndClearTheNextRequest() = memScoped {
         val target = alloc<FmAction>()
-        for (visible in listOf(true, false, null)) {
-            writeAction(target, UiAction(listOf(step.copy(visible = visible))))
-            assertEquals(if (visible == null) 0 else 1, target.path[0].hasVisible)
-            assertEquals(if (visible == true) 1 else 0, target.path[0].visible)
-        }
+        val root = alloc<FmRequestBuffer>()
+        val path = List(512) { step.copy(type = "x".repeat(320), text = "界".repeat(1024)) }
+        val payload = RequestPayload(selectorPayload(path))
+        root.address = 4096uL
+        root.size = payload.bytes.size.toULong()
+        writeAction(target, UiAction(path, text = List(16384) { 0x1f680 }), List(8) { it.toUInt() }, payload, root)
+        assertEquals(512, target.count)
+        assertEquals(root.address, target.path.address)
+        assertEquals(payload.bytes.size.toULong(), target.path.size)
+        assertEquals(16384u, target.textCount)
+        assertEquals(0x1f680u, target.text[16383])
+        assertEquals(7u, target.keys[7])
+        assertEquals(defaultUiFields.uiFieldMask(), target.fields)
+        writeAction(target, UiAction(emptyList(), fields = emptySet()))
+        assertEquals(0u, target.fields)
+        writeAction(target, null)
+        assertTrue(target.ptr.reinterpret<ByteVar>().readBytes(sizeOf<FmAction>().toInt()).all { it == 0.toByte() })
     }
 
     @Test
-    fun oversizedTypedRequestsAreRejectedBeforeAnyNativeWrite() {
+    fun dispatchBudgetsRejectBeforeAnyNativeWrite() = memScoped {
         val size = sizeOf<FmAction>().toInt() + 32
-        val buffer = nativeHeap.allocArray<ByteVar>(size)
-        try {
-            memset(buffer, 0x5a, size.toULong())
-            val before = buffer.readBytes(size)
-            val target = buffer.reinterpret<FmAction>().pointed
-            val invalid =
-                listOf(
-                    UiAction(List(17) { step }),
-                    UiAction(listOf(step), text = List(1025) { 65 }),
-                    UiAction(listOf(step.copy(type = "x".repeat(160)))),
-                    UiAction(listOf(step.copy(prototype = UiPrototypeMatch("x".repeat(256))))),
-                    UiAction(listOf(step.copy(prototype = UiPrototypeMatch("x", "x".repeat(160))))),
-                    UiAction(listOf(step.copy(text = "x".repeat(1024)))),
-                    UiAction(listOf(step.copy(text = "界".repeat(342)))),
-                    UiAction(listOf(step.copy(text = "a\u0000b"))),
-                )
-            invalid.forEach {
-                assertFailsWith<IllegalArgumentException> { writeAction(target, it) }
-                assertContentEquals(before, buffer.readBytes(size))
-            }
-            assertFailsWith<IllegalArgumentException> {
-                writeAction(target, UiAction(emptyList()), List(9) { 1u })
-            }
-            assertContentEquals(before, buffer.readBytes(size))
-            assertFailsWith<IllegalArgumentException> { writeAction(target, null, listOf(1u)) }
-            assertContentEquals(before, buffer.readBytes(size))
-        } finally {
-            nativeHeap.free(buffer)
-        }
+        val buffer = allocArray<ByteVar>(size)
+        memset(buffer, 0x5a, size.toULong())
+        val before = buffer.readBytes(size)
+        val target = buffer.reinterpret<FmAction>().pointed
+        assertFailsWith<IllegalArgumentException> { writeAction(target, UiAction(emptyList(), text = List(16385) { 65 })) }
+        assertFailsWith<IllegalArgumentException> { writeAction(target, UiAction(emptyList()), List(9) { 1u }) }
+        assertFailsWith<IllegalArgumentException> { writeAction(target, null, listOf(1u)) }
+        assertContentEquals(before, buffer.readBytes(size))
     }
 
     @Test
-    fun maximumPayloadKeepsTerminatorsAndNextRequestClearsOldFields() {
-        val target = nativeHeap.alloc<FmAction>()
-        try {
-            val path = List(16) { step.copy(type = "x".repeat(159), text = "界".repeat(341)) }
-            writeAction(
-                target,
-                UiAction(path, text = List(1024) { 0x1f680 }),
-                List(8) { it.toUInt() },
-            )
-            assertEquals(16, target.count)
-            assertEquals(1024u, target.textCount)
-            assertEquals(0x1f680u, target.text[1023])
-            assertEquals(7u, target.keys[7])
-            assertEquals(path.last().text, target.path[15].text.toKString())
-            assertEquals(0.toByte(), target.path[15].type[159])
-            assertEquals(0.toByte(), target.path[15].text[1023])
-            writeAction(target, null)
-            assertTrue(
-                target.ptr.reinterpret<ByteVar>().readBytes(sizeOf<FmAction>().toInt()).all {
-                    it == 0.toByte()
-                }
-            )
-        } finally {
-            nativeHeap.free(target)
-        }
+    fun requestSlicesRejectUnownedRangesAndIntegerOverflow() = memScoped<Unit> {
+        val root = alloc<FmRequestBuffer>()
+        val target = alloc<FmRequestBuffer>()
+        root.address = 4096uL
+        root.size = 32uL
+        target.bindRequest(root, RequestSlice(7, 11))
+        assertEquals(4103uL, target.address)
+        assertEquals(11uL, target.size)
+        for (slice in listOf(RequestSlice(-1, 1), RequestSlice(0, -1), RequestSlice(30, 3)))
+            assertFailsWith<IllegalArgumentException> { target.bindRequest(root, slice) }
+        root.address = ULong.MAX_VALUE
+        assertFailsWith<IllegalArgumentException> { target.bindRequest(root, RequestSlice(0, 1)) }
     }
 }

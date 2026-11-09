@@ -26,7 +26,6 @@ internal fun selectorSchema(): JsonObject =
             putJsonObject("path") {
                 put("type", "array")
                 put("minItems", 1)
-                put("maxItems", 16)
                 put(
                     "items",
                     objectSchema(
@@ -47,6 +46,10 @@ internal fun selectorSchema(): JsonObject =
                                         putJsonObject("native_type") { put("type", "string") }
                                         putJsonObject("text") { put("type", "string") }
                                         putJsonObject("enabled") { put("type", "boolean") }
+                                        putJsonObject("gui") {
+                                            put("type", "object")
+                                            put("description", "Match existing LuaGuiElement attributes, e.g. {name:\"my_button\",sprite:\"item/iron-plate\"}. Attribute names are direct here, including those returned inside gui.properties. Objects recursively require supplied fields; arrays/scalars match exactly. Unavailable values do not match; null predicates are rejected.")
+                                        }
                                         putJsonObject("visible") {
                                             put("type", "boolean")
                                             put(
@@ -74,9 +77,10 @@ internal fun selectorSchema(): JsonObject =
                             putJsonObject("position") {
                                 put("type", "integer")
                                 put("minimum", 1)
+                                put("maximum", Int.MAX_VALUE)
                                 put(
                                     "description",
-                                    "One-based position per context after matching, in parent-first document order (not ui_read's postorder). Omit to keep all matches.",
+                                    "One-based position per context after matching, in parent-first document order. Omit to keep all matches.",
                                 )
                             }
                         },
@@ -141,10 +145,10 @@ internal fun uiActionProperties(): JsonObject = buildJsonObject {
     )
     putJsonObject("text") {
         put("type", "string")
-        put("maxLength", 1024)
+        put("maxLength", 16384)
         put(
             "description",
-            "set_text only: replace the full text, including empty string to clear. At most 1024 Unicode characters; newline is allowed, other control characters are rejected. Native editing restrictions still apply.",
+            "set_text only: replace the full text, including empty string to clear. At most 16384 Unicode scalar values; newline is allowed, other C0 controls and malformed surrogates are rejected. Native editing restrictions still apply.",
         )
     }
 }

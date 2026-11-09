@@ -195,7 +195,7 @@ class GameSessionTest {
         session.attach(12)
         connection.failOperation = 3
         connection.failClose = true
-        val failure = assertFailsWith<IllegalStateException> { session.read(10, false) }
+        val failure = assertFailsWith<IllegalStateException> { session.read(false) }
         assertEquals("Native operation failed", failure.message)
         assertEquals("Local cleanup failed", failure.suppressedExceptions.single().message)
         assertFalse(connection.closed)
@@ -215,7 +215,7 @@ class GameSessionTest {
         assertFalse(connection.closed)
         assertFailsWith<IllegalStateException> { session.attach(13) }
         assertFailsWith<IllegalStateException> { session.attach(12) }
-        assertFailsWith<IllegalStateException> { session.read(10, false) }
+        assertFailsWith<IllegalStateException> { session.read(false) }
         connection.failClose = false
         session.detach()
         assertTrue(connection.closed)
@@ -254,7 +254,7 @@ class GameSessionTest {
                 session.attach(12)
                 val input = async { session.input(inputRequest) }
                 connection.inputStarted.await()
-                session.read(10, false)
+                session.read(false)
                 assertFalse(input.isCompleted)
                 assertFailsWith<IllegalStateException> { session.input(inputRequest) }
                 assertFalse(connection.inputs.single().closed)
@@ -352,7 +352,7 @@ class GameSessionTest {
         for (state in listOf("main_menu", "loading", "in_game", "main_menu")) {
             connection.state = state
             assertEquals(state, session.status().getValue("state").jsonPrimitive.content)
-            session.read(10, false)
+            session.read(false)
         }
         assertEquals(1, opens)
         session.detach()
@@ -367,11 +367,11 @@ class GameSessionTest {
         val session = GameSession { connection }
         session.attach(12)
         supervisorScope {
-            val first = async { runCatching { session.read(10, false) } }
+            val first = async { runCatching { session.read(false) } }
             connection.started.await()
             val second =
                 async(start = CoroutineStart.UNDISPATCHED) {
-                    runCatching { session.read(10, false) }
+                    runCatching { session.read(false) }
                 }
             session.detach()
             assertIs<CancellationException>(first.await().exceptionOrNull())
@@ -391,7 +391,7 @@ class GameSessionTest {
             val session = GameSession { connection }
             session.attach(12)
             assertFailsWith<IllegalStateException> { session.screenshot() }
-            session.read(10, false)
+            session.read(false)
             assertEquals(1, connection.reads)
             connection.failOperation = null
             session.screenshot()
@@ -439,7 +439,7 @@ class GameSessionTest {
             val session = GameSession { connection }
             session.attach(12)
             supervisorScope {
-                val read = async { runCatching { session.read(10, false) } }
+                val read = async { runCatching { session.read(false) } }
                 connection.started.await()
                 val capture =
                     async(start = CoroutineStart.UNDISPATCHED) {
@@ -472,7 +472,7 @@ class GameSessionTest {
                 connection.started.await()
                 val waiting =
                     async(start = CoroutineStart.UNDISPATCHED) {
-                        runCatching { session.read(10, false) }
+                        runCatching { session.read(false) }
                     }
                 session.detach()
                 assertIs<CancellationException>(running.await().exceptionOrNull())
@@ -524,7 +524,7 @@ class GameSessionTest {
             assertEquals(listOf(1, 6, 12), calls)
             session.setRendering(false)
             assertFailsWith<IllegalStateException> { session.screenshot() }
-            session.read(10, false)
+            session.read(false)
             session.setRendering(true)
             session.setRendering(true)
             session.screenshot()
@@ -572,7 +572,7 @@ class GameSessionTest {
             val session = GameSession { connection }
             session.attach(12)
             supervisorScope {
-                val read = async { runCatching { session.read(10, false) } }
+                val read = async { runCatching { session.read(false) } }
                 connection.started.await()
                 val reattach =
                     async(start = CoroutineStart.UNDISPATCHED) {
@@ -646,7 +646,7 @@ class GameSessionTest {
         val session = GameSession { if (it == 1) old else next }
         session.attach(1)
         old.live = false
-        assertFailsWith<IllegalStateException> { session.read(10, false) }
+        assertFailsWith<IllegalStateException> { session.read(false) }
         assertEquals(listOf(1), old.calls)
         assertEquals(1, old.closeCount)
         assertEquals(2, session.attach(2).getValue("pid").jsonPrimitive.int)
@@ -663,11 +663,11 @@ class GameSessionTest {
         val session = GameSession { old }
         session.attach(1)
         supervisorScope {
-            val first = async { runCatching { session.read(10, false) } }
+            val first = async { runCatching { session.read(false) } }
             old.started.await()
             val second =
                 async(start = CoroutineStart.UNDISPATCHED) {
-                    runCatching { session.read(10, false) }
+                    runCatching { session.read(false) }
                 }
             old.failureGate!!.complete(Unit)
             assertEquals("Native operation failed", first.await().exceptionOrNull()?.message)

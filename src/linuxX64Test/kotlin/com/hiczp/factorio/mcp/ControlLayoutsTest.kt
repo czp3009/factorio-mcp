@@ -86,7 +86,8 @@ class ControlLayoutsTest {
         assertFails { metadata.read(source, 0, ::readFixtureObservation) }
         source.count = 1u
         source.registryCount = 2u
-        assertFails { metadata.read(source, 0, ::readFixtureObservation) }
+        val selected = metadata.read(source, 0, ::readFixtureObservation)
+        assertTrue(!selected.truncated && selected.controls.size == 1 && selected.registryCount == 2)
         source.truncated = 1u
         assertTrue(metadata.read(source, 0, ::readFixtureObservation).truncated)
         row.gui = 2u

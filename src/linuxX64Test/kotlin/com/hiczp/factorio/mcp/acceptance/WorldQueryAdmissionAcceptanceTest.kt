@@ -2,6 +2,8 @@
 
 package com.hiczp.factorio.mcp.acceptance
 
+import com.hiczp.factorio.mcp.worldQuery
+
 import com.hiczp.factorio.mcp.McpHttpClient
 import com.hiczp.factorio.mcp.toolValue
 import kotlinx.cinterop.toKString
@@ -33,7 +35,7 @@ class WorldQueryAdmissionAcceptanceTest {
                 )
                 attached = true
                 repeat(2) {
-                    val result = client.tool("world_query", buildJsonObject {
+                    val result = client.worldQuery(buildJsonObject {
                         putJsonObject("selection") { put("kind", "player") }
                     })
                     assertTrue(result["isError"]?.jsonPrimitive?.boolean == true, result.toString())

@@ -2,6 +2,8 @@
 
 package com.hiczp.factorio.mcp.acceptance
 
+import com.hiczp.factorio.mcp.worldQuery
+
 import com.hiczp.factorio.mcp.McpHttpClient
 import com.hiczp.factorio.mcp.toolValue
 import kotlinx.cinterop.toKString
@@ -33,11 +35,11 @@ class LoadedWorldQueryAcceptanceTest {
                 val playerRequest = buildJsonObject {
                     putJsonObject("selection") { put("kind", "player") }
                 }
-                val before = client.tool("world_query", playerRequest).toolValue()
+                val before = client.worldQuery(playerRequest).toolValue()
                 assertEquals("live_world", before.getValue("observation").jsonPrimitive.content)
                 val player = before.getValue("player").jsonObject
                 assertTrue(player.getValue("index").jsonPrimitive.int > 0)
-                val inspection = client.tool("world_query", buildJsonObject {
+                val inspection = client.worldQuery(buildJsonObject {
                     putJsonObject("selection") {
                         put("kind", "inspect")
                         putJsonObject("target") { put("kind", "game") }
@@ -79,14 +81,14 @@ class LoadedWorldQueryAcceptanceTest {
                     }
                     put("limit", 2)
                 }
-                val entities = client.tool("world_query", entityRequest).toolValue()
+                val entities = client.worldQuery(entityRequest).toolValue()
                 assertEquals(2, entities.getValue("objects").jsonArray.size)
                 assertTrue(entities.getValue("truncated").jsonPrimitive.boolean)
                 assertTrue(entities.getValue("candidates_observed").jsonPrimitive.int > 2)
                 val first = entities.getValue("objects").jsonArray.first().jsonObject
                 assertEquals("LuaEntity", first.getValue("object_name").jsonPrimitive.content)
                 val name = first.getValue("attributes").jsonObject.getValue("name")
-                val prototype = client.tool("world_query", buildJsonObject {
+                val prototype = client.worldQuery(buildJsonObject {
                     putJsonObject("selection") {
                         put("kind", "prototypes")
                         put("type", "entity")
@@ -96,7 +98,7 @@ class LoadedWorldQueryAcceptanceTest {
                 }).toolValue().getValue("objects").jsonArray.single().jsonObject
                 assertEquals("LuaEntityPrototype", prototype.getValue("object_name").jsonPrimitive.content)
                 assertEquals(name, prototype.getValue("attributes").jsonObject.getValue("name"))
-                val tiles = client.tool("world_query", buildJsonObject {
+                val tiles = client.worldQuery(buildJsonObject {
                     putJsonObject("selection") {
                         put("kind", "tiles")
                         put("area", area(-0.5, -0.5, 1.0, 1.0))
@@ -104,9 +106,12 @@ class LoadedWorldQueryAcceptanceTest {
                     put("limit", 1)
                 }).toolValue()
                 assertEquals(1, tiles.getValue("objects").jsonArray.size)
-                assertEquals(4, tiles.getValue("candidates_observed").jsonPrimitive.int)
+                assertEquals(1, tiles.getValue("candidates_observed").jsonPrimitive.int)
+                assertEquals(4, tiles.getValue("total").jsonPrimitive.int)
+                assertFalse(tiles.getValue("selection_complete").jsonPrimitive.boolean)
+                assertTrue("has_more" !in tiles && "next_position" !in tiles)
                 assertTrue(tiles.getValue("truncated").jsonPrimitive.boolean)
-                val missing = client.tool("world_query", buildJsonObject {
+                val missing = client.worldQuery(buildJsonObject {
                     putJsonObject("selection") {
                         put("kind", "tiles")
                         put("position", player.getValue("position"))
@@ -118,7 +123,7 @@ class LoadedWorldQueryAcceptanceTest {
                     it.jsonObject["text"]?.jsonPrimitive?.content?.contains("Requested surface is unavailable") == true
                 }, missing.toString())
                 repeat(5) {
-                    val after = client.tool("world_query", playerRequest).toolValue().getValue("player").jsonObject
+                    val after = client.worldQuery(playerRequest).toolValue().getValue("player").jsonObject
                     assertEquals(player.getValue("index"), after.getValue("index"))
                     assertEquals(player.getValue("position"), after.getValue("position"))
                     assertTrue(client.tool("ui_read").toolValue().getValue("nodes").jsonArray.isNotEmpty())

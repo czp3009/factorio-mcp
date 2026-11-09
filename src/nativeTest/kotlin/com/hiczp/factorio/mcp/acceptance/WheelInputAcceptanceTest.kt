@@ -2,6 +2,8 @@
 
 package com.hiczp.factorio.mcp.acceptance
 
+import com.hiczp.factorio.mcp.worldQuery
+
 import com.hiczp.factorio.mcp.McpHttpClient
 import com.hiczp.factorio.mcp.toolValue
 import com.hiczp.factorio.mcp.uiSelector
@@ -36,9 +38,7 @@ class WheelInputAcceptanceTest {
         fun crc(path: String) = read(path).lineSequence().count { "UI_ACTION_FULL_CRC " in it }
         suspend fun zoom() =
             client
-                .tool(
-                    "world_query",
-                    buildJsonObject { putJsonObject("selection") { put("kind", "player") } },
+                .worldQuery(buildJsonObject { putJsonObject("selection") { put("kind", "player") } },
                 )
                 .toolValue()
                 .getValue("player")
@@ -63,7 +63,7 @@ class WheelInputAcceptanceTest {
             put("selector", uiSelector(text, "agui::TextButton"))
         }).toolValue()
 
-        suspend fun player() = client.tool("world_query", buildJsonObject {
+        suspend fun player() = client.worldQuery(buildJsonObject {
             putJsonObject("selection") { put("kind", "player") }
         }).toolValue().getValue("player").jsonObject
 

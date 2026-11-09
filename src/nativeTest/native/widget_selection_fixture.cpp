@@ -44,6 +44,23 @@ int main() {
     fm::ui::postorderParents(nodes);
     std::vector<fm::ui::Step> path{step(false, "Panel"), step(true, "Button", 1)};
     auto select = [&] { return Tree(nodes, true).select(path, [] { return false; }); };
+    require(Tree(nodes, true).observation({2}, 0) == std::vector<int>{2}, "depth zero includes descendants");
+    require(Tree(nodes, true).observation({2}, 1) == std::vector<int>({0, 1, 2}), "depth one loses direct children");
+    require(Tree(nodes, true).observation({3, 6}, 0) == std::vector<int>({3, 6}), "nested matches lose independent depth roots");
+    const auto bounded = Tree(nodes, true).retain({1, 2, 3}, true);
+    require(bounded.size() == 3 && bounded[0].source == 1 && bounded[0].parent == 1 &&
+                bounded[0].depth == 1 && bounded[0].siblingIndex == 2 && !bounded[0].childrenTruncated &&
+                bounded[1].source == 2 && bounded[1].parent == -1 && bounded[1].depth == 0 &&
+                bounded[1].childrenTruncated && bounded[2].parent == -1 && bounded[2].depth == 0,
+            "resident pruning loses original sibling positions, independent roots or omitted children");
+    rejects(Failure::invalid, [&] { Tree(nodes, true).retain({1, 1}); });
+    for (bool postorder : {false, true}) {
+        const auto separated = Tree(nodes, true).retain({3, 6}, postorder);
+        require(separated.size() == 2 && separated[0].source == 6 && separated[1].source == 3 &&
+                    separated[0].parent == -1 && separated[1].parent == -1,
+                "pruning changed ancestor/descendant root document order across an omitted path");
+    }
+    rejects(Failure::invalid, [&] { Tree(nodes, true).observation({2}, -1); });
     require(select() == std::vector<int>{0, 4}, "child position is not per context");
     const auto selected = select();
     require(Tree(nodes, true).observation(selected) == std::vector<int>{0, 3, 4}, "selected subtrees differ");
@@ -84,6 +101,13 @@ int main() {
     require(select().empty(), "unknown visibility matched false");
     nodes[1].visible = false;
     require(select() == std::vector<int>{1}, "observed visibility differs");
+    path[0].guiMatch = 1;
+    require(select().empty(), "unavailable script predicates matched");
+    nodes[1].guiMatches = "01";
+    require(select() == std::vector<int>{1}, "script predicate was not combined with native predicates");
+    nodes[1].guiMatches = "00";
+    require(select().empty(), "false script predicate matched");
+    path[0].guiMatch = -1;
 
     // A preorder adapter supplies explicit parents and keeps the same document-order semantics.
     const int order[] = {6, 2, 0, 1, 5, 4, 3};
@@ -127,6 +151,8 @@ int main() {
     fm::ui::postorderParents(nodes);
     path[1] = step(false, "Absent");
     require(select().empty(), "complete large descendant search was rejected");
+    path = std::vector<fm::ui::Step>(256, step(true, "Panel"));
+    require(select() == std::vector<int>{3840}, "long child selector was limited by the old path capacity");
     nodes.clear();
     require(select().empty(), "empty forest produces matches");
     const char invalid[] = {'n', 'o'};

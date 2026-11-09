@@ -89,8 +89,10 @@ static FmLinuxElementLayout layout() {
     return result;
 }
 
+ObservationStrings strings;
+
 template <class T> int observe(T &widget, FmLinuxUiElement &output) {
-    return collectElement(reinterpret_cast<uintptr_t>(static_cast<Widget *>(&widget)), layout(), output);
+    return collectElement(reinterpret_cast<uintptr_t>(static_cast<Widget *>(&widget)), layout(), output, strings);
 }
 
 int main() {
@@ -110,12 +112,12 @@ int main() {
     Item item;
     stack.item = &item;
     assert(observe(stackButton, output) == 0 && output.flags == 7 && output.health == item.health);
-    assert(std::string(output.type, output.typeSize) == "Item");
+    assert(observationText(output.type) == "Item");
     Tool tool;
     stack.item = &tool;
     assert(observe(stackButton, output) == 0 && output.flags == 15 && output.health == tool.health &&
            output.durability == tool.durability);
-    assert(std::string(output.type, output.typeSize) == "Tool");
+    assert(observationText(output.type) == "Tool");
     Ammo ammo;
     stack.item = &ammo;
     assert(observe(stackButton, output) == 0 && output.flags == 23 && output.magazine == ammo.magazine);
@@ -148,7 +150,7 @@ int main() {
     assert(!validElementLayout(invalid));
     invalid = {};
     assert(validElementLayout(invalid));
-    assert(collectElement(0, invalid, output) == 0 && !output.available);
+    assert(collectElement(0, invalid, output, strings) == 0 && !output.available);
     invalid.count = 1;
     assert(!validElementLayout(invalid));
 }

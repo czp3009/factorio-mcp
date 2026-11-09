@@ -34,7 +34,11 @@ internal val worldQueryLua =
       selected_player=game.get_player(selection.player)
       assert(selected_player and selected_player.valid, "Selected player is unavailable")
     end
-    local function identity(value)
+    local selected_force=selection.force and game.forces[selection.force] or selected_player.force
+    assert(selected_force and selected_force.valid,"Selected force is unavailable")
+    $objectInspectionLua
+    local value_state={}
+    local function identity(value,hint)
       local class = value.object_name
       if class == "LuaSurface" or class == "LuaForce" then
         local result={object_name=class, index=value.index, name=value.name}
@@ -70,23 +74,10 @@ internal val worldQueryLua =
           or class == "LuaFluidPrototype" or class == "LuaTechnologyPrototype" then
         return {object_name=class, name=value.name, type=value.type}
       end
-      error("Unsupported related object: " .. tostring(class))
+      return native_reference(value,hint)
     end
-    local function project(value, depth, projecting)
-      local kind = type(value)
-      if kind == "nil" or kind == "boolean" or kind == "number" or kind == "string" then return value end
-      if kind == "userdata" then return identity(value) end
-      assert(kind == "table", "Unsupported value type: " .. kind)
-      projecting = projecting or {}
-      assert(not projecting[value], "Cyclic related collection")
-      projecting[value] = true
-      local result = {}
-      for key, item in pairs(value) do
-        assert(type(key) == "string" or type(key) == "number", "Unsupported table key")
-        result[key] = project(item, depth + 1, projecting)
-      end
-      projecting[value] = nil
-      return result
+    local function project(value,hint)
+      return observe_value(value,args.depth or 3,identity,value_state,hint)
     end
     local visibility_cache = {}
     local force = player.force
@@ -109,11 +100,26 @@ internal val worldQueryLua =
       return result
     end
     $entityDetailsLua
-    $objectInspectionLua
-    local function describe(object)
-      local result = {object_name=object.object_name, attributes={}, read_status={}}
-      for _, field in ipairs(args.fields) do
-        local ok, value = pcall(function() return project(object[field], 0) end)
+    local reads_truncated=false
+    local function collect_reads(object,result,hint)
+      if not args.reads then return end
+      result.reads=read_observations(object,hint,args.reads)
+      for _,item in ipairs(result.reads) do
+        if item.truncated then reads_truncated=true end
+        if item.depth_truncated then value_state.depth_truncated=true end
+      end
+    end
+    local function describe(object,hint)
+      local class,metadata,declared=api_class(object,hint)
+      local result = {object_name=class, attributes={}, read_status={}}
+      if declared and declared~=class then result.api_class=declared end
+      if class then result.reference=identity(object,hint)
+      else result.value=project(object,hint) end
+      for _, field in ipairs(not class and args.fields_explicit==false and {} or args.fields) do
+        local ok, value = pcall(function()
+          local item,item_hint=read_property(object,field,hint)
+          return project(item,item_hint)
+        end)
         if not ok then
           result.read_status[field] = {status="error", message=tostring(value)}
         elseif value == nil then
@@ -122,9 +128,12 @@ internal val worldQueryLua =
           result.attributes[field] = value
         end
       end
-      local ok, position = pcall(function() return object.position end)
-      if ok and position then result.visibility = visibility(position, object.surface) end
+      local ok, position, observed_surface = pcall(function()
+        return read_property(object,"position",hint),read_property(object,"surface",hint)
+      end)
+      if ok and position and observed_surface then result.visibility = visibility(position, observed_surface) end
       entity_details(object,result)
+      collect_reads(object,result,hint)
       return result
     end
     local objects, truncated, candidates = {}, false, 0
@@ -135,8 +144,15 @@ internal val worldQueryLua =
         assert(entity, "Unit number is absent or not indexed by the game; provide position or area for bounded resolution")
         return entity and entity.surface == surface and {entity} or {}
       end
-      local found=surface.find_entities_filtered{position=selected.position, area=selected.area,
-        radius=selected.radius, name=selected.name, type=selected.type, limit=not selected.unit_number and maximum or nil}
+      local filters={}
+      for key,value in pairs(selected.filters or {}) do filters[key]=value end
+      filters.position=selected.position
+      filters.area=selected.area
+      filters.radius=selected.radius
+      filters.name=selected.name or filters.name
+      filters.type=selected.type or filters.type
+      filters.limit=not selected.unit_number and maximum or nil
+      local found=surface.find_entities_filtered(filters)
       if not selected.unit_number then return found end
       for _,entity in ipairs(found) do
         if entity.unit_number==selected.unit_number then return {entity} end
@@ -155,9 +171,10 @@ internal val worldQueryLua =
       $worldOverviewLua
     elseif selection.kind == "prototypes" or selection.kind == "recipes" or selection.kind == "technologies" then
       local catalog
-      if selection.kind=="recipes" then catalog=player.force.recipes
-      elseif selection.kind=="technologies" then catalog=player.force.technologies
-      else catalog=prototypes[selection.type] end
+      local catalog_hint
+      if selection.kind=="recipes" then catalog=selected_force.recipes
+      elseif selection.kind=="technologies" then catalog=selected_force.technologies
+      else catalog,catalog_hint=read_property(prototypes,selection.type) end
       assert(catalog, "Requested prototype catalog is unavailable")
       local names, missing, scanned = {}, {}, 0
       local function contains(entries, filter)
@@ -188,10 +205,14 @@ internal val worldQueryLua =
       extra.observation=selection.kind == "prototypes" and "prototype_catalog" or "force_"..selection.kind
       extra.offset=args.offset
       candidates=#names
-      truncated=args.offset+limit<#names
-      if truncated then extra.next_offset=args.offset+limit end
-      for index=args.offset+1,math.min(#names,args.offset+limit) do
-        objects[#objects+1]=describe(catalog[names[index]])
+      local finish=math.min(#names,args.offset+(limit or #names))
+      truncated=finish<#names
+      if truncated then extra.next_offset=finish end
+      for index=args.offset+1,finish do
+        local value,hint=read_index(catalog,names[index],catalog_hint)
+        local record=describe(value,hint)
+        record.key=names[index]
+        objects[#objects+1]=record
       end
     elseif selection.kind == "inventory" or selection.kind == "inventories" then
       local inventory_player=player
@@ -223,12 +244,17 @@ internal val worldQueryLua =
         local found={}
         for _, index in ipairs(indices) do
           local inventory=owner.get_inventory(index)
-          if inventory then found[#found+1]=inventory_info(inventory) end
+          if inventory then found[#found+1]=inventory end
         end
         candidates=#found
-        truncated=args.offset+limit<#found
-        if truncated then extra.next_offset=args.offset+limit end
-        for index=args.offset+1,math.min(#found,args.offset+limit) do objects[#objects+1]=found[index] end
+        local finish=math.min(#found,args.offset+(limit or #found))
+        truncated=finish<#found
+        if truncated then extra.next_offset=finish end
+        for index=args.offset+1,finish do
+          local record=inventory_info(found[index])
+          collect_reads(found[index],record)
+          objects[#objects+1]=record
+        end
       else
         local requested=selection.inventory or "main"
         local inventory
@@ -241,16 +267,18 @@ internal val worldQueryLua =
         assert(inventory and inventory.valid, "Requested inventory is unavailable")
         extra.inventory=inventory_info(inventory)
         candidates=#inventory
-        truncated=args.offset+limit<#inventory
-        if truncated then extra.next_offset=args.offset+limit end
-        for index=args.offset+1,math.min(#inventory,args.offset+limit) do
+        local finish=math.min(#inventory,args.offset+(limit or #inventory))
+        truncated=finish<#inventory
+        if truncated then extra.next_offset=finish end
+        for index=args.offset+1,finish do
           local stack=inventory[index]
           local record=stack.valid_for_read and describe(stack) or {object_name="LuaItemStack",attributes={},read_status={}}
+          if not stack.valid_for_read then collect_reads(stack,record) end
           record.index=index
           record.valid_for_read=stack.valid_for_read
           if extra.inventory.supports_filters then
             local filter=inventory.get_filter(index)
-            if filter then record.filter=project(filter,0) end
+            if filter then record.filter=project(filter) end
           end
           objects[#objects+1]=record
         end
@@ -260,7 +288,7 @@ internal val worldQueryLua =
       local function read(record, field, getter)
         record.attributes={}
         record.read_status={}
-        local ok,value=pcall(function() return project(getter(),0) end)
+        local ok,value=pcall(function() return project(getter()) end)
         if not ok then record.read_status[field]={status="error",message=tostring(value)}
         elseif value==nil then record.read_status[field]={status="nil"}
         else record.attributes[field]=value end
@@ -298,14 +326,15 @@ internal val worldQueryLua =
       table.sort(found,function(a,b) return a.index<b.index end)
       candidates=#found
       extra.offset=args.offset
-      truncated=args.offset+limit<#found
-      if truncated then extra.next_offset=args.offset+limit end
-      for index=args.offset+1,math.min(#found,args.offset+limit) do objects[#objects+1]=describe(found[index]) end
+      local finish=math.min(#found,args.offset+(limit or #found))
+      truncated=finish<#found
+      if truncated then extra.next_offset=finish end
+      for index=args.offset+1,finish do objects[#objects+1]=describe(found[index]) end
     elseif selection.kind == "player" then
       objects[1] = describe(selected_player)
       candidates = 1
     elseif selection.kind == "force" then
-      objects[1] = describe(selected_player.force)
+      objects[1] = describe(selected_force)
       candidates = 1
     elseif selection.kind == "character" or selection.kind == "vehicle" or selection.kind == "physical_vehicle" then
       local entity=selected_player[selection.kind]
@@ -315,10 +344,11 @@ internal val worldQueryLua =
         extra.surface=identity(entity.surface)
       else extra.availability="nil" end
     elseif selection.kind == "entities" then
-      local found=entities(selection,limit+1)
+      local found=entities(selection,limit and limit+1 or 2)
       candidates = #found
-      truncated = #found > limit
-      for index=1,math.min(#found,limit) do objects[index] = describe(found[index]) end
+      truncated = limit~=nil and #found>limit
+      extra.selection_complete=not truncated
+      for index=1,math.min(#found,limit or #found) do objects[index] = describe(found[index]) end
     else
       local left, top, right, bottom
       if selection.position then
@@ -328,15 +358,25 @@ internal val worldQueryLua =
         left, top = math.floor(selection.area.left_top.x), math.floor(selection.area.left_top.y)
         right, bottom = math.ceil(selection.area.right_bottom.x), math.ceil(selection.area.right_bottom.y)
       end
-      candidates = (right-left)*(bottom-top)
-      truncated = candidates > limit
-      for index=0,math.min(candidates,limit)-1 do
+      local total=(right-left)*(bottom-top)
+      local finish=math.min(total,limit or total)
+      extra.total=total
+      candidates=finish
+      truncated = finish < total
+      extra.selection_complete=not truncated
+      for index=0,finish-1 do
         local x, y = left+index%(right-left), top+math.floor(index/(right-left))
         local visible = visibility{x=x,y=y}
         if visible.generated then objects[#objects+1] = describe(surface.get_tile(x,y))
         else objects[#objects+1] = {object_name="LuaTile", position={x=x,y=y}, availability="ungenerated", visibility=visible} end
       end
     end
+    if not args.inspection and args.offset~=nil then extra.has_more=extra.next_offset~=nil end
+    if value_state.depth_truncated then
+      extra.depth_truncated=true
+      truncated=true
+    end
+    truncated=truncated or reads_truncated
     local result={tick=game.tick, observation="live_world", identity_scope="current_world",
       player={index=player.index, name=player.name, controller_type=player.controller_type,
         position=player.position, surface=identity(player.surface), physical_position=player.physical_position,

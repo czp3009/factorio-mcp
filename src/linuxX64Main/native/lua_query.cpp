@@ -21,6 +21,7 @@ struct Execution {
     const uint32_t *cancel;
     LuaResult *result;
     double playerIndex;
+    std::string_view uiIndices;
     bool read = false;
     int error = 0;
     uintptr_t handler = 0;
@@ -46,9 +47,9 @@ bool progress(void *state, Execution &execution, uint32_t elements, bool pushing
 
 const char *readSource(void *, void *userdata, size_t *size) {
     auto &execution = *static_cast<Execution *>(userdata);
-    *size = execution.read ? 0 : execution.query->sourceSize;
+    *size = execution.read ? 0 : execution.query->source.size;
     execution.read = true;
-    return *size ? execution.query->source : nullptr;
+    return *size ? reinterpret_cast<const char *>(execution.query->source.address) : nullptr;
 }
 
 // Keep only trivial objects across game calls: some supported Lua runtimes unwind with longjmp.
@@ -69,8 +70,14 @@ void execute(void *state, void *userdata) {
         number(state, execution.playerIndex);
         if (!progress(state, execution, 2, true))
             return;
-        string(state, query.arguments, query.argumentsSize);
+        string(state, reinterpret_cast<const char *>(query.arguments.address), query.arguments.size);
         uint32_t elements = 3;
+        if (!execution.uiIndices.empty()) {
+            if (!progress(state, execution, elements, true))
+                return;
+            string(state, execution.uiIndices.data(), execution.uiIndices.size());
+            ++elements;
+        }
         if (query.includeViewport) {
             const auto &view = *execution.viewport;
             const double values[] = {view.surface, view.width, view.height, view.left, view.top, view.right, view.bottom};
@@ -88,7 +95,7 @@ void execute(void *state, void *userdata) {
         if (!progress(state, execution, elements))
             return;
         if (!fm_ipc_load(execution.cancel)) {
-            const int arguments = query.includeViewport ? 10 : 2;
+            const int arguments = query.includeViewport ? 10 : execution.uiIndices.empty() ? 2 : 3;
             if (api.protectedCallArguments == 5) {
                 status = function<int (*)(void *, int, int, int, void *)>(api.protectedCall)(
                     state, arguments, 1, 0, nullptr);
@@ -125,7 +132,7 @@ void execute(void *state, void *userdata) {
 } // namespace
 
 int queryLua(void *state, const FmLinuxLuaApi &api, const FmLinuxLuaStateLayout &layout, const FmLinuxLuaQuery &query, double playerIndex,
-             const QueryViewport &viewport, const uint32_t *cancel, LuaResult &result) {
+             const QueryViewport &viewport, const uint32_t *cancel, LuaResult &result, std::string_view uiIndices) {
     result.size = 0;
     result.errorSize = 0;
     result.text.clear();
@@ -133,8 +140,11 @@ int queryLua(void *state, const FmLinuxLuaApi &api, const FmLinuxLuaStateLayout 
     if (!state || !cancel || !api.absIndex || !api.setTop || !api.load || !api.pushNumber || !api.pushString ||
         !api.protectedCall || !api.toString || !api.rawProtected ||
         (api.protectedCallArguments != 5 && api.protectedCallArguments != 6) ||
-        !query.sourceSize || query.sourceSize >= sizeof(query.source) ||
-        !query.argumentsSize || query.argumentsSize >= sizeof(query.arguments) || query.includeViewport > 1 ||
+        !query.source.size || query.source.size > INT32_MAX || query.source.address < 4096 ||
+        query.source.address > INTPTR_MAX - query.source.size ||
+        !query.arguments.size || query.arguments.size > INT32_MAX || query.arguments.address < 4096 ||
+        query.arguments.address > INTPTR_MAX - query.arguments.size || query.includeViewport > 1 ||
+        (query.includeViewport && !uiIndices.empty()) ||
         !std::isfinite(playerIndex) || playerIndex < 1 || playerIndex != std::floor(playerIndex) ||
         viewport.errorSize >= FM_LINUX_QUERY_ERROR || (!viewport.error && viewport.errorSize) || !validLuaStateLayout(layout))
         return EINVAL;
@@ -151,7 +161,7 @@ int queryLua(void *state, const FmLinuxLuaApi &api, const FmLinuxLuaStateLayout 
     // Only enter even the leaf accessor after validating its state and frame reads.
     if (function<int (*)(void *, int)>(api.absIndex)(state, -1) != 0)
         return EBUSY;
-    Execution execution{&api, &layout, &query, &viewport, cancel, &result, playerIndex};
+    Execution execution{&api, &layout, &query, &viewport, cancel, &result, playerIndex, uiIndices};
     const int status = function<int (*)(void *, Callback, void *)>(api.rawProtected)(state, execute, &execution);
     if (!status && !execution.error && !result.size)
         execution.error = EPROTO;
